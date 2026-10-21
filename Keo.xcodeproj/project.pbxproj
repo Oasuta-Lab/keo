@@ -11,7 +11,11 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		1A00000000000000000000A2 /* Keo */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Keo; sourceTree = "<group>"; };
+		1A00000000000000000000A2 /* Keo */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Keo;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */

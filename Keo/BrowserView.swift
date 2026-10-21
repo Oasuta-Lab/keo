@@ -1,19 +1,19 @@
 import SwiftUI
 
 struct BrowserView: View {
-    let client: DAVClient
-    let url: URL
+    let client: FreeboxClient
+    let path: String
     let title: String
 
     @EnvironmentObject private var store: Store
-    @State private var items: [DAVItem] = []
+    @State private var items: [Item] = []
     @State private var error: String?
     @State private var loaded = false
-    @State private var viewing: DAVItem?
+    @State private var viewing: Item?
 
-    private var folders: [DAVItem] { items.filter { $0.kind == .folder } }
-    private var media: [DAVItem] { items.filter { $0.kind == .image || $0.kind == .video } }
-    private var documents: [DAVItem] { items.filter { $0.kind == .other } }
+    private var folders: [Item] { items.filter { $0.kind == .folder } }
+    private var media: [Item] { items.filter { $0.kind == .image || $0.kind == .video } }
+    private var documents: [Item] { items.filter { $0.kind == .other } }
 
     private let columns = [GridItem(.adaptive(minimum: 110), spacing: 2)]
 
@@ -57,26 +57,26 @@ struct BrowserView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(folders.isEmpty ? .inline : .large)
-        .navigationDestination(for: DAVItem.self) { folder in
-            BrowserView(client: client, url: folder.url, title: folder.name)
+        .navigationDestination(for: Item.self) { folder in
+            BrowserView(client: client, path: folder.path, title: folder.name)
         }
         .fullScreenCover(item: $viewing) { item in
             ViewerView(client: client, items: media.isEmpty ? [item] : media, start: item)
         }
         .toolbar {
-            if url == client.root {
+            if path == FreeboxClient.rootPath {
                 Button("Déconnexion", systemImage: "rectangle.portrait.and.arrow.right") {
                     store.signOut()
                 }
             }
         }
-        .task(id: url) { await load() }
+        .task(id: path) { await load() }
         .refreshable { await load() }
     }
 
     private func load() async {
         do {
-            items = try await client.list(url)
+            items = try await client.list(path)
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -88,8 +88,8 @@ struct BrowserView: View {
 // MARK: - Cells
 
 private struct Thumb: View {
-    let item: DAVItem
-    let client: DAVClient
+    let item: Item
+    let client: FreeboxClient
 
     @State private var image: UIImage?
 
@@ -119,7 +119,7 @@ private struct Thumb: View {
                         .padding(5)
                 }
             }
-            .task(id: item.url) {
+            .task(id: item.path) {
                 let loaded = await ThumbCache.shared.thumbnail(for: item, client: client)
                 withAnimation(.easeOut(duration: 0.18)) { image = loaded }
             }
@@ -127,7 +127,7 @@ private struct Thumb: View {
 }
 
 private struct Row: View {
-    let item: DAVItem
+    let item: Item
     let icon: String
 
     var body: some View {

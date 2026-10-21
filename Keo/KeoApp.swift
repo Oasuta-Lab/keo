@@ -1,5 +1,6 @@
 import Security
 import SwiftUI
+import UIKit
 
 @main
 struct KeoApp: App {
@@ -10,7 +11,8 @@ struct KeoApp: App {
             Group {
                 if let client = store.client {
                     NavigationStack {
-                        BrowserView(client: client, url: client.root, title: store.serverName)
+                        BrowserView(client: client, path: FreeboxClient.rootPath,
+                                    title: store.boxName)
                     }
                 } else {
                     ConnectView()
@@ -26,50 +28,62 @@ struct KeoApp: App {
 
 @MainActor
 final class Store: ObservableObject {
-    @Published private(set) var client: DAVClient?
-    @Published private(set) var serverName = "NAS"
+    enum Phase: Equatable { case idle, discovering, waitingForButton, failed(String) }
 
-    @AppStorage("server") var address = ""
-    @AppStorage("user") var username = ""
+    @Published private(set) var client: FreeboxClient?
+    @Published private(set) var phase: Phase = .idle
+
+    @AppStorage("host") var host = "mafreebox.freebox.fr"
+    @AppStorage("apiBase") private var apiBase = ""
+    @AppStorage("boxName") var boxName = "Freebox"
 
     init() {
-        guard let url = URL(string: address), !username.isEmpty,
-              let password = Keychain.get(account: username) else { return }
-        client = DAVClient(root: url, username: username, password: password)
-        serverName = url.host ?? "NAS"
+        guard let base = URL(string: apiBase), let token = Keychain.get(account: host) else { return }
+        client = FreeboxClient(endpoint: FreeboxEndpoint(base: base, boxName: boxName),
+                               appToken: token)
     }
 
-    func connect(address: String, username: String, password: String) async throws {
-        guard let url = Self.normalize(address) else { throw URLError(.badURL) }
-        let client = DAVClient(root: url, username: username, password: password)
-        _ = try await client.list(client.root)
+    func pair() async {
+        phase = .discovering
+        do {
+            let endpoint = try await FreeboxEndpoint.discover(host: host)
+            let request = try await Pairing.start(endpoint, deviceName: UIDevice.current.name)
 
-        self.address = url.absoluteString
-        self.username = username
-        Keychain.set(password, account: username)
-        self.serverName = url.host ?? "NAS"
-        self.client = client
+            phase = .waitingForButton
+            try await waitForGrant(endpoint, trackID: request.track_id)
+
+            let client = FreeboxClient(endpoint: endpoint, appToken: request.app_token)
+            _ = try await client.list(FreeboxClient.rootPath)   // surfaces a missing permission now
+
+            Keychain.set(request.app_token, account: host)
+            apiBase = endpoint.base.absoluteString
+            boxName = endpoint.boxName
+            self.client = client
+            phase = .idle
+        } catch {
+            phase = .failed(error.localizedDescription)
+        }
     }
 
     func signOut() {
-        Keychain.delete(account: username)
-        address = ""
-        username = ""
+        Keychain.delete(account: host)
+        apiBase = ""
         client = nil
+        phase = .idle
     }
 
-    /// Accepts "nas.local/dav", "192.168.1.20:5005/home", "https://…" — plain LAN hosts default to http.
-    private static func normalize(_ input: String) -> URL? {
-        var text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return nil }
-        if !text.contains("://") {
-            let host = text.split(separator: "/").first.map(String.init) ?? text
-            let isLocal = host.hasSuffix(".local") || host.hasPrefix("192.168.")
-                || host.hasPrefix("10.") || host.hasPrefix("172.")
-            text = (isLocal ? "http://" : "https://") + text
+    /// The box shows its prompt for about a minute and a half before giving up.
+    private func waitForGrant(_ endpoint: FreeboxEndpoint, trackID: Int) async throws {
+        for _ in 0..<90 {
+            try await Task.sleep(for: .seconds(1))
+            switch try await Pairing.status(endpoint, trackID: trackID) {
+            case "granted": return
+            case "pending": continue
+            case "denied": throw FreeboxError.denied
+            default: throw FreeboxError.pairingTimedOut
+            }
         }
-        if !text.hasSuffix("/") { text += "/" }
-        return URL(string: text)
+        throw FreeboxError.pairingTimedOut
     }
 }
 
@@ -107,65 +121,68 @@ enum Keychain {
     }
 }
 
-// MARK: - Connect
+// MARK: - Pairing screen
 
 struct ConnectView: View {
     @EnvironmentObject private var store: Store
 
-    @State private var address = ""
-    @State private var username = ""
-    @State private var password = ""
-    @State private var error: String?
-    @State private var busy = false
-
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField("nas.local/dav", text: $address)
-                        .textContentType(.URL)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    TextField("Utilisateur", text: $username)
-                        .textContentType(.username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    SecureField("Mot de passe", text: $password)
-                        .textContentType(.password)
-                } header: {
-                    Text("Adresse WebDAV du NAS")
-                } footer: {
-                    Text("Synology : Panneau de configuration → Services de fichiers → WebDAV. "
-                         + "Le mot de passe est stocké dans le trousseau iOS.")
-                }
+        VStack(spacing: 28) {
+            Spacer()
 
-                if let error {
-                    Text(error).foregroundStyle(.red)
-                }
+            Image(systemName: "photo.stack")
+                .font(.system(size: 56))
+                .foregroundStyle(.tint)
 
-                Button {
-                    Task { await connect() }
-                } label: {
-                    HStack {
-                        Text("Se connecter")
-                        if busy { Spacer(); ProgressView() }
-                    }
-                }
-                .disabled(busy || address.isEmpty || username.isEmpty)
+            VStack(spacing: 8) {
+                Text("Keo").font(.largeTitle.bold())
+                Text("Tes photos et vidéos, depuis la Freebox.")
+                    .foregroundStyle(.secondary)
             }
-            .navigationTitle("Keo")
-        }
-    }
 
-    private func connect() async {
-        busy = true
-        error = nil
-        do {
-            try await store.connect(address: address, username: username, password: password)
-        } catch {
-            self.error = error.localizedDescription
+            switch store.phase {
+            case .waitingForButton:
+                VStack(spacing: 14) {
+                    ProgressView()
+                    Text("Appuie sur « ✓ » sur l'écran de la Freebox")
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+                    Text("Le message s'affiche sur la face avant du Freebox Server.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 32)
+
+            case .discovering:
+                ProgressView()
+
+            default:
+                VStack(spacing: 16) {
+                    TextField("mafreebox.freebox.fr", text: $store.host)
+                        .textFieldStyle(.roundedBorder)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+
+                    Button("Associer à la Freebox") {
+                        Task { await store.pair() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                }
+                .padding(.horizontal, 32)
+            }
+
+            if case .failed(let message) = store.phase {
+                Text(message)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+            }
+
+            Spacer()
         }
-        busy = false
     }
 }

@@ -1,6 +1,6 @@
 # Keo
 
-Galerie photos/vidéos iOS native pour NAS, via WebDAV.
+Galerie photos/vidéos iOS native pour Freebox, via l'API Freebox OS.
 
 ## Lancer
 
@@ -8,19 +8,20 @@ Galerie photos/vidéos iOS native pour NAS, via WebDAV.
 open Keo.xcodeproj     # ⌘R
 ```
 
-Au premier lancement : adresse WebDAV du NAS, utilisateur, mot de passe.
-Le mot de passe va dans le trousseau, le reste dans `UserDefaults`.
+Au premier lancement : « Associer à la Freebox », puis **appuyer sur ✓ sur la face
+avant du Freebox Server**. Le jeton d'application va dans le trousseau iOS.
 
-Activer WebDAV côté NAS :
-- **Synology** — Panneau de configuration → Services de fichiers → WebDAV
-- **QNAP** — Panneau de contrôle → Services réseau et fichiers → Web Server → WebDAV
-- **TrueNAS / OMV** — service WebDAV sur le dataset voulu
+Si la navigation renvoie une erreur de droits : Freebox OS → Paramètres → Gestion des
+accès → Applications → Keo → cocher « Accès aux fichiers ».
+
+Pas de WebDAV sur la Freebox (vérifié : 404 sur `/dav`, `/webdav`, aucun en-tête `DAV:`),
+donc tout passe par `fs/ls` et `dl` de l'API Freebox OS.
 
 ## Ce qu'il y a dedans
 
 | Fichier | Rôle |
 |---|---|
-| `Keo/WebDAV.swift` | Client `PROPFIND` + parsing multistatus (`URLSession`, zéro dépendance) |
+| `Keo/Freebox.swift` | API Freebox OS : association, session HMAC-SHA1, `fs/ls`, `dl` |
 | `Keo/Thumbs.swift` | Vignettes : range request 256 Ko → aperçu EXIF embarqué, cache disque + mémoire |
 | `Keo/BrowserView.swift` | Grille `LazyVGrid`, dossiers, documents |
 | `Keo/ViewerView.swift` | Plein écran : zoom `UIScrollView`, `AVPlayer`, QuickLook |
@@ -28,5 +29,13 @@ Activer WebDAV côté NAS :
 ## Vérif
 
 ```sh
-swiftc -swift-version 5 Keo/WebDAV.swift Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
+swiftc -swift-version 5 Keo/Freebox.swift Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
 ```
+
+## Limites connues
+
+- **LAN uniquement.** L'accès distant (`kcux1ir3.fbxos.fr:41349`) marche, mais son certificat
+  est signé par la CA Freebox, absente du magasin iOS — il faudra l'épingler.
+- **Pas de vignettes côté serveur.** `fs/thumbnail` n'existe pas dans l'API : Keo lit l'aperçu
+  JPEG embarqué via une requête Range de 256 Ko, sinon télécharge le fichier (plafond 40 Mo).
+- **Pas de vignette vidéo** — icône film.

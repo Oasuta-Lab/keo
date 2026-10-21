@@ -24,7 +24,7 @@ actor ThumbCache {
     private let fullDownloadLimit: Int64 = 40 << 20
     private let probeBytes = 256 << 10
 
-    func thumbnail(for item: DAVItem, client: DAVClient, maxPixel: CGFloat = 400) async -> UIImage? {
+    func thumbnail(for item: Item, client: FreeboxClient, maxPixel: CGFloat = 400) async -> UIImage? {
         guard item.kind == .image else { return nil }
 
         let key = Self.key(for: item, maxPixel: maxPixel)
@@ -42,13 +42,13 @@ actor ThumbCache {
         return image
     }
 
-    private func render(_ item: DAVItem, client: DAVClient, maxPixel: CGFloat) async -> UIImage? {
-        if let probe = try? await client.data(item.url, firstBytes: probeBytes),
+    private func render(_ item: Item, client: FreeboxClient, maxPixel: CGFloat) async -> UIImage? {
+        if let probe = try? await client.data(item.path, firstBytes: probeBytes),
            let image = Self.embeddedThumbnail(probe, maxPixel: maxPixel) {
             return image
         }
         guard item.size <= fullDownloadLimit,
-              let data = try? await client.data(item.url) else { return nil }
+              let data = try? await client.data(item.path) else { return nil }
         return Self.downsample(data, maxPixel: maxPixel)
     }
 
@@ -81,8 +81,8 @@ actor ThumbCache {
         return UIImage(cgImage: cgImage)
     }
 
-    private static func key(for item: DAVItem, maxPixel: CGFloat) -> String {
-        let seed = "\(item.url.absoluteString)|\(item.size)|\(Int(maxPixel))"
+    private static func key(for item: Item, maxPixel: CGFloat) -> String {
+        let seed = "\(item.path)|\(item.size)|\(Int(maxPixel))"
         return SHA256.hash(data: Data(seed.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }

@@ -1,55 +1,69 @@
-// Check for the one piece of real logic here: parsing a WebDAV multistatus body.
-// Run: swiftc Keo/WebDAV.swift Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
+// Checks the pieces that can silently lie: the {success, result} envelope, the base64 path
+// round-trip, and media classification.
+// Run: swiftc -swift-version 5 Keo/Freebox.swift Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
 import Foundation
 
-let xml = """
-<?xml version="1.0" encoding="utf-8"?>
-<d:multistatus xmlns:d="DAV:">
-  <d:response>
-    <d:href>/photos/</d:href>
-    <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
-  </d:response>
-  <d:response>
-    <d:href>/photos/2024%20ete/</d:href>
-    <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
-  </d:response>
-  <d:response>
-    <d:href>/photos/IMG_01.JPG</d:href>
-    <d:propstat><d:prop>
-      <d:resourcetype/>
-      <d:getcontentlength>1234</d:getcontentlength>
-      <d:getcontenttype>image/jpeg; charset=binary</d:getcontenttype>
-      <d:getlastmodified>Tue, 21 Oct 2025 10:00:00 GMT</d:getlastmodified>
-    </d:prop></d:propstat>
-  </d:response>
-  <d:response>
-    <d:href>http://nas.local/photos/clip.MOV</d:href>
-    <d:propstat><d:prop><d:resourcetype/><d:getcontentlength>99</d:getcontentlength></d:prop></d:propstat>
-  </d:response>
-  <d:response>
-    <d:href>/photos/.DS_Store</d:href>
-    <d:propstat><d:prop><d:resourcetype/></d:prop></d:propstat>
-  </d:response>
-</d:multistatus>
+// MARK: envelope — success
+
+struct Entry: Decodable {
+    let path: String
+    let name: String
+    let type: String
+    let mimetype: String?
+    let size: Int64?
+    let modification: TimeInterval?
+    let hidden: Bool?
+}
+
+let listing = """
+{"success":true,"result":[
+  {"path":"L0Rpc3F1ZSBkdXIvUGhvdG9z","name":"Photos","type":"dir","mimetype":"inode/directory","size":4096,"modification":1740000000,"hidden":false},
+  {"path":"L0Rpc3F1ZSBkdXIvYW/DqQ==","name":"aoé.jpg","type":"file","mimetype":"image/jpeg","size":1234,"modification":1740000001,"hidden":false}
+]}
 """
 
-let base = URL(string: "http://nas.local/photos/")!
-let items = MultiStatusParser(base: base).parse(Data(xml.utf8))
+let entries = try Transport.unwrap(Data(listing.utf8), as: [Entry].self)
+assert(entries.count == 2)
+assert(entries[0].type == "dir")
+assert(entries[1].size == 1234)
 
-assert(items.count == 4, "dotfiles dropped, everything else kept — got \(items.count)")
+// MARK: envelope — failure
 
-assert(items[0].isDirectory && items[0].name == "photos")
-assert(items[1].name == "2024 ete", "percent-decoded name — got \(items[1].name)")
-assert(items[1].isDirectory)
+let refused = """
+{"success":false,"msg":"Vous devez vous connecter","error_code":"auth_required","result":{"challenge":"x"}}
+"""
+do {
+    _ = try Transport.unwrap(Data(refused.utf8), as: [Entry].self)
+    assertionFailure("un envelope success:false doit lever")
+} catch let error as FreeboxError {
+    assert(error.isSessionProblem, "auth_required doit déclencher une réouverture de session")
+    assert(error.errorDescription == "Vous devez vous connecter")
+} 
 
-let photo = items[2]
-assert(photo.kind == .image && photo.size == 1234)
-assert(photo.contentType == "image/jpeg", "content-type params stripped — got \(photo.contentType ?? "nil")")
-assert(photo.modified != nil, "RFC 1123 date parsed")
-assert(photo.url.absoluteString == "http://nas.local/photos/IMG_01.JPG")
+// MARK: base64 paths
 
-let clip = items[3]
-assert(clip.kind == .video, "falls back to the extension when the server omits the type")
-assert(clip.url.absoluteString == "http://nas.local/photos/clip.MOV", "absolute hrefs survive")
+for path in ["/", "/Disque dur", "/Disque dur/Photos/Noël 2024", "/Disque dur/aoé"] {
+    let encoded = FreeboxClient.encode(path)
+    assert(!encoded.contains("/"), "le base64 ne doit pas injecter de segment: \(encoded)")
+    assert(!encoded.contains("+") && !encoded.contains("="), "tout est percent-encodé: \(encoded)")
+    let raw = encoded.removingPercentEncoding!
+    assert(FreeboxClient.decode(raw) == path, "aller-retour cassé pour \(path)")
+}
 
-print("ok — \(items.count) items parsed")
+// the API hands paths back base64-encoded too
+assert(FreeboxClient.decode("L0Rpc3F1ZSBkdXIvYW/DqQ==") == "/Disque dur/aoé")
+
+// MARK: classification
+
+func item(_ path: String, dir: Bool = false, mime: String? = nil) -> Item {
+    Item(path: path, name: (path as NSString).lastPathComponent, isDirectory: dir,
+         size: 0, modified: nil, mimeType: mime)
+}
+
+assert(item("/Disque dur", dir: true, mime: "inode/directory").kind == .folder)
+assert(item("/a/x.jpg", mime: "image/jpeg").kind == .image)
+assert(item("/a/clip.MOV").kind == .video, "sans mimetype on retombe sur l'extension")
+assert(item("/a/scan.CR3").kind == .image, "les RAW comptent comme des photos")
+assert(item("/a/notes.pdf", mime: "application/pdf").kind == .other)
+
+print("ok — envelope, chemins base64 et classification")

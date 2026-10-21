@@ -3,13 +3,13 @@ import QuickLook
 import SwiftUI
 
 struct ViewerView: View {
-    let client: DAVClient
-    let items: [DAVItem]
-    @State var current: DAVItem
+    let client: FreeboxClient
+    let items: [Item]
+    @State var current: Item
 
     @Environment(\.dismiss) private var dismiss
 
-    init(client: DAVClient, items: [DAVItem], start: DAVItem) {
+    init(client: FreeboxClient, items: [Item], start: Item) {
         self.client = client
         self.items = items
         _current = State(initialValue: start)
@@ -43,8 +43,8 @@ struct ViewerView: View {
 // MARK: - Page
 
 private struct Page: View {
-    let item: DAVItem
-    let client: DAVClient
+    let item: Item
+    let client: FreeboxClient
 
     var body: some View {
         switch item.kind {
@@ -56,8 +56,8 @@ private struct Page: View {
 }
 
 private struct ImagePage: View {
-    let item: DAVItem
-    let client: DAVClient
+    let item: Item
+    let client: FreeboxClient
 
     @State private var image: UIImage?
     @State private var sharp = false
@@ -74,13 +74,13 @@ private struct ImagePage: View {
                 ProgressView().tint(.white)
             }
         }
-        .task(id: item.url) {
+        .task(id: item.path) {
             // Cached grid thumbnail first so the page is never blank, then the real thing.
             if let preview = await ThumbCache.shared.thumbnail(for: item, client: client) {
                 if image == nil { image = preview }
             }
             guard !sharp else { return }
-            guard let data = try? await client.data(item.url) else {
+            guard let data = try? await client.data(item.path) else {
                 failed = image == nil
                 return
             }
@@ -94,8 +94,8 @@ private struct ImagePage: View {
 }
 
 private struct VideoPage: View {
-    let item: DAVItem
-    let client: DAVClient
+    let item: Item
+    let client: FreeboxClient
 
     @State private var player: AVPlayer?
 
@@ -108,10 +108,10 @@ private struct VideoPage: View {
                 ProgressView().tint(.white)
             }
         }
-        .onAppear {
-            guard player == nil else { return }
-            let asset = AVURLAsset(url: item.url, options: [
-                "AVURLAssetHTTPHeaderFieldsKey": ["Authorization": client.authHeader]
+        .task(id: item.path) {
+            guard player == nil, let token = try? await client.currentSession() else { return }
+            let asset = AVURLAsset(url: client.fileURL(item.path), options: [
+                "AVURLAssetHTTPHeaderFieldsKey": ["X-Fbx-App-Auth": token]
             ])
             player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
         }
@@ -120,8 +120,8 @@ private struct VideoPage: View {
 }
 
 private struct DocumentPage: View {
-    let item: DAVItem
-    let client: DAVClient
+    let item: Item
+    let client: FreeboxClient
 
     @State private var local: URL?
     @State private var failed = false
@@ -137,8 +137,8 @@ private struct DocumentPage: View {
                 ProgressView().tint(.white)
             }
         }
-        .task(id: item.url) {
-            do { local = try await client.download(item.url) } catch { failed = true }
+        .task(id: item.path) {
+            do { local = try await client.download(item.path) } catch { failed = true }
         }
     }
 }
