@@ -22,7 +22,7 @@ donc tout passe par `fs/ls` et `dl` de l'API Freebox OS.
 | Fichier | Rôle |
 |---|---|
 | `Keo/Freebox.swift` | API Freebox OS : association, session HMAC-SHA1, `fs/ls`, `dl` |
-| `Keo/Thumbs.swift` | Vignettes : range request 256 Ko → aperçu EXIF embarqué, cache disque + mémoire |
+| `Keo/Thumbs.swift` | Vignettes : aperçu EXIF via range 256 Ko, image vidéo via `AVAssetImageGenerator`, cache disque + mémoire |
 | `Keo/BrowserView.swift` | Grille `LazyVGrid`, dossiers, documents |
 | `Keo/ViewerView.swift` | Plein écran : zoom `UIScrollView`, `AVPlayer`, QuickLook |
 | `Keo/Downloads.swift` | File d'attente, pellicule (`PHAssetCreationRequest`), feuille de partage |
@@ -55,7 +55,8 @@ Annuler. Même chose en plein écran, sur l'élément affiché.
   est signé par la CA Freebox, absente du magasin iOS — il faudra l'épingler.
 - **Pas de vignettes côté serveur.** `fs/thumbnail` n'existe pas dans l'API : Keo lit l'aperçu
   JPEG embarqué via une requête Range de 256 Ko, sinon télécharge le fichier (plafond 40 Mo).
-- **Pas de vignette vidéo** — icône film.
+- **Vignettes vidéo via `AVAssetImageGenerator`** — AVFoundation ne tire que les plages HTTP
+  nécessaires, mais sur un MP4 dont l'atome `moov` est en fin de fichier il faut deux allers-retours.
 
 ## Pièges de l'API Freebox, vérifiés sur la box
 

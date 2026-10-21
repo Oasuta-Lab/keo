@@ -1,3 +1,4 @@
+import AVFoundation
 import CryptoKit
 import ImageIO
 import UIKit
@@ -25,7 +26,7 @@ actor ThumbCache {
     private let probeBytes = 256 << 10
 
     func thumbnail(for item: Item, client: FreeboxClient, maxPixel: CGFloat = 400) async -> UIImage? {
-        guard item.kind == .image else { return nil }
+        guard item.kind == .image || item.kind == .video else { return nil }
 
         let key = Self.key(for: item, maxPixel: maxPixel)
         if let hit = memory.object(forKey: key as NSString) { return hit }
@@ -36,7 +37,10 @@ actor ThumbCache {
             return image
         }
 
-        guard let image = await render(item, client: client, maxPixel: maxPixel) else { return nil }
+        let produced = item.kind == .video
+            ? await frame(item, client: client, maxPixel: maxPixel)
+            : await render(item, client: client, maxPixel: maxPixel)
+        guard let image = produced else { return nil }
         memory.setObject(image, forKey: key as NSString)
         try? image.jpegData(compressionQuality: 0.8)?.write(to: file, options: .atomic)
         return image
@@ -50,6 +54,29 @@ actor ThumbCache {
         guard item.size <= fullDownloadLimit,
               let data = try? await client.data(item.path) else { return nil }
         return Self.downsample(data, maxPixel: maxPixel)
+    }
+
+    /// AVFoundation range-requests only the atoms it needs, so this never pulls the whole video.
+    /// ponytail: AVURLAssetHTTPHeaderFieldsKey is undocumented — a resource-loader delegate is the
+    /// supported route if Apple ever drops it. Playback uses the same key, so both fail together.
+    private func frame(_ item: Item, client: FreeboxClient, maxPixel: CGFloat) async -> UIImage? {
+        guard let token = try? await client.currentSession() else { return nil }
+
+        let asset = AVURLAsset(url: client.fileURL(item.path), options: [
+            "AVURLAssetHTTPHeaderFieldsKey": ["X-Fbx-App-Auth": token]
+        ])
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: maxPixel, height: maxPixel)
+
+        // A second in, to skip a black leader; falls back to the very first frame for short clips.
+        for seconds in [1.0, 0.0] {
+            let time = CMTime(seconds: seconds, preferredTimescale: 600)
+            if let (cgImage, _) = try? await generator.image(at: time) {
+                return UIImage(cgImage: cgImage)
+            }
+        }
+        return nil
     }
 
     /// Only returns the preview already baked into the file — never decodes the full image,
