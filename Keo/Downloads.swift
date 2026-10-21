@@ -1,0 +1,125 @@
+import Photos
+import SwiftUI
+
+@MainActor
+final class Downloader: ObservableObject {
+    enum Destination { case photos, share }
+
+    struct SharePayload: Identifiable {
+        let id = UUID()
+        let urls: [URL]
+    }
+
+    @Published private(set) var job: DownloadJob?
+    @Published var share: SharePayload?
+    @Published var error: String?
+
+    private var task: Task<Void, Never>?
+
+    var isRunning: Bool { job != nil }
+
+    func save(_ items: [Item], from client: FreeboxClient, to destination: Destination) {
+        guard !items.isEmpty, task == nil else { return }
+        task = Task { await run(items, client: client, destination: destination) }
+    }
+
+    func cancel() {
+        task?.cancel()
+    }
+
+    private func run(_ items: [Item], client: FreeboxClient, destination: Destination) async {
+        defer {
+            job = nil
+            task = nil
+        }
+
+        if destination == .photos {
+            let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+            guard status == .authorized || status == .limited else {
+                error = "Keo n'a pas l'autorisation d'ajouter des photos. "
+                      + "Réglages → Keo → Photos → Ajouter uniquement."
+                return
+            }
+        }
+
+        job = DownloadJob(total: items.count, completed: 0, currentName: "", currentFraction: 0)
+        var downloaded: [URL] = []
+
+        for item in items {
+            if Task.isCancelled { break }
+            job?.currentName = item.name
+            job?.currentFraction = 0
+
+            do {
+                let file = try await client.download(item.path) { [weak self] fraction in
+                    Task { @MainActor in self?.job?.currentFraction = fraction }
+                }
+                switch destination {
+                case .photos: try await addToPhotos(file, item: item)
+                case .share: downloaded.append(file)
+                }
+            } catch is CancellationError {
+                break
+            } catch {
+                self.error = "\(item.name) : \(error.localizedDescription)"
+                break
+            }
+
+            job?.completed += 1
+        }
+
+        if destination == .share, !downloaded.isEmpty, !Task.isCancelled {
+            share = SharePayload(urls: downloaded)
+        }
+    }
+
+    private func addToPhotos(_ file: URL, item: Item) async throws {
+        try await PHPhotoLibrary.shared().performChanges {
+            let request = PHAssetCreationRequest.forAsset()
+            let options = PHAssetResourceCreationOptions()
+            options.shouldMoveFile = true
+            options.originalFilename = item.name
+            request.addResource(with: item.kind == .video ? .video : .photo,
+                                fileURL: file, options: options)
+        }
+    }
+}
+
+// MARK: - Views
+
+struct DownloadBar: View {
+    @ObservedObject var downloader: Downloader
+
+    var body: some View {
+        if let job = downloader.job {
+            VStack(spacing: 6) {
+                HStack(spacing: 10) {
+                    Text(job.currentName)
+                        .font(.footnote)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 8)
+                    Text("\(job.position) / \(job.total)")
+                        .font(.footnote.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                    Button("Annuler") { downloader.cancel() }
+                        .font(.footnote)
+                }
+                ProgressView(value: job.fraction)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.bar)
+        }
+    }
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let urls: [URL]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: urls, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}

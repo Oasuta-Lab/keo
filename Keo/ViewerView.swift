@@ -7,6 +7,7 @@ struct ViewerView: View {
     let items: [Item]
     @State var current: Item
 
+    @EnvironmentObject private var downloader: Downloader
     @Environment(\.dismiss) private var dismiss
 
     init(client: FreeboxClient, items: [Item], start: Item) {
@@ -24,19 +25,47 @@ struct ViewerView: View {
         .tabViewStyle(.page(indexDisplayMode: .never))
         .background(.black)
         .ignoresSafeArea()
-        .overlay(alignment: .topLeading) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "xmark")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(10)
-                    .background(.ultraThinMaterial, in: Circle())
+        .overlay(alignment: .top) {
+            HStack {
+                Button { dismiss() } label: { Glyph("xmark") }
+                Spacer()
+                Menu {
+                    if current.kind == .image || current.kind == .video {
+                        Button("Enregistrer dans Photos", systemImage: "photo.badge.arrow.down") {
+                            downloader.save([current], from: client, to: .photos)
+                        }
+                    }
+                    Button("Partager", systemImage: "square.and.arrow.up") {
+                        downloader.save([current], from: client, to: .share)
+                    }
+                } label: {
+                    Glyph("square.and.arrow.down")
+                }
+                .disabled(downloader.isRunning)
             }
             .padding(.horizontal, 16)
         }
+        .overlay(alignment: .bottom) {
+            DownloadBar(downloader: downloader)
+        }
+        .sheet(item: $downloader.share) { payload in
+            ShareSheet(urls: payload.urls)
+        }
         .statusBarHidden()
+    }
+}
+
+private struct Glyph: View {
+    let name: String
+
+    init(_ name: String) { self.name = name }
+
+    var body: some View {
+        Image(systemName: name)
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(10)
+            .background(.ultraThinMaterial, in: Circle())
     }
 }
 

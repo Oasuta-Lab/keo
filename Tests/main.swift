@@ -78,4 +78,25 @@ assert(item("/a/clip.MOV").kind == .video, "sans mimetype on retombe sur l'exten
 assert(item("/a/scan.CR3").kind == .image, "les RAW comptent comme des photos")
 assert(item("/a/notes.pdf", mime: "application/pdf").kind == .other)
 
-print("ok — envelope, chemins base64 et classification")
+// MARK: progression d'un lot
+
+var job = DownloadJob(total: 4, completed: 0, currentName: "a.jpg", currentFraction: 0)
+assert(job.fraction == 0)
+assert(job.position == 1)
+
+job.currentFraction = 0.5
+assert(job.fraction == 0.125, "le fichier en cours compte pour sa fraction — \(job.fraction)")
+
+job.completed = 3
+job.currentFraction = 1
+assert(job.fraction == 1, "ne doit pas depasser 1 — \(job.fraction)")
+assert(job.position == 4, "la position ne depasse pas le total — \(job.position)")
+
+job.completed = 4
+job.currentFraction = 0
+assert(job.position == 4)
+
+assert(DownloadJob(total: 0, completed: 0, currentName: "", currentFraction: 0).fraction == 0,
+       "un lot vide ne divise pas par zero")
+
+print("ok — envelope, chemins base64, classification et progression")

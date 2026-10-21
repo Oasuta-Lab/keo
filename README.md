@@ -25,6 +25,8 @@ donc tout passe par `fs/ls` et `dl` de l'API Freebox OS.
 | `Keo/Thumbs.swift` | Vignettes : range request 256 Ko → aperçu EXIF embarqué, cache disque + mémoire |
 | `Keo/BrowserView.swift` | Grille `LazyVGrid`, dossiers, documents |
 | `Keo/ViewerView.swift` | Plein écran : zoom `UIScrollView`, `AVPlayer`, QuickLook |
+| `Keo/Downloads.swift` | File d'attente, pellicule (`PHAssetCreationRequest`), feuille de partage |
+| `Keo/DownloadJob.swift` | Arithmétique de progression d'un lot (isolée pour être testable) |
 
 ## Vérif
 
@@ -32,7 +34,22 @@ donc tout passe par `fs/ls` et `dl` de l'API Freebox OS.
 swiftc -swift-version 5 Keo/Freebox.swift Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
 ```
 
+## Télécharger
+
+Menu « … » → **Sélectionner**, puis cocher les vignettes. Deux destinations :
+
+- **Photos** — va dans la pellicule iOS. Réservé aux images et vidéos : le bouton se désactive
+  si la sélection contient un PDF ou un `.procreate`.
+- **Partager** — feuille de partage iOS, donc Fichiers, AirDrop, Mail… et tous les types.
+
+La barre de progression affiche le fichier en cours, la position dans le lot et un bouton
+Annuler. Même chose en plein écran, sur l'élément affiché.
+
 ## Limites connues
+
+- **Pas de téléchargement de dossier entier** — la sélection porte sur des fichiers.
+- **Téléchargements en série, pas en parallèle** — une barre de progression lisible plutôt
+  qu'un débit maximal.
 
 - **LAN uniquement.** L'accès distant (`kcux1ir3.fbxos.fr:41349`) marche, mais son certificat
   est signé par la CA Freebox, absente du magasin iOS — il faudra l'épingler.

@@ -5,6 +5,7 @@ import UIKit
 @main
 struct KeoApp: App {
     @StateObject private var store = Store()
+    @StateObject private var downloader = Downloader()
 
     var body: some Scene {
         WindowGroup {
@@ -19,6 +20,7 @@ struct KeoApp: App {
                 }
             }
             .environmentObject(store)
+            .environmentObject(downloader)
             .preferredColorScheme(.dark)
         }
     }

@@ -40,6 +40,8 @@
 			</dict>
 		</dict>
 	</dict>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Pour enregistrer dans votre pellicule les photos et vidéos téléchargées depuis la Freebox.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Keo se connecte à votre NAS sur le réseau local pour afficher vos photos et vidéos.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

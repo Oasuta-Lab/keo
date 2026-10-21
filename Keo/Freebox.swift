@@ -191,21 +191,34 @@ actor FreeboxClient {
         }
     }
 
-    /// Streams to a temp file — for documents handed to QuickLook.
-    func download(_ path: String) async throws -> URL {
-        let token = try await currentSession()
-        var request = URLRequest(url: fileURL(path))
-        request.setValue(token, forHTTPHeaderField: "X-Fbx-App-Auth")
+    /// Streams to a temp file, reporting progress. Used by QuickLook and by downloads.
+    func download(_ path: String,
+                  onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> URL {
+        do {
+            return try await fetchFile(path, onProgress: onProgress)
+        } catch FreeboxError.http(403) {
+            sessionToken = nil
+            return try await fetchFile(path, onProgress: onProgress)
+        }
+    }
 
-        let (temp, response) = try await session.download(for: request)
+    private func fetchFile(_ path: String,
+                           onProgress: (@Sendable (Double) -> Void)?) async throws -> URL {
+        var request = URLRequest(url: fileURL(path))
+        request.setValue(try await currentSession(), forHTTPHeaderField: "X-Fbx-App-Auth")
+
+        let (temp, response) = try await session.download(
+            for: request, delegate: onProgress.map(DownloadProgress.init)
+        )
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw FreeboxError.http((response as? HTTPURLResponse)?.statusCode ?? 0)
         }
 
-        let destination = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension((path as NSString).pathExtension)
-        try? FileManager.default.removeItem(at: destination)
+        // Keep the real filename: it is what the share sheet and Files show.
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let destination = folder.appendingPathComponent((path as NSString).lastPathComponent)
         try FileManager.default.moveItem(at: temp, to: destination)
         return destination
     }
@@ -283,6 +296,25 @@ actor FreeboxClient {
 
     static func decode(_ base64: String) -> String? {
         Data(base64Encoded: base64).flatMap { String(data: $0, encoding: .utf8) }
+    }
+}
+
+/// `URLSession.download(for:delegate:)` is the only async download that reports bytes.
+private final class DownloadProgress: NSObject, URLSessionDownloadDelegate {
+    private let onProgress: @Sendable (Double) -> Void
+
+    init(_ onProgress: @escaping @Sendable (Double) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {}
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        guard totalBytesExpectedToWrite > 0 else { return }
+        onProgress(Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))
     }
 }
 
