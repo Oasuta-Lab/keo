@@ -24,8 +24,21 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
+		<!-- Couvre une saisie par IP privée (192.168.x.1). -->
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
+		<!-- mafreebox.freebox.fr resout vers une IP publique : ATS le traite comme
+		     un domaine distant, NSAllowsLocalNetworking ne s'y applique donc pas. -->
+		<key>NSExceptionDomains</key>
+		<dict>
+			<key>freebox.fr</key>
+			<dict>
+				<key>NSIncludesSubdomains</key>
+				<true/>
+				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Keo se connecte à votre NAS sur le réseau local pour afficher vos photos et vidéos.</string>
