@@ -39,3 +39,14 @@ swiftc -swift-version 5 Keo/Freebox.swift Tests/main.swift -o /tmp/keocheck && /
 - **Pas de vignettes côté serveur.** `fs/thumbnail` n'existe pas dans l'API : Keo lit l'aperçu
   JPEG embarqué via une requête Range de 256 Ko, sinon télécharge le fichier (plafond 40 Mo).
 - **Pas de vignette vidéo** — icône film.
+
+## Pièges de l'API Freebox, vérifiés sur la box
+
+- `fs/ls` renvoie `result = {"entries": [...]}`, **pas** un tableau nu.
+- Les chemins sont du base64 percent-encodé. `URL.appendingPathComponent` ré-encode le `%`
+  (`Lw%3D%3D` → `Lw%253D%253D`) et la box répond `invalid_request` : construire l'URL
+  avec `URL(string:relativeTo:)`.
+- `dl/` honore `Range` (206 Partial Content), ce qui rend viable la lecture de l'aperçu
+  embarqué : 256 Ko lus sur un JPEG de 2 Mo suffisent à sortir une vignette 400 px.
+- `mafreebox.freebox.fr` résout vers une IP publique : ATS a besoin d'une exception de
+  domaine, `NSAllowsLocalNetworking` ne suffit pas.

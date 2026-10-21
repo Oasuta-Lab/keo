@@ -52,12 +52,14 @@ final class Store: ObservableObject {
             phase = .waitingForButton
             try await waitForGrant(endpoint, trackID: request.track_id)
 
-            let client = FreeboxClient(endpoint: endpoint, appToken: request.app_token)
-            _ = try await client.list(FreeboxClient.rootPath)   // surfaces a missing permission now
-
+            // Keep the token before validating: a failed first listing shouldn't cost
+            // another trip to the box's front panel.
             Keychain.set(request.app_token, account: host)
             apiBase = endpoint.base.absoluteString
             boxName = endpoint.boxName
+
+            let client = FreeboxClient(endpoint: endpoint, appToken: request.app_token)
+            _ = try await client.list(FreeboxClient.rootPath)   // surfaces a missing permission now
             self.client = client
             phase = .idle
         } catch {

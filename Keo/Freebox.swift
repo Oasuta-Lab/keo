@@ -155,14 +155,16 @@ actor FreeboxClient {
             let hidden: Bool?
         }
 
-        let url = endpoint.base.appendingPathComponent("fs/ls/\(Self.encode(path))")
-        let entries: [Entry] = try await authorized { request in
-            try await Transport.json(request, as: [Entry].self)
+        struct Listing: Decodable { let entries: [Entry] }
+
+        let url = Self.apiURL(base: endpoint.base, suffix: "fs/ls/\(Self.encode(path))")
+        let listing: Listing = try await authorized { request in
+            try await Transport.json(request, as: Listing.self)
         } request: {
             URLRequest(url: url)
         }
 
-        return entries
+        return listing.entries
             .filter { $0.hidden != true && !$0.name.hasPrefix(".") }
             .map { entry in
                 Item(path: Self.decode(entry.path) ?? entry.path,
@@ -210,7 +212,13 @@ actor FreeboxClient {
 
     /// AVPlayer and friends need the raw URL plus the session header.
     nonisolated func fileURL(_ path: String) -> URL {
-        endpoint.base.appendingPathComponent("dl/\(Self.encode(path))")
+        Self.apiURL(base: endpoint.base, suffix: "dl/\(Self.encode(path))")
+    }
+
+    /// `appendingPathComponent` percent-escapes what it is given, so an already-encoded
+    /// base64 path comes out double-encoded and the box answers `invalid_request`.
+    static func apiURL(base: URL, suffix: String) -> URL {
+        URL(string: suffix, relativeTo: base)?.absoluteURL ?? base
     }
 
     func currentSession() async throws -> String {

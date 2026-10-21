@@ -15,14 +15,17 @@ struct Entry: Decodable {
     let hidden: Bool?
 }
 
+// fs/ls renvoie result = {"entries": [...]}, pas un tableau nu.
+struct Listing: Decodable { let entries: [Entry] }
+
 let listing = """
-{"success":true,"result":[
-  {"path":"L0Rpc3F1ZSBkdXIvUGhvdG9z","name":"Photos","type":"dir","mimetype":"inode/directory","size":4096,"modification":1740000000,"hidden":false},
+{"success":true,"result":{"entries":[
+  {"path":"L05BUw==","name":"NAS","type":"dir","mimetype":"inode/directory","size":4096,"modification":1740000000,"hidden":false},
   {"path":"L0Rpc3F1ZSBkdXIvYW/DqQ==","name":"aoé.jpg","type":"file","mimetype":"image/jpeg","size":1234,"modification":1740000001,"hidden":false}
-]}
+]}}
 """
 
-let entries = try Transport.unwrap(Data(listing.utf8), as: [Entry].self)
+let entries = try Transport.unwrap(Data(listing.utf8), as: Listing.self).entries
 assert(entries.count == 2)
 assert(entries[0].type == "dir")
 assert(entries[1].size == 1234)
@@ -52,6 +55,15 @@ for path in ["/", "/Disque dur", "/Disque dur/Photos/Noël 2024", "/Disque dur/a
 
 // the API hands paths back base64-encoded too
 assert(FreeboxClient.decode("L0Rpc3F1ZSBkdXIvYW/DqQ==") == "/Disque dur/aoé")
+
+// MARK: construction d'URL — le bug qui donnait "Requête invalide"
+
+let base = URL(string: "http://mafreebox.freebox.fr/api/v16/")!
+let url = FreeboxClient.apiURL(base: base, suffix: "fs/ls/" + FreeboxClient.encode("/"))
+assert(url.absoluteString == "http://mafreebox.freebox.fr/api/v16/fs/ls/Lw%3D%3D",
+       "le base64 encodé doit passer tel quel — obtenu \(url.absoluteString)")
+assert(!url.absoluteString.contains("%25"),
+       "appendingPathComponent ré-encodait le %, la box répondait invalid_request")
 
 // MARK: classification
 
