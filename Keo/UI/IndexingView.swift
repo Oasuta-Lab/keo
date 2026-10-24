@@ -8,6 +8,9 @@ struct IndexingView: View {
     @EnvironmentObject private var indexer: Indexer
     @Environment(\.dismiss) private var dismiss
 
+    @State private var confirmingRebuild = false
+    @State private var knownCount = 0
+
     var body: some View {
         NavigationStack {
             List {
@@ -36,14 +39,23 @@ struct IndexingView: View {
                         Button("Lancer l'indexation", systemImage: "play.fill") {
                             indexer.start(client: client)
                         }
-                        Button("Tout réindexer", systemImage: "arrow.clockwise") {
-                            indexer.start(client: client, restart: true)
+                        Button("Revérifier tous les dossiers",
+                               systemImage: "arrow.clockwise") {
+                            indexer.start(client: client, scope: .recheck)
                         }
+
+                        Button("Tout relire depuis zéro", systemImage: "trash",
+                               role: .destructive) {
+                            confirmingRebuild = true
+                        }
+                        .tint(.red)
                     }
                 } footer: {
                     Text("Keo lit les 4 premiers kilo-octets de chaque photo pour en extraire la "
                        + "date de prise de vue. Une photo déjà lue n'est jamais relue, même après "
                        + "un arrêt : relancer reprend là où ça s'était arrêté.\n\n"
+                       + "« Revérifier » reliste tous les dossiers sans relire une seule date. "
+                       + "« Tout relire depuis zéro » efface l'index et recommence vraiment.\n\n"
                        + "Un dossier déjà indexé n'est réexaminé que s'il a changé : Keo compare "
                        + "sa date de modification, qui bouge dès qu'une photo y est ajoutée. "
                        + "Ajouter des photos ne demande donc jamais de tout réindexer — seules "
@@ -60,6 +72,16 @@ struct IndexingView: View {
             } message: {
                 Text(indexer.failure ?? "")
             }
+            .task { knownCount = (try? await IndexStore.shared.fileCount()) ?? 0 }
+            .confirmationDialog("Tout relire depuis zéro ?", isPresented: $confirmingRebuild,
+                                titleVisibility: .visible) {
+                Button("Effacer et tout relire", role: .destructive) {
+                    indexer.start(client: client, scope: .rebuild)
+                }
+                Button("Annuler", role: .cancel) {}
+            } message: {
+                Text(rebuildWarning)
+            }
             .navigationTitle("Indexation des dates")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -68,6 +90,15 @@ struct IndexingView: View {
                 }
             }
         }
+    }
+
+    /// Says what it costs, in the user's own numbers, before anything is thrown away.
+    private var rebuildWarning: String {
+        let dates = knownCount.formatted()
+        return "Les \(dates) dates déjà lues seront effacées, puis chaque photo sera relue "
+             + "une par une sur le NAS. Comptez plusieurs minutes par millier de photos.\n\n"
+             + "À ne faire que si les dates affichées sont fausses. Pour simplement détecter "
+             + "des photos ajoutées, « Revérifier tous les dossiers » suffit et ne relit rien."
     }
 
     @ViewBuilder

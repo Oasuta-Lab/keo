@@ -99,12 +99,14 @@ func checkIndexStore() async throws {
     assert(glanced[opportunistic.id] == shot,
            "une date relevée au passage par le pipeline de vignettes n'est pas balayée")
 
-    // --- tout réindexer oublie les marquages, pas les dates ----------------------------
+    // --- revérifier : on reliste tout, on ne relit rien --------------------------------
     try await store.forgetWalk()
     unchanged = try await store.isUnchanged(album, modified: folderTime, childCount: 3)
-    assert(!unchanged, "après « tout réindexer », chaque dossier est réexaminé")
+    assert(!unchanged, "après « revérifier », chaque dossier est réexaminé")
     let keptDates = try await store.known([a], in: album)
-    assert(keptDates[a.id] == shot, "mais les dates déjà lues ne sont pas jetées")
+    assert(keptDates[a.id] == shot, "mais aucune date déjà lue n'est jetée")
+    let nothingToReread = try await store.unread([a], in: album)
+    assert(nothingToReread.isEmpty, "donc rien n'est à relire sur le NAS")
 
     let total = try await store.fileCount()
     assert(total > 0, "l'index contient bien des lignes")
@@ -202,6 +204,18 @@ func checkIndexStore() async throws {
     let repaired = try await after.listing("/NAS/Vieux")
     assert(repaired.first?.kind == .video,
            "une base d'avant la colonne est réparée d'après le nom — \(String(describing: repaired.first?.kind))")
+
+    // --- tout relire depuis zéro : là, tout repart vraiment ----------------------------
+    try await store.forgetEverything()
+    let wiped = try await store.known([a], in: album)
+    assert(wiped.isEmpty, "les dates sont bien effacées")
+    let allToReread = try await store.unread([a, c], in: album)
+    assert(allToReread.count == 2, "et tout est à relire — \(allToReread.count)")
+    let emptied = try await store.fileCount()
+    assert(emptied == 0, "l'index ne contient plus rien — \(emptied)")
+    let noStamp = try await store.isUnchanged(album, modified: folderTime, childCount: 3)
+    assert(!noStamp, "aucun dossier n'est plus marqué terminé")
+
 
     print("ok — magasin SQLite : écriture, marquage, balayage, adoption, sous-arbres, totaux")
 }

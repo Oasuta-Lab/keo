@@ -398,10 +398,27 @@ actor IndexStore {
         }
     }
 
-    /// Forgets every completion stamp, so the next pass re-reads everything.
+    /// Forgets every completion stamp, so the next pass lists every folder again. Dates
+    /// already read are kept — nothing is re-downloaded that is already known.
     func forgetWalk() throws {
         try open()
         try exec("UPDATE folder SET mtime = NULL, child_count = NULL")
+    }
+
+    /// Throws away every date ever read. Hours of work on a large library, hence the
+    /// confirmation in front of it.
+    func forgetEverything() throws {
+        try open()
+        try exec("BEGIN IMMEDIATE")
+        do {
+            try exec("DELETE FROM file")
+            try exec("UPDATE folder SET mtime = NULL, child_count = NULL, "
+                   + "media_count = NULL, bytes = NULL")
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
     }
 
     /// Flushes the write-ahead log so the file at rest is compact and backups see it whole.

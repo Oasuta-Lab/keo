@@ -73,7 +73,7 @@ final class Indexer: ObservableObject {
     private static let folderLimit = 5_000
 
     private enum Job {
-        case walk(root: String, client: FreeboxClient, restart: Bool)
+        case walk(root: String, client: FreeboxClient, scope: Scope?)
         case folder(path: String, items: [Item], client: FreeboxClient)
     }
 
@@ -89,9 +89,16 @@ final class Indexer: ObservableObject {
 
     // MARK: Entry points
 
+    enum Scope {
+        /// List every folder again, but keep every date already read.
+        case recheck
+        /// Throw away every date and read them all again.
+        case rebuild
+    }
+
     func start(from root: String = FreeboxClient.rootPath, client: FreeboxClient,
-               restart: Bool = false) {
-        queue.append(.walk(root: root, client: client, restart: restart))
+               scope: Scope? = nil) {
+        queue.append(.walk(root: root, client: client, scope: scope))
         watchAppState(root: root, client: client)
         pump()
     }
@@ -118,8 +125,8 @@ final class Indexer: ObservableObject {
         runner = Task { [weak self] in
             while let job = await self?.nextJob() {
                 switch job {
-                case .walk(let root, let client, let restart):
-                    await self?.walk(root: root, client: client, restart: restart)
+                case .walk(let root, let client, let scope):
+                    await self?.walk(root: root, client: client, scope: scope)
                 case .folder(let path, let items, let client):
                     await self?.scanOne(path: path, items: items, client: client)
                 }
@@ -153,13 +160,17 @@ final class Indexer: ObservableObject {
 
     // MARK: Jobs
 
-    private func walk(root: String, client: FreeboxClient, restart: Bool) async {
+    private func walk(root: String, client: FreeboxClient, scope: Scope?) async {
         var progress = state.progress ?? Progress()
         progress.folder = root
         state = .running(progress)
 
         do {
-            if restart { try await IndexStore.shared.forgetWalk() }
+            switch scope {
+            case .recheck: try await IndexStore.shared.forgetWalk()
+            case .rebuild: try await IndexStore.shared.forgetEverything()
+            case nil: break
+            }
             let generation = try await IndexStore.shared.beginGeneration()
 
             var pending: [(path: String, modified: Date?, childCount: Int?)] =
