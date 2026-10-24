@@ -25,7 +25,7 @@ final class CloudSync: ObservableObject {
 
     @Published private(set) var status: Status = .off
 
-    nonisolated static let containerID = "iCloud.com.oasutalab.dev"
+    nonisolated static let containerID = "iCloud.com.oasutalab.keo"
     nonisolated private static let recordType = "Personalisation"
     nonisolated private static var zoneID: CKRecordZone.ID {
         CKRecordZone.ID(zoneName: "Personnalisation", ownerName: CKCurrentUserDefaultName)

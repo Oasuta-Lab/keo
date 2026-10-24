@@ -9,7 +9,7 @@
 	</array>
 	<key>com.apple.developer.icloud-container-identifiers</key>
 	<array>
-		<string>iCloud.com.oasutalab.dev</string>
+		<string>iCloud.com.oasutalab.keo</string>
 	</array>
 	<!-- CKSyncEngine s'abonne aux pushes silencieux pour apprendre les changements des
 	     autres appareils. Xcode bascule la valeur en production à la distribution. -->
