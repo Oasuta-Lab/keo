@@ -139,13 +139,13 @@ struct ViewerView: View {
 
     /// Bottom: everything you actually do, within thumb reach.
     private var actions: some View {
-        HStack(spacing: 28) {
+        HStack(spacing: 34) {
             Button { toggleFavourite() } label: {
-                Glyph(favourite ? "heart.fill" : "heart")
+                Glyph(favourite ? "heart.fill" : "heart", large: true)
                     .foregroundStyle(favourite ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
             }
 
-            Button { choosingCollection = true } label: { Glyph("square.stack") }
+            Button { choosingCollection = true } label: { Glyph("square.stack", large: true) }
 
             Menu {
                 if let current {
@@ -159,7 +159,7 @@ struct ViewerView: View {
                     }
                 }
             } label: {
-                Glyph("square.and.arrow.down")
+                Glyph("square.and.arrow.down", large: true)
             }
             .disabled(downloader.isRunning)
         }
@@ -194,15 +194,23 @@ struct ViewerView: View {
 
 private struct Glyph: View {
     let name: String
+    let large: Bool
 
-    init(_ name: String) { self.name = name }
+    /// 44 pt is the floor Apple's guidelines set for a tap target; the small variant sat at
+    /// about 37. The bottom actions get more than that — they are the ones you reach for.
+    init(_ name: String, large: Bool = false) {
+        self.name = name
+        self.large = large
+    }
 
     var body: some View {
         Image(systemName: name)
-            .font(.body.weight(.semibold))
+            .font(large ? .title2.weight(.medium) : .body.weight(.semibold))
             .foregroundStyle(.white)
-            .padding(10)
+            .frame(width: large ? 30 : 20, height: large ? 30 : 20)
+            .padding(large ? 15 : 12)
             .background(.ultraThinMaterial, in: Circle())
+            .contentShape(Circle())
     }
 }
 
