@@ -110,7 +110,8 @@ struct BrowserView: View {
         .overlay { status }
         .overlay(alignment: .bottom) {
             // Root only, and out of the way whenever an action bar is up.
-            if indexer.state.isRunning, let progress = indexer.state.progress {
+            if indexer.state.isRunning, !indexer.isStalled,
+               let progress = indexer.state.progress {
                 IndexingChip(fraction: progress.folderFraction,
                              pending: max(progress.folderTotal - progress.folderDone, 0)) {
                     showingIndexing = true
@@ -165,6 +166,10 @@ struct BrowserView: View {
             }
         }
         .task(id: path) { await load() }
+        .task {
+            // A relaunch after iOS killed the app mid-index still has somewhere to pick up.
+            if path == FreeboxClient.rootPath { indexer.resumeIfInterrupted(client: client) }
+        }
 
         // Reordering is a local question: no reason to ask the box again.
         .onChange(of: order) { _, new in

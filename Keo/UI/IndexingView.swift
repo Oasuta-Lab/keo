@@ -30,13 +30,16 @@ struct IndexingView: View {
                 }
 
                 Section {
-                    if indexer.state.isRunning {
+                    // `isStalled` guards against a state that says "running" with no worker
+                    // behind it: that used to hide the only button able to restart.
+                    if indexer.state.isRunning, !indexer.isStalled {
                         Button("Arrêter", systemImage: "stop.fill", role: .destructive) {
                             indexer.stop()
                         }
                         .tint(.red)   // sinon l'icône garde la couleur d'accent, le texte est rouge
                     } else {
-                        Button(indexer.state.isPaused ? "Reprendre" : "Lancer l'indexation",
+                        Button(indexer.state.isPaused || indexer.isStalled
+                               ? "Reprendre" : "Lancer l'indexation",
                                systemImage: "play.fill") {
                             indexer.start(client: client)
                         }
@@ -105,7 +108,7 @@ struct IndexingView: View {
     @ViewBuilder
     private func report(_ progress: Indexer.Progress) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            if indexer.state.isRunning {
+            if indexer.state.isRunning, !indexer.isStalled {
                 Text((progress.folder as NSString).lastPathComponent)
                     .font(.subheadline.weight(.medium))
                     .lineLimit(1)
@@ -123,7 +126,7 @@ struct IndexingView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-            } else if indexer.state.isPaused {
+            } else if indexer.state.isPaused || indexer.isStalled {
                 Label("En pause — reprend là où elle s'est arrêtée",
                       systemImage: "pause.circle.fill")
                     .foregroundStyle(.orange)

@@ -93,7 +93,10 @@ final class Indexer: ObservableObject {
     private var runToken = 0
     private var walkCompleted = false
     private var observers: [NSObjectProtocol] = []
-    private var resumeOnReturn: (root: String, client: FreeboxClient)?
+    /// Survives a relaunch: iOS may terminate a suspended app outright, and an interrupted
+    /// index must still know it has somewhere to pick up.
+    @AppStorage("resumeIndexing") private var resumeWanted = false
+    @AppStorage("resumeIndexingRoot") private var resumeRoot = FreeboxClient.rootPath
     private var background: UIBackgroundTaskIdentifier = .invalid
 
     var lastRun: Date? {
@@ -111,6 +114,12 @@ final class Indexer: ObservableObject {
 
     func start(from root: String = FreeboxClient.rootPath, client: FreeboxClient,
                scope: Scope? = nil) {
+        // A state left saying "running" with nothing behind it must not block a restart.
+        if isStalled, case .running(let progress) = state { state = .paused(progress) }
+        guard !state.isRunning else { return }
+
+        resumeRoot = root
+        resumeWanted = true
         queue.append(.walk(root: root, client: client, scope: scope))
         watchAppState(root: root, client: client)
         pump()
@@ -124,10 +133,21 @@ final class Indexer: ObservableObject {
     }
 
     func stop() {
-        resumeOnReturn = nil
+        resumeWanted = false
         queue.removeAll()
         halt()
     }
+
+    /// Picks up an index interrupted by a suspension or a termination. Safe to call on every
+    /// launch: it does nothing unless there is something to resume.
+    func resumeIfInterrupted(client: FreeboxClient) {
+        guard resumeWanted, !state.isRunning else { return }
+        start(from: resumeRoot, client: client)
+    }
+
+    /// True when the app believes work is in flight but no worker is actually alive — the
+    /// state a suspension used to leave behind.
+    var isStalled: Bool { state.isRunning && runner == nil }
 
     // MARK: Running
 
@@ -247,6 +267,7 @@ final class Indexer: ObservableObject {
                 try await IndexStore.shared.sweepFolders(generation: generation)
                 lastIndexedAt = Date().timeIntervalSince1970
                 walkCompleted = true
+                resumeWanted = false   // nothing left to pick up
             }
             progress.indexedOverall = (try? await IndexStore.shared.fileCount()) ?? 0
             state = .running(progress)
@@ -392,21 +413,23 @@ final class Indexer: ObservableObject {
         observers.append(centre.addObserver(
             forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
+            // Synchronous on purpose. Scheduling a Task here loses the race: the handler
+            // returns, iOS suspends the process, and the Task never runs — so the work was
+            // never paused and nothing was ever marked resumable.
+            MainActor.assumeIsolated {
                 guard let self, self.state.isRunning else { return }
-                self.resumeOnReturn = (root, client)
+                self.resumeRoot = root
+                self.resumeWanted = true
                 self.halt()
-                await IndexStore.shared.checkpoint()
             }
         })
 
         observers.append(centre.addObserver(
             forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, let resume = self.resumeOnReturn else { return }
-                self.resumeOnReturn = nil
-                self.start(from: resume.root, client: resume.client)
+            MainActor.assumeIsolated {
+                guard let self, self.resumeWanted else { return }
+                self.start(from: self.resumeRoot, client: client)
             }
         })
     }
