@@ -376,11 +376,10 @@ let forcedYear = MediaGrouping.sections(from: holidayWeek, granularity: .year,
                                         calendar: utc, locale: fr)
 assert(forcedYear.count == 1, "mais la vue années reste une vue années")
 
-assert(Granularity.year.finer == .month && Granularity.month.finer == .day)
-assert(Granularity.day.finer == nil, "on ne zoome pas plus loin que le jour")
-assert(Granularity.year.coarser == nil, "ni plus loin que l'année")
-assert(Granularity.year.cellWidth < Granularity.day.cellWidth,
-       "zoomer en arrière réduit les cellules")
+assert(Granularity.year.cellWidth < Granularity.month.cellWidth,
+       "une vue plus large a des cellules plus petites")
+assert(Granularity.month.cellWidth < Granularity.day.cellWidth)
+assert(Granularity.allCases.count == 3)
 
 // MARK: - Date affichée en plein écran
 

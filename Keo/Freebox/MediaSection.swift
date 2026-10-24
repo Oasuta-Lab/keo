@@ -47,22 +47,6 @@ enum Granularity: String, CaseIterable, Sendable {
         }
     }
 
-    var coarser: Granularity? {
-        switch self {
-        case .day: return .month
-        case .month: return .year
-        case .year: return nil
-        }
-    }
-
-    var finer: Granularity? {
-        switch self {
-        case .year: return .month
-        case .month: return .day
-        case .day: return nil
-        }
-    }
-
     fileprivate var template: String {
         switch self {
         case .year: return "yyyy"

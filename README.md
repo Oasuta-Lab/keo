@@ -207,8 +207,8 @@ pause en arrière-plan et reprend au retour.
 
 Quand le tri est par date, la grille se regroupe et un rail apparaît à droite.
 
-- **Trois niveaux de regroupement** — années, mois, jours — au pincement comme dans Photos, et
-  dans le menu « … » pour la découvrabilité. Sur quinze ans de photos, la vue mois produit
+- **Trois niveaux de regroupement** — années, mois, jours — dans le menu « … ».
+  Sur quinze ans de photos, la vue mois produit
   cent-quatre-vingts en-têtes ; la vue années en produit quinze. Les cellules rétrécissent en
   s'éloignant, pour voir la forme d'une année d'un coup d'œil.
 - **En-têtes collants**, avec le compte de photos. Un dossier qui tient dans un seul mois se

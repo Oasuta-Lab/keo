@@ -93,20 +93,6 @@ struct BrowserView: View {
                 }
             }
             .coordinateSpace(name: Self.gridSpace)
-            // Pinch like Photos does. The menu carries the same control, since a gesture
-            // nobody discovers is not a feature.
-            .simultaneousGesture(
-                MagnifyGesture()
-                    .onEnded { value in
-                        guard !selecting else { return }
-                        let next = value.magnification > 1.25 ? granularity.finer
-                                 : value.magnification < 0.8 ? granularity.coarser
-                                 : nil
-                        if let next {
-                            withAnimation(.easeOut(duration: 0.2)) { granularity = next }
-                        }
-                    }
-            )
             .onPreferenceChange(SectionTopKey.self) { tops in
                 activeSection = Self.topmost(of: tops)
             }
