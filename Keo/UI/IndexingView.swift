@@ -52,6 +52,14 @@ struct IndexingView: View {
                        + "Elle continue pendant que tu navigues, en laissant la priorité aux vignettes.")
                 }
             }
+            .alert("Index inaccessible", isPresented: Binding(
+                get: { indexer.failure != nil },
+                set: { if !$0 { indexer.failure = nil } }
+            )) {
+                Button("OK") { indexer.failure = nil }
+            } message: {
+                Text(indexer.failure ?? "")
+            }
             .navigationTitle("Indexation des dates")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -94,6 +102,11 @@ struct IndexingView: View {
         row("Déjà indexés, ignorés", progress.foldersSkipped)
         row("Dates lues cette fois", progress.datesRead)
         row("Restantes ici", max(progress.folderTotal - progress.folderDone, 0))
+        if progress.adopted > 0 {
+            LabeledContent("Retrouvées après déplacement") {
+                Text(progress.adopted, format: .number).monospacedDigit()
+            }
+        }
         row("Dates connues au total", max(progress.indexedOverall, 0))
         if progress.unreadable > 0 {
             LabeledContent("Illisibles, à réessayer") {

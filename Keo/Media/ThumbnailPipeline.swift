@@ -97,7 +97,9 @@ actor ThumbnailPipeline {
     private func still(_ item: Item, client: FreeboxClient, maxPixel: CGFloat) async -> UIImage? {
         if let probe = try? await client.bytes(item.path, prefix: probeBytes) {
             // The prefix is already here, so the capture date costs nothing to read.
-            await CaptureDateIndex.shared.record(ImageDecoding.captureDate(prefix: probe), for: item)
+            let folder = (item.path as NSString).deletingLastPathComponent
+            try? await IndexStore.shared.note(ImageDecoding.captureDate(prefix: probe),
+                                              for: item, in: folder)
             if let image = ImageDecoding.embeddedPreview(probe, maxPixel: maxPixel) {
                 return image
             }

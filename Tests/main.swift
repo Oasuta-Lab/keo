@@ -441,3 +441,6 @@ assert(DownloadJob(total: 0, completed: 0, currentName: "", currentFraction: 0).
        "un lot vide ne divise pas par zéro")
 
 print("ok — lecture seule, envelope, chemins, classification, aperçus, dates EXIF, reprise, sections, rail, tri, éviction, progression")
+
+try await checkIndexStore()
+try await checkMigration()

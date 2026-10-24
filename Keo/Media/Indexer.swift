@@ -2,33 +2,36 @@ import Foundation
 import SwiftUI
 import UIKit
 
-/// Walks the whole NAS once, reading each photo's capture date, so browsing never has to.
+/// The one place that reads capture dates off the NAS.
 ///
-/// The per-folder scan only knows about the folder you are looking at, and loses its place
-/// when you leave. This runs from the root, keeps going while you browse, survives navigation,
-/// and persists as it goes — stopping and restarting costs only the files not yet read.
+/// There used to be two: a per-folder scan and a background walk, which could work the same
+/// folder at once and double the traffic to the box. This is a single serial worker with a
+/// queue the open folder jumps to the front of.
 @MainActor
 final class Indexer: ObservableObject {
     struct Progress: Equatable {
-        var folder: String = "/"
+        var folder = "/"
         var foldersVisited = 0
         var foldersSkipped = 0
         var mediaFound = 0
         var datesRead = 0
-        var alreadyKnown = 0
-        /// Current folder only. A global bar crawls by 0.17 % per batch on a 14 600 photo
-        /// folder, which reads as frozen; this is the one that actually moves.
+        var adopted = 0
+        var unreadable = 0
+        /// Current folder only. A global bar moves by 0.17 % per batch on a 14 600 photo
+        /// folder, which reads as frozen.
         var folderDone = 0
         var folderTotal = 0
         var indexedOverall = 0
-        /// Files the network refused this time; they stay unknown and are retried later.
-        var unreadable = 0
-
-        var pending: Int { max(mediaFound - datesRead - alreadyKnown, 0) }
 
         var folderFraction: Double {
             folderTotal == 0 ? 0 : min(Double(folderDone) / Double(folderTotal), 1)
         }
+    }
+
+    /// Dates discovered for one folder, handed to whoever is displaying it.
+    struct Resolution: Equatable {
+        let folder: String
+        let dates: [Item.ID: Date]
     }
 
     enum State: Equatable {
@@ -50,42 +53,280 @@ final class Indexer: ObservableObject {
     }
 
     @Published private(set) var state: State = .idle
+    @Published private(set) var resolution: Resolution?
+    @Published var failure: String?
+
     @AppStorage("lastIndexedAt") private var lastIndexedAt: Double = 0
 
-    #if DEBUG
-    /// Lets a harness render the running state without a box to talk to.
-    func seed(_ progress: Progress) { state = .running(progress) }
-    #endif
-
-    private var task: Task<Void, Never>?
-    private var observers: [NSObjectProtocol] = []
-    private var resumeOnReturn: (root: String, client: FreeboxClient)?
-    private var background: UIBackgroundTaskIdentifier = .invalid
-
-    /// Same restraint as the per-folder scan: the grid matters more than the index.
+    /// Deliberately below the thumbnail pipeline's share: the user is looking at the grid.
     private static let parallel = 3
     private static let prefixBytes = 4 << 10
     private static let publishEvery = 20
+    /// Backstop against a symlink loop turning this into an infinite walk.
+    private static let folderLimit = 5_000
+
+    private enum Job {
+        case walk(root: String, client: FreeboxClient, restart: Bool)
+        case folder(path: String, items: [Item], client: FreeboxClient)
+    }
+
+    private var queue: [Job] = []
+    private var runner: Task<Void, Never>?
+    private var observers: [NSObjectProtocol] = []
+    private var resumeOnReturn: (root: String, client: FreeboxClient)?
+    private var background: UIBackgroundTaskIdentifier = .invalid
 
     var lastRun: Date? {
         lastIndexedAt > 0 ? Date(timeIntervalSince1970: lastIndexedAt) : nil
     }
 
+    // MARK: Entry points
+
+    func start(from root: String = FreeboxClient.rootPath, client: FreeboxClient,
+               restart: Bool = false) {
+        queue.append(.walk(root: root, client: client, restart: restart))
+        watchAppState(root: root, client: client)
+        pump()
+    }
+
+    /// The folder on screen goes to the front: whoever is looking at it is waiting.
+    func prioritise(folder: String, items: [Item], client: FreeboxClient) {
+        guard !items.isEmpty else { return }
+        queue.insert(.folder(path: folder, items: items, client: client), at: 0)
+        pump()
+    }
+
     func stop() {
         resumeOnReturn = nil
+        queue.removeAll()
         halt()
     }
 
-    private func halt() {
-        task?.cancel()
-        task = nil
+    // MARK: Running
+
+    private func pump() {
+        guard runner == nil, !queue.isEmpty else { return }
+        beginBackgroundGrace()
+
+        runner = Task { [weak self] in
+            while let job = await self?.nextJob() {
+                switch job {
+                case .walk(let root, let client, let restart):
+                    await self?.walk(root: root, client: client, restart: restart)
+                case .folder(let path, let items, let client):
+                    await self?.scanOne(path: path, items: items, client: client)
+                }
+                if Task.isCancelled { break }
+            }
+            await self?.finishRun()
+        }
+    }
+
+    private func nextJob() -> Job? {
+        queue.isEmpty ? nil : queue.removeFirst()
+    }
+
+    private func finishRun() {
+        runner = nil
+        await_checkpoint()
         endBackgroundGrace()
         if case .running(let progress) = state { state = .finished(progress) }
     }
 
-    /// iOS suspends a backgrounded app and will terminate it outright if it is still busy —
-    /// which is what "the app closes by itself during indexing" was. Pause, save, and pick up
-    /// again on return.
+    private func await_checkpoint() {
+        Task { await IndexStore.shared.checkpoint() }
+    }
+
+    private func halt() {
+        runner?.cancel()
+        runner = nil
+        endBackgroundGrace()
+        if case .running(let progress) = state { state = .finished(progress) }
+    }
+
+    // MARK: Jobs
+
+    private func walk(root: String, client: FreeboxClient, restart: Bool) async {
+        var progress = state.progress ?? Progress()
+        progress.folder = root
+        state = .running(progress)
+
+        do {
+            if restart { try await IndexStore.shared.forgetWalk() }
+            let generation = try await IndexStore.shared.beginGeneration()
+
+            var pending: [(path: String, modified: Date?, childCount: Int?)] =
+                [(root, nil, nil)]
+            var visited = 0
+
+            while !pending.isEmpty, !Task.isCancelled, visited < Self.folderLimit {
+                let folder = pending.removeFirst()
+                visited += 1
+
+                // Untouched since it was fully read: not even listed. This is what makes a
+                // second pass cheap.
+                if try await IndexStore.shared.isUnchanged(folder.path,
+                                                           modified: folder.modified,
+                                                           childCount: folder.childCount) {
+                    try await IndexStore.shared.touchSubtree(folder.path, generation: generation)
+                    progress.foldersSkipped += 1
+                    state = .running(progress)
+                    continue
+                }
+
+                progress.folder = folder.path
+                progress.folderDone = 0
+                progress.folderTotal = 0
+                state = .running(progress)
+
+                guard let contents = try? await client.list(folder.path, order: .name) else {
+                    continue
+                }
+                pending.append(contentsOf: contents.folders.map {
+                    ($0.path, $0.modified, $0.childCount)
+                })
+                progress.foldersVisited += 1
+                progress.mediaFound += contents.media.count
+
+                await index(contents.media, in: folder.path, generation: generation,
+                            stamp: (folder.modified, contents.media.count + contents.documents.count),
+                            client: client, progress: &progress)
+            }
+
+            // Only a pass that ran to the end may decide what has disappeared.
+            if !Task.isCancelled, visited < Self.folderLimit {
+                try await IndexStore.shared.sweepFolders(generation: generation)
+                lastIndexedAt = Date().timeIntervalSince1970
+            }
+            progress.indexedOverall = (try? await IndexStore.shared.fileCount()) ?? 0
+            state = .running(progress)
+        } catch {
+            failure = error.localizedDescription
+        }
+    }
+
+    private func scanOne(path: String, items: [Item], client: FreeboxClient) async {
+        var progress = state.progress ?? Progress()
+        progress.folder = path
+        progress.folderDone = 0
+        progress.folderTotal = items.count
+        state = .running(progress)
+
+        do {
+            let generation = try await IndexStore.shared.beginGeneration()
+            await index(items, in: path, generation: generation, stamp: nil,
+                        client: client, progress: &progress)
+        } catch {
+            failure = error.localizedDescription
+        }
+    }
+
+    // MARK: Reading
+
+    /// Reads whatever is still unknown, in batches, and hands the folder's dates back.
+    private func index(_ media: [Item], in folder: String, generation: Int64,
+                       stamp: (modified: Date?, childCount: Int?)?,
+                       client: FreeboxClient, progress: inout Progress) async {
+        guard let store = try? await IndexStore.shared.unread(media, in: folder) else { return }
+        var todo = store
+        var discovered: [Item.ID: Date] = [:]
+
+        // A folder renamed or moved keeps its photos: the same name and size elsewhere in the
+        // index hands us the date for free, instead of hours of re-reading.
+        if let inherited = try? await IndexStore.shared.adopt(todo), !inherited.isEmpty {
+            let adopted = todo.filter { inherited[$0.id] != nil }
+            try? await IndexStore.shared.commit(
+                adopted.map { ($0, inherited[$0.id]) }, in: folder, generation: generation
+            )
+            discovered.merge(inherited) { _, new in new }
+            progress.adopted += adopted.count
+            todo.removeAll { inherited[$0.id] != nil }
+        }
+
+        progress.folderTotal = todo.count
+        state = .running(progress)
+
+        var batch: [(item: Item, capture: Date?)] = []
+        var failures = 0
+        var done = 0
+        var published = 0
+
+        func flush(stamping: Bool) async {
+            guard !batch.isEmpty || stamping else { return }
+            do {
+                try await IndexStore.shared.commit(
+                    batch, in: folder, generation: generation,
+                    stamp: stamping ? stamp : nil,
+                    present: stamping ? media : [], sweep: stamping
+                )
+                batch.removeAll(keepingCapacity: true)
+            } catch {
+                failure = error.localizedDescription
+            }
+        }
+
+        if !todo.isEmpty {
+            await withTaskGroup(of: (Item, Result<Date?, Error>).self) { group in
+                var next = 0
+                func feed() {
+                    guard next < todo.count else { return }
+                    let item = todo[next]
+                    next += 1
+                    group.addTask {
+                        do {
+                            let prefix = try await client.bytes(item.path, prefix: Self.prefixBytes)
+                            return (item, .success(ImageDecoding.captureDate(prefix: prefix)))
+                        } catch {
+                            return (item, .failure(error))
+                        }
+                    }
+                }
+                for _ in 0..<min(Self.parallel, todo.count) { feed() }
+
+                while let (item, outcome) = await group.next() {
+                    if Task.isCancelled { group.cancelAll(); break }
+
+                    switch outcome {
+                    case .success(let capture):
+                        batch.append((item, capture))
+                        if let capture { discovered[item.id] = capture }
+                        progress.datesRead += 1
+                    case .failure:
+                        // Left unknown on purpose: a dropped connection must be retried, never
+                        // recorded as "this photo has no date".
+                        failures += 1
+                        progress.unreadable += 1
+                    }
+
+                    done += 1
+                    if batch.count >= IndexStore.batchSize { await flush(stamping: false) }
+                    if done - published >= Self.publishEvery {
+                        published = done
+                        progress.folderDone = done
+                        state = .running(progress)
+                    }
+                    feed()
+                }
+            }
+        }
+
+        // The completion stamp travels in the same transaction as the last batch, so it can
+        // never claim more than what is actually written.
+        await flush(stamping: failures == 0 && !Task.isCancelled)
+
+        progress.folderDone = done
+        progress.indexedOverall = (try? await IndexStore.shared.fileCount()) ?? progress.indexedOverall
+        state = .running(progress)
+
+        if !discovered.isEmpty {
+            resolution = Resolution(folder: folder, dates: discovered)
+        }
+    }
+
+    // MARK: App lifecycle
+
+    /// iOS suspends a backgrounded app and terminates it if it is still busy. Pause, commit,
+    /// and pick up again on return.
     private func watchAppState(root: String, client: FreeboxClient) {
         guard observers.isEmpty else { return }
         let centre = NotificationCenter.default
@@ -97,7 +338,7 @@ final class Indexer: ObservableObject {
                 guard let self, self.state.isRunning else { return }
                 self.resumeOnReturn = (root, client)
                 self.halt()
-                await CaptureDateIndex.shared.save()
+                await IndexStore.shared.checkpoint()
             }
         })
 
@@ -112,7 +353,6 @@ final class Indexer: ObservableObject {
         })
     }
 
-    /// A little grace so the save finishes even if we are already on the way out.
     private func beginBackgroundGrace() {
         guard background == .invalid else { return }
         background = UIApplication.shared.beginBackgroundTask(withName: "keo.indexing") {
@@ -126,135 +366,8 @@ final class Indexer: ObservableObject {
         background = .invalid
     }
 
-    /// `restart` forgets which folders were already walked and reads the whole NAS again.
-    func start(from root: String = FreeboxClient.rootPath, client: FreeboxClient,
-               restart: Bool = false) {
-        guard !state.isRunning else { return }
-        if restart {
-            Task { await CaptureDateIndex.shared.forgetWalk() }
-        }
-        watchAppState(root: root, client: client)
-        beginBackgroundGrace()
-        task = Task { [weak self] in
-            await self?.run(root: root, client: client)
-        }
-    }
-
-    private func run(root: String, client: FreeboxClient) async {
-        var progress = Progress(folder: root)
-        state = .running(progress)
-
-        // The folder's own mtime comes from its parent's listing; the root has no parent, so
-        // it is always listed.
-        var queue: [(path: String, modified: Date?)] = [(root, nil)]
-        var guardCount = 0
-
-        while !queue.isEmpty, !Task.isCancelled, guardCount < Self.folderLimit {
-            let (path, folderModified) = queue.removeFirst()
-            guardCount += 1
-
-            // Untouched since it was fully read: nothing new can be in it, so it is not even
-            // listed. This is what makes a second pass cheap.
-            if await CaptureDateIndex.shared.isUnchanged(path, modified: folderModified) {
-                progress.foldersSkipped += 1
-                state = .running(progress)
-                continue
-            }
-
-            progress.folder = path
-            progress.folderDone = 0
-            progress.folderTotal = 0
-            state = .running(progress)
-
-            guard let contents = try? await client.list(path, order: .name) else { continue }
-            queue.append(contentsOf: contents.folders.map { ($0.path, $0.modified) })
-            progress.foldersVisited += 1
-
-            progress.mediaFound += contents.media.count
-            let known = await CaptureDateIndex.shared.known(contents.media)
-            let pending = await CaptureDateIndex.shared.needsScan(contents.media)
-            progress.alreadyKnown += known.count
-            progress.folderTotal = pending.count
-            state = .running(progress)
-
-            let failures = await read(pending, client: client, progress: &progress)
-            progress.unreadable += failures
-
-            // Only a folder read end to end can be stamped: otherwise the files the network
-            // swallowed would be skipped for ever.
-            if !Task.isCancelled, failures == 0 {
-                await CaptureDateIndex.shared.markCompleted(path, modified: folderModified)
-            }
-            progress.indexedOverall = await CaptureDateIndex.shared.count
-
-            // Saving after every folder re-encoded the whole index each time; every tenth is
-            // often enough, since backgrounding and stopping both save explicitly.
-            if progress.foldersVisited % 10 == 0 { await CaptureDateIndex.shared.save() }
-        }
-
-        await CaptureDateIndex.shared.save()
-        if !Task.isCancelled { lastIndexedAt = Date().timeIntervalSince1970 }
-        state = .finished(progress)
-        endBackgroundGrace()
-        task = nil
-    }
-
-    /// Returns how many files could not be read, so the caller knows whether the folder can
-    /// honestly be called done.
-    @discardableResult
-    private func read(_ items: [Item], client: FreeboxClient,
-                      progress: inout Progress) async -> Int {
-        guard !items.isEmpty else { return 0 }
-        var done = 0
-        var failures = 0
-
-        // A failed read must never be stored as "no date": it would be permanent, and the
-        // folder would be stamped complete and never looked at again. A dropped Wi-Fi would
-        // punch holes in the timeline for good.
-        await withTaskGroup(of: (Item, Result<Date?, Error>).self) { group in
-            var next = 0
-            func feed() {
-                guard next < items.count else { return }
-                let item = items[next]
-                next += 1
-                group.addTask {
-                    do {
-                        let prefix = try await client.bytes(item.path, prefix: Self.prefixBytes)
-                        return (item, .success(ImageDecoding.captureDate(prefix: prefix)))
-                    } catch {
-                        return (item, .failure(error))
-                    }
-                }
-            }
-            for _ in 0..<min(Self.parallel, items.count) { feed() }
-
-            var published = 0
-            while let (item, outcome) = await group.next() {
-                if Task.isCancelled { group.cancelAll(); break }
-                switch outcome {
-                case .success(let date):
-                    await CaptureDateIndex.shared.record(date, for: item)
-                case .failure:
-                    // Left unknown on purpose, so a later pass retries it.
-                    failures += 1
-                }
-                done += 1
-                if done - published >= Self.publishEvery {
-                    progress.datesRead += done - published
-                    progress.folderDone = done
-                    published = done
-                    state = .running(progress)
-                }
-                feed()
-            }
-            progress.datesRead += done - published
-        }
-
-        progress.folderDone = done
-        state = .running(progress)
-        return failures
-    }
-
-    /// Backstop against a symlink loop turning this into an infinite walk.
-    private static let folderLimit = 5_000
+    #if DEBUG
+    /// Lets a harness render the running state without a box to talk to.
+    func seed(_ progress: Progress) { state = .running(progress) }
+    #endif
 }

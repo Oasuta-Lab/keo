@@ -1,0 +1,496 @@
+import Foundation
+import SQLite3
+
+/// SQLite tells the library "I own this buffer, copy it" with this sentinel.
+private let transientText = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+/// The metadata index: every photo's capture date, and which folders have been read.
+///
+/// Replaces a single JSON dictionary that was loaded whole into memory and rewritten in full
+/// on every save. The problem was never the size, it was the granularity: the unit of writing
+/// was "the entire index" and the unit of loss was "everything since the last save". Here a
+/// batch of 256 files is one small transaction, and a kill at the worst possible moment costs
+/// those 256 files, not the folder and the nine before it.
+///
+/// Everything — the connection and the prepared statements — stays inside this actor. The
+/// SQLite pointers are not `Sendable` and must never leave.
+actor IndexStore {
+    static let shared = IndexStore()
+
+    /// Files written per transaction. Small enough that a crash is cheap, large enough that
+    /// the commit cost disappears into the network wait.
+    static let batchSize = 256
+
+    private var db: OpaquePointer?
+    private var ready = false
+    /// Injectable so checks can run against a throwaway directory.
+    private let home: URL?
+
+    init(directory: URL? = nil) {
+        self.home = directory
+    }
+
+    // MARK: Opening
+
+    private func open() throws {
+        guard !ready else { return }
+
+        let folder = home ?? FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Keo", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent("index.sqlite")
+
+        guard sqlite3_open_v2(url.path, &db,
+                              SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
+                              nil) == SQLITE_OK else {
+            throw Failure.open(message)
+        }
+
+        // WAL survives a process kill without corruption; NORMAL trades an fsync per commit
+        // for data we can always rebuild from the NAS.
+        try exec("PRAGMA journal_mode = WAL")
+        try exec("PRAGMA synchronous = NORMAL")
+        try exec("PRAGMA foreign_keys = ON")
+        try exec("PRAGMA busy_timeout = 3000")
+        try exec(Self.schema)
+
+        // Readable while the phone is locked after the first unlock, like the rest of our data.
+        try? FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: url.path
+        )
+
+        ready = true
+        migrateFromJSON(in: folder)
+    }
+
+    private static let schema = """
+    CREATE TABLE IF NOT EXISTS folder (
+      id          INTEGER PRIMARY KEY,
+      path        TEXT NOT NULL UNIQUE,
+      mtime       REAL,
+      child_count INTEGER,
+      gen         INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS file (
+      folder_id INTEGER NOT NULL REFERENCES folder(id) ON DELETE CASCADE,
+      name      TEXT    NOT NULL,
+      size      INTEGER NOT NULL,
+      capture   REAL,
+      gen       INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (folder_id, name, size)
+    ) WITHOUT ROWID;
+    CREATE INDEX IF NOT EXISTS file_by_identity ON file(name, size);
+    CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v);
+    """
+
+    // MARK: Generations
+
+    /// A pass stamps everything it sees with one number; whatever still carries an older one
+    /// has disappeared from the NAS and is swept away.
+    func beginGeneration() throws -> Int64 {
+        try open()
+        let next = (try value(forKey: "generation") ?? 0) + 1
+        try setValue(next, forKey: "generation")
+        return next
+    }
+
+    func sweepFolders(generation: Int64) throws {
+        try open()
+        // Keeps folders never walked (gen 0) so an interrupted first pass isn't wiped.
+        try exec("DELETE FROM folder WHERE gen > 0 AND gen < \(generation)")
+    }
+
+    // MARK: Reading
+
+    func fileCount() throws -> Int {
+        try open()
+        return Int(try scalar("SELECT count(*) FROM file") ?? 0)
+    }
+
+    func isUnchanged(_ path: String, modified: Date?, childCount: Int?) throws -> Bool {
+        try open()
+        guard let modified else { return false }
+
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT mtime, child_count FROM folder WHERE path = ?", into: &statement)
+        bind(statement, 1, path)
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              sqlite3_column_type(statement, 0) != SQLITE_NULL else { return false }
+
+        let stamp = sqlite3_column_double(statement, 0)
+        guard FolderStamp.isUnchanged(recorded: stamp, modified: modified) else { return false }
+
+        // Belt and braces: some servers are lazy about directory mtimes.
+        if let childCount, sqlite3_column_type(statement, 1) != SQLITE_NULL {
+            return Int(sqlite3_column_int64(statement, 1)) == childCount
+        }
+        return true
+    }
+
+    /// Capture dates already known for this folder's files.
+    func known(_ items: [Item], in folder: String) throws -> [Item.ID: Date] {
+        try open()
+        guard let id = try folderID(folder, create: false), !items.isEmpty else { return [:] }
+
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT capture FROM file WHERE folder_id = ? AND name = ? AND size = ?",
+                    into: &statement)
+
+        var found: [Item.ID: Date] = [:]
+        for item in items {
+            sqlite3_reset(statement)
+            sqlite3_bind_int64(statement, 1, id)
+            bind(statement, 2, item.name)
+            sqlite3_bind_int64(statement, 3, item.size)
+            if sqlite3_step(statement) == SQLITE_ROW,
+               sqlite3_column_type(statement, 0) != SQLITE_NULL {
+                found[item.id] = Date(timeIntervalSince1970: sqlite3_column_double(statement, 0))
+            }
+        }
+        return found
+    }
+
+    /// Items with no row at all — never read, or read and failed.
+    func unread(_ items: [Item], in folder: String) throws -> [Item] {
+        try open()
+        guard let id = try folderID(folder, create: false) else { return items }
+
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT 1 FROM file WHERE folder_id = ? AND name = ? AND size = ?",
+                    into: &statement)
+
+        return items.filter { item in
+            sqlite3_reset(statement)
+            sqlite3_bind_int64(statement, 1, id)
+            bind(statement, 2, item.name)
+            sqlite3_bind_int64(statement, 3, item.size)
+            return sqlite3_step(statement) != SQLITE_ROW
+        }
+    }
+
+    /// Looks for the same file under another folder — a rename or a move. Renaming a folder of
+    /// 14 600 photos used to invalidate every key and cost hours of re-reading; here it is a
+    /// handful of milliseconds of index lookups.
+    ///
+    /// Ambiguous matches (same name and size, different dates) are left out: re-reading the
+    /// file is cheap and certain.
+    func adopt(_ items: [Item]) throws -> [Item.ID: Date] {
+        try open()
+        guard !items.isEmpty else { return [:] }
+
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("""
+            SELECT capture, count(DISTINCT ifnull(capture, -1)) FROM file
+            WHERE name = ? AND size = ? AND capture IS NOT NULL
+            """, into: &statement)
+
+        var found: [Item.ID: Date] = [:]
+        for item in items {
+            sqlite3_reset(statement)
+            bind(statement, 1, item.name)
+            sqlite3_bind_int64(statement, 2, item.size)
+            guard sqlite3_step(statement) == SQLITE_ROW,
+                  sqlite3_column_type(statement, 0) != SQLITE_NULL,
+                  sqlite3_column_int64(statement, 1) == 1 else { continue }
+            found[item.id] = Date(timeIntervalSince1970: sqlite3_column_double(statement, 0))
+        }
+        return found
+    }
+
+    // MARK: Writing
+
+    /// One transaction: the dates, the folder's own generation, and — when the folder was read
+    /// end to end — its completion stamp. That stamp can therefore never outlive the rows it
+    /// claims, whatever happens to the process.
+    /// `present` is every file the listing showed. Bumping their generation before sweeping is
+    /// what makes the sweep mean "gone from the NAS" rather than "not re-read this time" — a
+    /// date picked up opportunistically by the thumbnail pipeline would otherwise be deleted.
+    func commit(_ results: [(item: Item, capture: Date?)], in folder: String,
+                generation: Int64, stamp: (modified: Date?, childCount: Int?)? = nil,
+                present: [Item] = [], sweep: Bool = false) throws {
+        try open()
+        try exec("BEGIN IMMEDIATE")
+        do {
+            let id = try folderID(folder, create: true)!
+            try exec("UPDATE folder SET gen = \(generation) WHERE id = \(id)")
+
+            if !results.isEmpty {
+                var statement: OpaquePointer?
+                defer { sqlite3_finalize(statement) }
+                try prepare("""
+                    INSERT INTO file (folder_id, name, size, capture, gen)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(folder_id, name, size)
+                    DO UPDATE SET capture = excluded.capture, gen = excluded.gen
+                    """, into: &statement)
+
+                for (item, capture) in results {
+                    sqlite3_reset(statement)
+                    sqlite3_bind_int64(statement, 1, id)
+                    bind(statement, 2, item.name)
+                    sqlite3_bind_int64(statement, 3, item.size)
+                    if let capture {
+                        sqlite3_bind_double(statement, 4, capture.timeIntervalSince1970)
+                    } else {
+                        sqlite3_bind_null(statement, 4)
+                    }
+                    sqlite3_bind_int64(statement, 5, generation)
+                    guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+                }
+            }
+
+            if !present.isEmpty {
+                var mark: OpaquePointer?
+                defer { sqlite3_finalize(mark) }
+                try prepare("UPDATE file SET gen = ? WHERE folder_id = ? AND name = ? AND size = ?",
+                            into: &mark)
+                for item in present {
+                    sqlite3_reset(mark)
+                    sqlite3_bind_int64(mark, 1, generation)
+                    sqlite3_bind_int64(mark, 2, id)
+                    bind(mark, 3, item.name)
+                    sqlite3_bind_int64(mark, 4, item.size)
+                    guard sqlite3_step(mark) == SQLITE_DONE else { throw Failure.write(message) }
+                }
+            }
+            if sweep {
+                try exec("DELETE FROM file WHERE folder_id = \(id) AND gen < \(generation)")
+            }
+            if let stamp {
+                try stampFolder(id, modified: stamp.modified, childCount: stamp.childCount)
+            }
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    /// A date noticed in passing by the thumbnail pipeline, which already holds the file's
+    /// first bytes. Written with the folder's current generation so the next sweep keeps it.
+    func note(_ capture: Date?, for item: Item, in folder: String) throws {
+        try open()
+        let generation = try folderGeneration(folder)
+        try commit([(item, capture)], in: folder, generation: generation)
+    }
+
+    private func folderGeneration(_ folder: String) throws -> Int64 {
+        guard let id = try folderID(folder, create: false) else {
+            return try value(forKey: "generation") ?? 0
+        }
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT gen FROM folder WHERE id = ?", into: &statement)
+        sqlite3_bind_int64(statement, 1, id)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+        return sqlite3_column_int64(statement, 0)
+    }
+
+    /// Marks a whole subtree as still present, for a folder skipped because it had not changed.
+    ///
+    /// The subfolders matter as much as the files: we never list them, so without this their
+    /// generation would stay behind and the end-of-pass sweep would delete them — taking their
+    /// photos with them through the cascade.
+    func touchSubtree(_ folder: String, generation: Int64) throws {
+        try open()
+        try exec("BEGIN IMMEDIATE")
+        do {
+            // Prefix match rather than LIKE: a path may legitimately contain % or _.
+            let scope = "path = ?1 OR substr(path, 1, length(?1) + 1) = ?1 || '/'"
+
+            var folders: OpaquePointer?
+            defer { sqlite3_finalize(folders) }
+            try prepare("UPDATE folder SET gen = ?2 WHERE " + scope, into: &folders)
+            bind(folders, 1, folder)
+            sqlite3_bind_int64(folders, 2, generation)
+            guard sqlite3_step(folders) == SQLITE_DONE else { throw Failure.write(message) }
+
+            var files: OpaquePointer?
+            defer { sqlite3_finalize(files) }
+            let sql = "UPDATE file SET gen = ?2 WHERE folder_id IN "
+                    + "(SELECT id FROM folder WHERE " + scope + ")"
+            try prepare(sql, into: &files)
+            bind(files, 1, folder)
+            sqlite3_bind_int64(files, 2, generation)
+            guard sqlite3_step(files) == SQLITE_DONE else { throw Failure.write(message) }
+
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    /// Forgets every completion stamp, so the next pass re-reads everything.
+    func forgetWalk() throws {
+        try open()
+        try exec("UPDATE folder SET mtime = NULL, child_count = NULL")
+    }
+
+    /// Flushes the write-ahead log so the file at rest is compact and backups see it whole.
+    func checkpoint() {
+        guard ready else { return }
+        sqlite3_wal_checkpoint_v2(db, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil)
+    }
+
+    // MARK: Migration
+
+    /// A first index already paid for must not be paid for twice.
+    private func migrateFromJSON(in folder: URL) {
+        let dates = folder.appendingPathComponent("capture-dates.json")
+        let walked = folder.appendingPathComponent("indexed-folders.json")
+        guard FileManager.default.fileExists(atPath: dates.path) else { return }
+
+        let records = (try? Data(contentsOf: dates))
+            .flatMap { try? JSONDecoder().decode([String: Double?].self, from: $0) } ?? [:]
+        let folders = (try? Data(contentsOf: walked))
+            .flatMap { try? JSONDecoder().decode([String: Double].self, from: $0) } ?? [:]
+
+        do {
+            try exec("BEGIN IMMEDIATE")
+            var statement: OpaquePointer?
+            try prepare("""
+                INSERT OR IGNORE INTO file (folder_id, name, size, capture, gen)
+                VALUES (?, ?, ?, ?, 0)
+                """, into: &statement)
+
+            var ids: [String: Int64] = [:]
+            for (key, capture) in records {
+                // "/a/b/photo.jpg|2048576"
+                guard let bar = key.lastIndex(of: "|"),
+                      let size = Int64(key[key.index(after: bar)...]) else { continue }
+                let path = String(key[..<bar])
+                let directory = (path as NSString).deletingLastPathComponent
+                let name = (path as NSString).lastPathComponent
+
+                let id: Int64
+                if let cached = ids[directory] {
+                    id = cached
+                } else {
+                    guard let made = try folderID(directory, create: true) else { continue }
+                    ids[directory] = made
+                    id = made
+                }
+
+                sqlite3_reset(statement)
+                sqlite3_bind_int64(statement, 1, id)
+                bind(statement, 2, name)
+                sqlite3_bind_int64(statement, 3, size)
+                if let capture = capture ?? nil {
+                    sqlite3_bind_double(statement, 4, capture)
+                } else {
+                    sqlite3_bind_null(statement, 4)
+                }
+                _ = sqlite3_step(statement)
+            }
+            sqlite3_finalize(statement)
+
+            for (path, mtime) in folders {
+                guard let id = try folderID(path, create: true) else { continue }
+                try stampFolder(id, modified: Date(timeIntervalSince1970: mtime), childCount: nil)
+            }
+            try exec("COMMIT")
+
+            try? FileManager.default.removeItem(at: dates)
+            try? FileManager.default.removeItem(at: walked)
+        } catch {
+            try? exec("ROLLBACK")
+        }
+    }
+
+    // MARK: Plumbing
+
+    enum Failure: LocalizedError {
+        case open(String)
+        case write(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .open(let detail): return "Index illisible : \(detail)"
+            case .write(let detail): return "Écriture de l'index impossible : \(detail)"
+            }
+        }
+    }
+
+    private var message: String {
+        db.flatMap { sqlite3_errmsg($0) }.map { String(cString: $0) } ?? "inconnu"
+    }
+
+    private func exec(_ sql: String) throws {
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw Failure.write(message) }
+    }
+
+    private func prepare(_ sql: String, into statement: inout OpaquePointer?) throws {
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw Failure.write(message)
+        }
+    }
+
+    private func bind(_ statement: OpaquePointer?, _ index: Int32, _ text: String) {
+        sqlite3_bind_text(statement, index, text, -1, transientText)
+    }
+
+    private func scalar(_ sql: String) throws -> Int64? {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare(sql, into: &statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return sqlite3_column_int64(statement, 0)
+    }
+
+    private func value(forKey key: String) throws -> Int64? {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT v FROM meta WHERE k = ?", into: &statement)
+        bind(statement, 1, key)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return sqlite3_column_int64(statement, 0)
+    }
+
+    private func setValue(_ value: Int64, forKey key: String) throws {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                    into: &statement)
+        bind(statement, 1, key)
+        sqlite3_bind_int64(statement, 2, value)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+    }
+
+    private func folderID(_ path: String, create: Bool) throws -> Int64? {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT id FROM folder WHERE path = ?", into: &statement)
+        bind(statement, 1, path)
+        if sqlite3_step(statement) == SQLITE_ROW { return sqlite3_column_int64(statement, 0) }
+        guard create else { return nil }
+
+        var insert: OpaquePointer?
+        defer { sqlite3_finalize(insert) }
+        try prepare("INSERT INTO folder (path) VALUES (?)", into: &insert)
+        bind(insert, 1, path)
+        guard sqlite3_step(insert) == SQLITE_DONE else { throw Failure.write(message) }
+        return sqlite3_last_insert_rowid(db)
+    }
+
+    private func stampFolder(_ id: Int64, modified: Date?, childCount: Int?) throws {
+        guard let stamp = FolderStamp.stamp(for: modified) else { return }
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("UPDATE folder SET mtime = ?, child_count = ? WHERE id = ?", into: &statement)
+        sqlite3_bind_double(statement, 1, stamp)
+        if let childCount {
+            sqlite3_bind_int64(statement, 2, Int64(childCount))
+        } else {
+            sqlite3_bind_null(statement, 2)
+        }
+        sqlite3_bind_int64(statement, 3, id)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+    }
+}

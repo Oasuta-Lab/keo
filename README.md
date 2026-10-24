@@ -107,52 +107,48 @@ rien, quel que soit le nombre d'octets fournis.
 - Le réordonnancement n'a lieu **qu'à la fin du scan**, pas pendant : la grille ne se réorganise
   jamais sous le doigt. Une pastille discrète affiche l'avancement.
 
-### Indexation globale
+### L'index : SQLite, incrémental et durable
 
-Au-delà de **2 000 fichiers sans date**, un dossier ne se scanne plus tout seul à l'ouverture :
-cela grinçait à chaque visite d'un gros dossier. Une pastille annonce alors combien de fichiers
-sont sans date et ouvre l'écran d'indexation (menu « … » → *Indexation des dates*).
+`Keo/Media/IndexStore.swift` — un actor propriétaire d'une connexion SQLite en WAL, dans
+Application Support. `libsqlite3` est dans iOS, donc toujours aucune dépendance externe.
 
-L'indexation **se met en pause quand l'app passe en arrière-plan** et reprend au retour. iOS
-suspend un processus backgroundé et le termine s'il est encore occupé : sans ça, l'app se
-fermait toute seule au milieu d'une indexation. Le travail déjà fait est sauvegardé avant de
-rendre la main, avec une tâche d'arrière-plan pour que l'écriture ait le temps d'aboutir.
+L'ancienne version était un dictionnaire JSON chargé entièrement en mémoire et **réécrit en
+entier** à chaque sauvegarde. Le problème n'était pas la taille mais la granularité : l'unité
+d'écriture était « tout l'index » et l'unité de perte « tout depuis la dernière sauvegarde ».
+Un kill au milieu d'un dossier de 14 600 photos jetait six minutes de travail.
 
-Cet écran lance un parcours complet du NAS depuis la racine. La barre affichée est celle du
-**dossier en cours**, pas une globale : sur 14 600 photos, une barre globale avance de 0,17 %
-par lot et se lit comme figée.
+```sql
+folder(id, path UNIQUE, mtime, child_count, gen)
+file(folder_id, name, size, capture, gen)  PRIMARY KEY (folder_id, name, size)
+INDEX file_by_identity ON file(name, size)
+meta(k, v)
+```
 
-### Ajouter des photos ne demande pas de tout réindexer
+| Garantie | Comment |
+|---|---|
+| Durable à tout instant | WAL + `synchronous = NORMAL`. Un kill, un crash ou une batterie à plat ne corrompt rien |
+| Perte bornée | Une transaction tous les 256 fichiers : au pire 256 lectures à refaire, pas un dossier entier |
+| Cohérence du marquage | Le marquage « dossier terminé » part dans **la même transaction** que son dernier lot — il ne peut jamais prétendre plus que ce qui est écrit |
+| Mémoire | Plus rien n'est chargé au démarrage ; une requête par dossier ouvert |
+| Renommage gratuit | `file_by_identity` retrouve la date d'un fichier déplacé par `(nom, taille)`. Renommer un dossier de 14 600 photos coûtait des heures de relecture, c'est maintenant quelques millisecondes |
+| Pas de gonflement | Compteur de génération : ce qui n'a pas été revu dans le listing est supprimé, les sous-arbres par cascade |
+| Sous-arbres ignorés | Un dossier intact n'est pas listé, mais tout son sous-arbre voit sa génération avancer — sinon le balayage l'effacerait |
 
-Keo mémorise, pour chaque dossier entièrement lu, **sa date de modification au moment où il a
-été lu** (`indexed-folders.json`). La mtime d'un répertoire bouge dès qu'on y ajoute ou retire
-une entrée, donc :
+La clé `(dossier, nom, taille)` remplace `"chemin|taille"` : l'ancienne répétait 456 Ko de
+préfixe de chemin sur le seul gros dossier.
 
-- dossier intact → **il n'est même pas listé**, c'est ce qui rend un second passage rapide ;
-- dossier modifié → il est relisté, et seules les photos inconnues sont lues.
+**Migration** : les anciens `capture-dates.json` et `indexed-folders.json` sont repris au
+premier lancement puis supprimés. Une indexation déjà payée ne se re-paye pas — c'est vérifié.
 
-Ajouter 50 photos à un dossier de 15 000 coûte donc 50 lectures de 4 Ko, pas 15 000. Ouvrir
-simplement le dossier suffit d'ailleurs souvent : en dessous de 2 000 fichiers sans date, le
-scan à l'ouverture s'en charge.
+### Un seul pipeline de lecture
 
-« Tout réindexer » oublie cette mémoire — c'est un choix explicite, pas le comportement normal.
+`DateScan` et `Indexer` étaient deux boucles indépendantes qui pouvaient lire le même dossier
+en même temps et doubler le trafic vers la box. Il n'en reste qu'une : une file sérielle que le
+dossier affiché double par la tête, puisque c'est lui que quelqu'un attend.
 
-Limite connue : une photo **remplacée** sans changer le nombre de fichiers ne déplace pas
-forcément la mtime du dossier. Elle sera revue au prochain « Tout réindexer », ou à l'ouverture
-du dossier. Il continue pendant la navigation, cède la priorité aux
-vignettes, et persiste au fur et à mesure : un arrêt ne coûte que les fichiers non encore lus.
-Le scan local est suspendu tant qu'il tourne, pour ne pas se disputer la box.
-
-## Dossiers
-
-Affichés en tuiles plutôt qu'en liste, avec le nombre d'éléments que la box renvoie déjà dans
-le listing (`filecount`). Les documents restent en lignes : ils sont peu nombreux et une liste
-leur convient mieux.
-
-Le compteur n'apparaît que si la box renvoie `filecount`, ce qu'elle ne fait pas toujours.
-
-Pas de photo de couverture pour l'instant : il faudrait un `fs/ls` par dossier. Ce sera
-abordable une fois le cache de listing en place.
+Au-delà de **2 000 fichiers sans date**, un dossier ne se lit plus à l'ouverture : une pastille
+renvoie vers l'écran d'indexation (menu « … » → *Indexation des dates*). L'indexation se met en
+pause en arrière-plan et reprend au retour.
 
 ## Timeline
 
@@ -238,6 +234,9 @@ swiftc -swift-version 6 Keo/Freebox/Item.swift Keo/Freebox/Transport.swift \
 ```
 
 La géométrie du rail vit dans `RailLayout`, sans SwiftUI, précisément pour être vérifiable.
+`Tests/store.swift` exerce le **vrai SQLite** sur un répertoire temporaire : écriture, balayage
+des fichiers disparus, survie des sous-arbres ignorés, adoption après renommage, et migration
+depuis les anciens JSON.
 
 Couvre la garantie de lecture seule, l'enveloppe `{success, result}`, l'encodage des chemins,
 la classification des médias, l'éviction LRU et l'arithmétique de progression.

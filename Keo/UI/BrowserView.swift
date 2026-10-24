@@ -21,7 +21,6 @@ struct BrowserView: View {
     /// Only built when sorting by date — grouping a name-sorted grid by month would be noise.
     @State private var sections: [MediaSection] = []
     @State private var activeSection: MediaSection.ID?
-    @StateObject private var scan = DateScan()
     @EnvironmentObject private var indexer: Indexer
     @State private var showingIndexing = false
     /// How many files here still have no date, when it is too many to read on the fly.
@@ -104,9 +103,7 @@ struct BrowserView: View {
         .overlay { status }
         .overlay(alignment: .bottom) {
             // Root only, and out of the way whenever an action bar is up.
-            if let progress = scan.progress {
-                DateScanChip(progress: progress).padding(.bottom, 8)
-            } else if indexer.state.isRunning, let progress = indexer.state.progress {
+            if indexer.state.isRunning, let progress = indexer.state.progress {
                 IndexingChip(fraction: progress.folderFraction,
                              pending: max(progress.folderTotal - progress.folderDone, 0)) {
                     showingIndexing = true
@@ -135,9 +132,12 @@ struct BrowserView: View {
         .sheet(isPresented: $showingIndexing) {
             IndexingView(client: client)
         }
-        // The global pass covers this folder too; re-apply what it found.
-        .onChange(of: indexer.state.isRunning) { _, running in
-            if !running { Task { await resolveDates() } }
+        // Dates discovered for this folder, whether by the open-folder scan or the full pass.
+        .onChange(of: indexer.resolution) { _, found in
+            guard let found, found.folder == path else { return }
+            contents = contents.applying(found.dates, order: order)
+            rebuildSections()
+            unindexed = 0
         }
         .alert("Téléchargement interrompu", isPresented: showingError) {
             Button("OK") { downloader.error = nil }
@@ -152,7 +152,7 @@ struct BrowserView: View {
             }
         }
         .task(id: path) { await load() }
-        .onDisappear { scan.cancel() }
+
         // Reordering is a local question: no reason to ask the box again.
         .onChange(of: order) { _, new in
             contents = contents.reordered(by: new)
@@ -293,25 +293,36 @@ struct BrowserView: View {
         selection = []
     }
 
-    /// Dates already known are folded in before the first paint; the rest are fetched in the
-    /// background and applied in one go, so the grid never reshuffles while being scrolled.
+    /// Known dates are folded in before the first paint; whatever is left is handed to the
+    /// indexer, which is the only thing that talks to the box about dates.
     private func resolveDates() async {
-        let known = await CaptureDateIndex.shared.known(contents.media)
-        if !known.isEmpty {
-            contents = contents.applying(known, order: order)
-            rebuildSections()
-        }
-        // Don't fight the global indexer for the box's attention.
-        guard order != .name, !indexer.state.isRunning else { return }
-        unindexed = 0
-        scan.start(contents.media, client: client) { count in
-            unindexed = count
-        } onFinished: { found in
-            guard !found.isEmpty else { return }
-            contents = contents.applying(found, order: order)
-            rebuildSections()
+        do {
+            let known = try await IndexStore.shared.known(contents.media, in: path)
+            if !known.isEmpty {
+                contents = contents.applying(known, order: order)
+                rebuildSections()
+            }
+
+            let pending = try await IndexStore.shared.unread(contents.media, in: path)
+            guard order != .name, !pending.isEmpty else {
+                unindexed = 0
+                return
+            }
+
+            // Beyond this, reading on open grinds every time you walk in. Those belong to the
+            // deliberate pass from the indexing screen.
+            if pending.count > Self.automaticLimit {
+                unindexed = pending.count
+            } else {
+                unindexed = 0
+                indexer.prioritise(folder: path, items: pending, client: client)
+            }
+        } catch {
+            self.error = error.localizedDescription
         }
     }
+
+    private static let automaticLimit = 2_000
 
     private func rebuildSections() {
         sections = order == .name ? [] : MediaGrouping.sections(from: contents.media)
