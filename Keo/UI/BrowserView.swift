@@ -228,7 +228,7 @@ struct BrowserView: View {
                         }
                     }
                     Divider()
-                    Button("Indexation des dates…", systemImage: "calendar.badge.clock") {
+                    Button("Indexation de la bibliothèque…", systemImage: "square.stack.3d.up") {
                         showingIndexing = true
                     }
 

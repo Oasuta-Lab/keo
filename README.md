@@ -200,7 +200,7 @@ en même temps et doubler le trafic vers la box. Il n'en reste qu'une : une file
 dossier affiché double par la tête, puisque c'est lui que quelqu'un attend.
 
 Au-delà de **2 000 fichiers sans date**, un dossier ne se lit plus à l'ouverture : une pastille
-renvoie vers l'écran d'indexation (menu « … » → *Indexation des dates*). L'indexation se met en
+renvoie vers l'écran d'indexation (menu « … » → *Indexation de la bibliothèque*). L'indexation se met en
 pause en arrière-plan et reprend au retour.
 
 ## Timeline

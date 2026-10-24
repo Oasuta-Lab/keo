@@ -59,10 +59,15 @@ struct IndexingView: View {
                         .tint(.red)
                     }
                 } footer: {
-                    Text("Keo lit les 4 premiers kilo-octets de chaque photo pour en extraire la "
-                       + "date de prise de vue. Une photo déjà lue n'est jamais relue, même après "
-                       + "un arrêt : relancer reprend là où ça s'était arrêté.\n\n"
-                       + "« Revérifier » reliste tous les dossiers sans relire une seule date. "
+                    Text("Keo parcourt le NAS et retient ce qu'il y trouve : la structure des "
+                       + "dossiers, les fichiers, leurs tailles, et la date de prise de vue de "
+                       + "chaque photo et vidéo — lue dans les premiers kilo-octets du fichier, "
+                       + "jamais en le téléchargeant.\n\n"
+                       + "C'est cet index qui permet le tri chronologique, la timeline, les "
+                       + "totaux sur les dossiers, et leur ouverture instantanée.\n\n"
+                       + "Un fichier déjà lu n'est jamais relu, même après un arrêt : relancer "
+                       + "reprend là où ça s'était arrêté.\n\n"
+                       + "« Revérifier » reliste tous les dossiers sans relire un seul fichier. "
                        + "« Tout relire depuis zéro » efface l'index et recommence vraiment.\n\n"
                        + "Un dossier déjà indexé n'est réexaminé que s'il a changé : Keo compare "
                        + "sa date de modification, qui bouge dès qu'une photo y est ajoutée. "
@@ -90,7 +95,7 @@ struct IndexingView: View {
             } message: {
                 Text(rebuildWarning)
             }
-            .navigationTitle("Indexation des dates")
+            .navigationTitle("Indexation")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {

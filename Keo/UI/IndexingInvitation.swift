@@ -27,7 +27,9 @@ struct IndexingInvitation: View {
 
                     Text("Le NAS ne connaît que la date à laquelle un fichier y a été copié. "
                        + "Si ta photothèque est arrivée en bloc, toutes tes photos portent la "
-                       + "même date — le tri par date et la timeline ne servent alors à rien.")
+                       + "même date — le tri par date et la timeline ne servent alors à rien.\n\n"
+                       + "Keo peut parcourir ta bibliothèque une fois pour en construire son "
+                       + "propre index.")
                         .foregroundStyle(.secondary)
 
                     VStack(alignment: .leading, spacing: 14) {
@@ -38,6 +40,10 @@ struct IndexingInvitation: View {
                         point("clock.arrow.circlepath",
                               "C'est long une fois, puis plus jamais : une photo déjà lue n'est "
                             + "jamais relue, et ajouter des photos ne coûte que les nouvelles.")
+                        point("square.stack.3d.up",
+                              "L'index retient aussi la structure de tes dossiers et leurs "
+                            + "totaux : c'est lui qui les ouvre instantanément et affiche ce "
+                            + "qu'ils contiennent.")
                         point("arrow.triangle.2.circlepath",
                               "Ça continue pendant que tu navigues, se met en pause quand tu "
                             + "quittes l'app, et reprend là où ça s'était arrêté.")
