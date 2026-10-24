@@ -10,9 +10,10 @@ actor CaptureDateIndex {
     static let shared = CaptureDateIndex()
 
     private var records: [String: Double?] = [:]
-    /// Folders whose media have all been read, so a resumed walk skips them instead of
-    /// re-listing the whole NAS from the root every time.
-    private var completed: Set<String> = []
+    /// Folder path to the folder's modification date when it was last fully read. A directory's
+    /// mtime moves as soon as a file is added or removed, so an unchanged one needs no listing
+    /// at all — and a changed one is re-listed, which is how new photos get picked up.
+    private var completed: [String: Double] = [:]
     private var dirty = false
     private let file: URL
     private let walkFile: URL
@@ -29,7 +30,7 @@ actor CaptureDateIndex {
             records = stored
         }
         if let data = try? Data(contentsOf: walkFile),
-           let stored = try? JSONDecoder().decode(Set<String>.self, from: data) {
+           let stored = try? JSONDecoder().decode([String: Double].self, from: data) {
             completed = stored
         }
     }
@@ -37,10 +38,14 @@ actor CaptureDateIndex {
     /// How many files the index knows about, read or confirmed dateless.
     var count: Int { records.count }
 
-    func isCompleted(_ folder: String) -> Bool { completed.contains(folder) }
+    /// True only when the folder was fully read *and* has not been touched since.
+    func isUnchanged(_ folder: String, modified: Date?) -> Bool {
+        FolderStamp.isUnchanged(recorded: completed[folder], modified: modified)
+    }
 
-    func markCompleted(_ folder: String) {
-        completed.insert(folder)
+    func markCompleted(_ folder: String, modified: Date?) {
+        guard let stamp = FolderStamp.stamp(for: modified) else { return }
+        completed[folder] = stamp
         dirty = true
     }
 

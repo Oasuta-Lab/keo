@@ -44,8 +44,10 @@ struct IndexingView: View {
                     Text("Keo lit les 4 premiers kilo-octets de chaque photo pour en extraire la "
                        + "date de prise de vue. Une photo déjà lue n'est jamais relue, même après "
                        + "un arrêt : relancer reprend là où ça s'était arrêté.\n\n"
-                       + "Les dossiers entièrement indexés sont ignorés au passage suivant : "
-                       + "reprendre ne recommence pas le parcours depuis le début.\n\n"
+                       + "Un dossier déjà indexé n'est réexaminé que s'il a changé : Keo compare "
+                       + "sa date de modification, qui bouge dès qu'une photo y est ajoutée. "
+                       + "Ajouter des photos ne demande donc jamais de tout réindexer — seules "
+                       + "les nouvelles sont lues.\n\n"
                        + "L'indexation se met en pause quand tu quittes l'app et reprend au retour. "
                        + "Elle continue pendant que tu navigues, en laissant la priorité aux vignettes.")
                 }

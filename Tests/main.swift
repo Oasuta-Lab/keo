@@ -189,6 +189,32 @@ assert(undated.last?.year == nil, "pas d'année pour les sans-date")
 
 assert(MediaGrouping.sections(from: [], calendar: utc, locale: fr).isEmpty)
 
+// MARK: - Reprise de l'indexation quand un dossier change
+
+let indexedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+assert(FolderStamp.isUnchanged(recorded: indexedAt.timeIntervalSince1970, modified: indexedAt),
+       "un dossier intact est ignoré, sans même être listé")
+
+// Le cas qui compte : on ajoute des photos, la mtime du dossier bouge.
+let afterAdding = Date(timeIntervalSince1970: 1_700_000_900)
+assert(!FolderStamp.isUnchanged(recorded: indexedAt.timeIntervalSince1970, modified: afterAdding),
+       "ajouter des photos doit forcer un nouveau passage sur le dossier")
+
+assert(FolderStamp.isUnchanged(recorded: indexedAt.timeIntervalSince1970,
+                               modified: indexedAt.addingTimeInterval(0.4)),
+       "le bruit sous la seconde ne doit pas provoquer de relecture")
+assert(!FolderStamp.isUnchanged(recorded: indexedAt.timeIntervalSince1970,
+                                modified: indexedAt.addingTimeInterval(2)),
+       "deux secondes d'écart, c'est un vrai changement")
+
+assert(!FolderStamp.isUnchanged(recorded: nil, modified: indexedAt),
+       "jamais indexé, donc jamais ignoré")
+assert(!FolderStamp.isUnchanged(recorded: indexedAt.timeIntervalSince1970, modified: nil),
+       "sans date de dossier, on ne peut rien garantir : on relit")
+assert(FolderStamp.stamp(for: nil) == nil,
+       "un dossier sans date n'est pas marqué comme terminé")
+
 // MARK: - Géométrie du rail de la timeline
 
 import CoreGraphics
@@ -414,4 +440,4 @@ assert(job.position == 4, "la position ne dépasse pas le total")
 assert(DownloadJob(total: 0, completed: 0, currentName: "", currentFraction: 0).fraction == 0,
        "un lot vide ne divise pas par zéro")
 
-print("ok — lecture seule, envelope, chemins, classification, aperçus, dates EXIF, sections, rail, tri, éviction, progression")
+print("ok — lecture seule, envelope, chemins, classification, aperçus, dates EXIF, reprise, sections, rail, tri, éviction, progression")

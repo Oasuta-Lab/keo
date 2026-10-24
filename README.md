@@ -122,9 +122,24 @@ Cet écran lance un parcours complet du NAS depuis la racine. La barre affichée
 **dossier en cours**, pas une globale : sur 14 600 photos, une barre globale avance de 0,17 %
 par lot et se lit comme figée.
 
-Les dossiers entièrement lus sont mémorisés (`indexed-folders.json`) et ignorés au passage
-suivant, donc reprendre ne refait pas le parcours depuis la racine. « Tout réindexer » oublie
-cette mémoire, et c'est un choix explicite. Il continue pendant la navigation, cède la priorité aux
+### Ajouter des photos ne demande pas de tout réindexer
+
+Keo mémorise, pour chaque dossier entièrement lu, **sa date de modification au moment où il a
+été lu** (`indexed-folders.json`). La mtime d'un répertoire bouge dès qu'on y ajoute ou retire
+une entrée, donc :
+
+- dossier intact → **il n'est même pas listé**, c'est ce qui rend un second passage rapide ;
+- dossier modifié → il est relisté, et seules les photos inconnues sont lues.
+
+Ajouter 50 photos à un dossier de 15 000 coûte donc 50 lectures de 4 Ko, pas 15 000. Ouvrir
+simplement le dossier suffit d'ailleurs souvent : en dessous de 2 000 fichiers sans date, le
+scan à l'ouverture s'en charge.
+
+« Tout réindexer » oublie cette mémoire — c'est un choix explicite, pas le comportement normal.
+
+Limite connue : une photo **remplacée** sans changer le nombre de fichiers ne déplace pas
+forcément la mtime du dossier. Elle sera revue au prochain « Tout réindexer », ou à l'ouverture
+du dossier. Il continue pendant la navigation, cède la priorité aux
 vignettes, et persiste au fur et à mesure : un arrêt ne coûte que les fichiers non encore lus.
 Le scan local est suspendu tant qu'il tourne, pour ne pas se disputer la box.
 

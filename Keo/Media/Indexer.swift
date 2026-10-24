@@ -142,12 +142,22 @@ final class Indexer: ObservableObject {
         var progress = Progress(folder: root)
         state = .running(progress)
 
-        var queue = [root]
+        // The folder's own mtime comes from its parent's listing; the root has no parent, so
+        // it is always listed.
+        var queue: [(path: String, modified: Date?)] = [(root, nil)]
         var guardCount = 0
 
         while !queue.isEmpty, !Task.isCancelled, guardCount < Self.folderLimit {
-            let path = queue.removeFirst()
+            let (path, folderModified) = queue.removeFirst()
             guardCount += 1
+
+            // Untouched since it was fully read: nothing new can be in it, so it is not even
+            // listed. This is what makes a second pass cheap.
+            if await CaptureDateIndex.shared.isUnchanged(path, modified: folderModified) {
+                progress.foldersSkipped += 1
+                state = .running(progress)
+                continue
+            }
 
             progress.folder = path
             progress.folderDone = 0
@@ -155,17 +165,8 @@ final class Indexer: ObservableObject {
             state = .running(progress)
 
             guard let contents = try? await client.list(path, order: .name) else { continue }
-            queue.append(contentsOf: contents.folders.map(\.path))
+            queue.append(contentsOf: contents.folders.map { ($0.path, $0.modified) })
             progress.foldersVisited += 1
-
-            // Already walked and fully read: nothing to re-read, and no reason to say so twice.
-            if await CaptureDateIndex.shared.isCompleted(path) {
-                progress.foldersSkipped += 1
-                progress.mediaFound += contents.media.count
-                progress.alreadyKnown += contents.media.count
-                state = .running(progress)
-                continue
-            }
 
             progress.mediaFound += contents.media.count
             let known = await CaptureDateIndex.shared.known(contents.media)
@@ -177,7 +178,7 @@ final class Indexer: ObservableObject {
             await read(pending, client: client, progress: &progress)
 
             if !Task.isCancelled {
-                await CaptureDateIndex.shared.markCompleted(path)
+                await CaptureDateIndex.shared.markCompleted(path, modified: folderModified)
             }
             progress.indexedOverall = await CaptureDateIndex.shared.count
 
