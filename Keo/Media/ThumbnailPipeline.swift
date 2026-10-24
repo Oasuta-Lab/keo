@@ -75,7 +75,7 @@ actor ThumbnailPipeline {
                 return nil
             }
             memory.insert(image, for: key)
-            if let encoded = image.jpegData(compressionQuality: 0.8) {
+            if let encoded = ImageDecoding.cacheData(for: image) {
                 disk.write(encoded, for: key)
             }
             return image

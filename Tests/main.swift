@@ -135,6 +135,39 @@ assert(contents.selectable.map(\.name) == ["clip.mp4", "x.jpg", "notes.pdf"],
      + "et sans date le tri retombe sur le nom")
 assert(FolderContents([]).isEmpty)
 
+// MARK: - Acceptation d'un aperçu embarqué
+
+func size(_ w: CGFloat, _ h: CGFloat) -> CGSize { CGSize(width: w, height: h) }
+
+// Le cas réel qui a motivé ça : un JPEG 6016×6016 dont la vignette EXIF fait 160×160.
+assert(!PreviewPolicy.accepts(preview: size(160, 160), fullImage: size(6016, 6016), requested: 400),
+       "une vignette de 160 px étirée dans une cellule de 400 px se voit")
+assert(PreviewPolicy.accepts(preview: size(400, 300), fullImage: size(4000, 3000), requested: 400),
+       "même ratio et taille suffisante : on garde")
+assert(PreviewPolicy.accepts(preview: size(300, 225), fullImage: size(4000, 3000), requested: 400),
+       "75% de la taille demandée reste acceptable")
+
+// Mauvais cadrage : vignette 4:3 pour une photo 16:9.
+assert(!PreviewPolicy.accepts(preview: size(400, 300), fullImage: size(3840, 2160), requested: 400),
+       "un ratio différent veut dire recadrage ou bandes noires")
+assert(PreviewPolicy.drift(size(400, 300), size(4000, 3000)) == 0)
+assert(PreviewPolicy.drift(size(400, 300), size(3840, 2160)) > 0.2)
+
+assert(PreviewPolicy.accepts(preview: size(400, 300), fullImage: nil, requested: 400),
+       "sans dimensions déclarées, la taille seule décide")
+assert(!PreviewPolicy.accepts(preview: size(0, 0), fullImage: nil, requested: 400),
+       "une vignette vide n'est jamais acceptable")
+
+// Orientation : les quarts de tour échangent largeur et hauteur.
+assert(PreviewPolicy.oriented(size(4000, 3000), exifOrientation: 6) == size(3000, 4000),
+       "orientation 6 = quart de tour, dimensions échangées")
+assert(PreviewPolicy.oriented(size(4000, 3000), exifOrientation: 1) == size(4000, 3000))
+assert(PreviewPolicy.oriented(size(4000, 3000), exifOrientation: nil) == size(4000, 3000))
+assert(PreviewPolicy.accepts(preview: size(300, 400),
+                             fullImage: PreviewPolicy.oriented(size(4000, 3000), exifOrientation: 6),
+                             requested: 400),
+       "une photo portrait ne doit pas être rejetée à cause de l'orientation")
+
 // MARK: - Tri
 
 func dated(_ name: String, _ day: Int?) -> Item {
@@ -217,4 +250,4 @@ assert(job.position == 4, "la position ne dépasse pas le total")
 assert(DownloadJob(total: 0, completed: 0, currentName: "", currentFraction: 0).fraction == 0,
        "un lot vide ne divise pas par zéro")
 
-print("ok — lecture seule, envelope, chemins, classification, tri, éviction, progression")
+print("ok — lecture seule, envelope, chemins, classification, aperçus, tri, éviction, progression")

@@ -16,7 +16,8 @@ struct DiskCache: Sendable {
     }
 
     func url(for key: String) -> URL {
-        directory.appendingPathComponent(key).appendingPathExtension("jpg")
+        // Not ".jpg": a thumbnail with transparency is stored as PNG.
+        directory.appendingPathComponent(key).appendingPathExtension("thumb")
     }
 
     func read(_ key: String) -> Data? {

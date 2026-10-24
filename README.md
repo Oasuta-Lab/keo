@@ -82,6 +82,7 @@ La galerie est supposée très grande. Ce qui a été fait pour ça :
 | Point | Choix |
 |---|---|
 | Mémoire des vignettes | Budget en **octets** (80 Mo), pas en nombre d'images |
+| Qualité des aperçus | Un aperçu embarqué est refusé s'il fait moins de 75 % de la taille demandée, ou si son ratio ne correspond pas à la photo |
 | Concurrence | Deux portes : 4 fetchs visibles, 2 préchargements — un prefetch ne bloque jamais une cellule à l'écran |
 | Doublons | Une tâche par clé, partagée par tous les appelants |
 | Préchargement | Fenêtre de 24 éléments en avance sur le défilement |
@@ -94,13 +95,33 @@ Les idées viennent de [Nuke](https://github.com/kean/Nuke) ; le fetch est maiso
 vignette Keo est une requête Range de 256 Ko plus un décodage d'aperçu embarqué, pas un
 téléchargement d'URL.
 
+## Qualité des vignettes
+
+Trois défauts constatés sur de vrais fichiers, et ce qui les corrige :
+
+- **Aperçu embarqué minuscule.** Un JPEG 6016×6016 peut n'embarquer qu'une vignette EXIF de
+  160×160 : étirée dans une cellule de 400 px, elle est floue. `PreviewPolicy` la refuse en
+  dessous de 75 % de la taille demandée et bascule sur le décodage du fichier complet, mis en
+  cache ensuite — le coût est payé une fois.
+- **Mauvais cadrage.** Certains aperçus ont un ratio différent de la photo (vignette 4:3 pour
+  une image 16:9), donc recadrent ou ajoutent des bandes. Au-delà de 2 % d'écart de ratio, on
+  refuse. L'orientation EXIF est prise en compte : les quarts de tour échangent largeur et hauteur.
+- **Vignettes blanches.** Le cache disque encodait en JPEG, qui n'a pas de canal alpha : un PNG
+  transparent en revenait en **blanc pur** (vérifié : `r=255 g=255 b=255`). Les images avec
+  transparence sont désormais stockées en PNG.
+
+Contrepartie assumée : un fichier dont l'aperçu est refusé coûte un téléchargement complet au
+premier affichage. Si la première descente dans un gros dossier devient trop lente, la suite
+est l'affichage progressif — petit aperçu tout de suite, remplacé par la bonne vignette.
+
 ## Vérifier
 
 ```sh
 rm -f /tmp/keocheck   # sinon un echec de compilation relance l'ancien binaire
 swiftc -swift-version 6 Keo/Freebox/Item.swift Keo/Freebox/Transport.swift \
   Keo/Freebox/FreeboxClient.swift Keo/Downloads/DownloadJob.swift \
-  Keo/Media/DiskCache.swift Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
+  Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift \
+  Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
 ```
 
 Couvre la garantie de lecture seule, l'enveloppe `{success, result}`, l'encodage des chemins,
