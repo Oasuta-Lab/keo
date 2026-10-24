@@ -120,7 +120,7 @@ actor FreeboxClient {
 
     // MARK: Reading
 
-    func list(_ path: String) async throws -> FolderContents {
+    func list(_ path: String, order: ItemOrder = .newest) async throws -> FolderContents {
         struct Entry: Decodable {
             let path: String        // base64
             let name: String
@@ -138,7 +138,7 @@ actor FreeboxClient {
             try await read.json(url, token: token, as: Listing.self)
         }
 
-        let items = listing.entries.lazy
+        let items = listing.entries
             .filter { $0.hidden != true && !$0.name.hasPrefix(".") }
             .map { entry in
                 Item(path: FreeboxPath.decode(entry.path) ?? entry.path,
@@ -148,12 +148,8 @@ actor FreeboxClient {
                      modified: entry.modification.map { Date(timeIntervalSince1970: $0) },
                      mimeType: entry.mimetype)
             }
-            .sorted { a, b in
-                if a.isDirectory != b.isDirectory { return a.isDirectory }
-                return a.name.localizedStandardCompare(b.name) == .orderedAscending
-            }
 
-        return FolderContents(items)
+        return FolderContents(items, order: order)
     }
 
     func bytes(_ path: String, prefix: Int? = nil) async throws -> Data {

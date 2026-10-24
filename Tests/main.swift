@@ -130,9 +130,50 @@ assert(contents.folders.count == 1)
 assert(contents.media.count == 2, "images et vidéos vont dans la grille")
 assert(contents.documents.count == 1)
 assert(contents.selectableCount == 3, "tout sauf les dossiers est sélectionnable")
-assert(contents.selectable.map(\.name) == ["x.jpg", "clip.mp4", "notes.pdf"],
-       "l'ordre de sélection suit l'ordre affiché")
+assert(contents.selectable.map(\.name) == ["clip.mp4", "x.jpg", "notes.pdf"],
+       "l'ordre de sélection suit l'ordre affiché : médias triés puis documents, "
+     + "et sans date le tri retombe sur le nom")
 assert(FolderContents([]).isEmpty)
+
+// MARK: - Tri
+
+func dated(_ name: String, _ day: Int?) -> Item {
+    Item(path: "/a/\(name)", name: name, isDirectory: false, size: 0,
+         modified: day.map { Date(timeIntervalSince1970: TimeInterval($0) * 86_400) },
+         mimeType: "image/jpeg")
+}
+
+let shuffled = [dated("vieille.jpg", 10), dated("sans-date.jpg", nil),
+                dated("recente.jpg", 30), dated("moyenne.jpg", 20)]
+
+assert(shuffled.sorted(by: ItemOrder.newest.precedes).map(\.name)
+    == ["recente.jpg", "moyenne.jpg", "vieille.jpg", "sans-date.jpg"],
+       "plus récentes d'abord, les sans-date à la fin")
+
+assert(shuffled.sorted(by: ItemOrder.oldest.precedes).map(\.name)
+    == ["vieille.jpg", "moyenne.jpg", "recente.jpg", "sans-date.jpg"],
+       "plus anciennes d'abord, les sans-date toujours à la fin")
+
+assert(shuffled.sorted(by: ItemOrder.name.precedes).map(\.name)
+    == ["moyenne.jpg", "recente.jpg", "sans-date.jpg", "vieille.jpg"])
+
+assert([dated("b.jpg", 5), dated("a.jpg", 5)].sorted(by: ItemOrder.newest.precedes).map(\.name)
+    == ["a.jpg", "b.jpg"], "à date égale, on départage par nom")
+
+assert([dated("x.jpg", nil), dated("a.jpg", nil)].sorted(by: ItemOrder.newest.precedes).map(\.name)
+    == ["a.jpg", "x.jpg"], "deux sans-date se départagent par nom")
+
+let mixed = FolderContents([
+    item("/NAS/Zèbre", dir: true), item("/NAS/Abeille", dir: true),
+    dated("vieille.jpg", 10), dated("recente.jpg", 30),
+], order: .newest)
+assert(mixed.folders.map(\.name) == ["Abeille", "Zèbre"],
+       "les dossiers restent alphabétiques, leur mtime ne veut rien dire")
+assert(mixed.media.map(\.name) == ["recente.jpg", "vieille.jpg"])
+
+let flipped = mixed.reordered(by: .oldest)
+assert(flipped.media.map(\.name) == ["vieille.jpg", "recente.jpg"], "réordonner sans refetch")
+assert(flipped.folders.map(\.name) == ["Abeille", "Zèbre"], "les dossiers ne bougent pas")
 
 // MARK: - Éviction du cache disque
 
@@ -176,4 +217,4 @@ assert(job.position == 4, "la position ne dépasse pas le total")
 assert(DownloadJob(total: 0, completed: 0, currentName: "", currentFraction: 0).fraction == 0,
        "un lot vide ne divise pas par zéro")
 
-print("ok — lecture seule, envelope, chemins, classification, éviction, progression")
+print("ok — lecture seule, envelope, chemins, classification, tri, éviction, progression")

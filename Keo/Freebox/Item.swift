@@ -53,6 +53,49 @@ struct Item: Identifiable, Hashable, Sendable {
         ["mp4", "mov", "m4v", "avi", "mkv", "hevc", "mpg", "mpeg", "3gp", "webm"]
 }
 
+/// How a listing is ordered. Stored as a raw String so it can live in `@AppStorage`.
+enum ItemOrder: String, CaseIterable, Sendable {
+    case newest, oldest, name
+
+    var label: String {
+        switch self {
+        case .newest: return "Plus récentes d'abord"
+        case .oldest: return "Plus anciennes d'abord"
+        case .name: return "Par nom"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .newest: return "arrow.down"
+        case .oldest: return "arrow.up"
+        case .name: return "textformat"
+        }
+    }
+
+    /// Files without a modification date sort last rather than pretending to be from 1970.
+    func precedes(_ a: Item, _ b: Item) -> Bool {
+        switch self {
+        case .name:
+            return a.name.localizedStandardCompare(b.name) == .orderedAscending
+        case .newest, .oldest:
+            switch (a.modified, b.modified) {
+            case let (first?, second?):
+                guard first != second else {
+                    return a.name.localizedStandardCompare(b.name) == .orderedAscending
+                }
+                return self == .newest ? first > second : first < second
+            case (nil, nil):
+                return a.name.localizedStandardCompare(b.name) == .orderedAscending
+            case (_?, nil):
+                return true
+            case (nil, _?):
+                return false
+            }
+        }
+    }
+}
+
 /// A folder, already split by kind. Built once per load instead of being re-filtered on
 /// every SwiftUI body evaluation — the single biggest source of jank on a large folder.
 struct FolderContents: Sendable {
@@ -73,7 +116,16 @@ struct FolderContents: Sendable {
         self.documents = documents
     }
 
-    init(_ items: [Item]) {
+    /// Reorders in place rather than refetching: changing the sort is not a network question.
+    /// Folders stay alphabetical — a NAS folder's mtime says when it was last written to,
+    /// which is rarely what someone means by "the date of these photos".
+    func reordered(by order: ItemOrder) -> FolderContents {
+        FolderContents(folders: folders,
+                       media: media.sorted(by: order.precedes),
+                       documents: documents.sorted(by: order.precedes))
+    }
+
+    init(_ items: [Item], order: ItemOrder = .newest) {
         var folders: [Item] = []
         var media: [Item] = []
         var documents: [Item] = []
@@ -87,6 +139,8 @@ struct FolderContents: Sendable {
             case .other: documents.append(item)
             }
         }
-        self.init(folders: folders, media: media, documents: documents)
+        self.init(folders: folders.sorted(by: ItemOrder.name.precedes),
+                  media: media.sorted(by: order.precedes),
+                  documents: documents.sorted(by: order.precedes))
     }
 }

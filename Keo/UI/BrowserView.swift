@@ -16,6 +16,7 @@ struct BrowserView: View {
     @State private var viewing: Item?
     @State private var selecting = false
     @State private var selection: Set<Item> = []
+    @AppStorage("itemOrder") private var order: ItemOrder = .newest
 
     private let columns = [GridItem(.adaptive(minimum: 110), spacing: 2)]
 
@@ -87,6 +88,8 @@ struct BrowserView: View {
         }
         .task(id: path) { await load() }
         .refreshable { await load() }
+        // Reordering is a local question: no reason to ask the box again.
+        .onChange(of: order) { _, new in contents = contents.reordered(by: new) }
     }
 
     // MARK: Pieces
@@ -115,6 +118,12 @@ struct BrowserView: View {
                 Menu {
                     if contents.selectableCount > 0 {
                         Button("Sélectionner", systemImage: "checkmark.circle") { selecting = true }
+
+                        Picker("Trier", selection: $order) {
+                            ForEach(ItemOrder.allCases, id: \.self) { option in
+                                Label(option.label, systemImage: option.systemImage).tag(option)
+                            }
+                        }
                     }
                     if path == FreeboxClient.rootPath {
                         Button("Déconnexion", systemImage: "rectangle.portrait.and.arrow.right",
@@ -196,7 +205,7 @@ struct BrowserView: View {
 
     private func load() async {
         do {
-            contents = try await client.list(path)
+            contents = try await client.list(path, order: order)
             error = nil
         } catch {
             self.error = error.localizedDescription

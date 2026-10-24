@@ -60,6 +60,21 @@ Le découpage en paquets SPM a été volontairement différé : à cette taille 
 cérémonie sans réduire la complexité. Les frontières sont déjà posées pour le faire le jour où
 plusieurs personnes travaillent dessus en parallèle.
 
+## Tri
+
+Menu « … » → trois ordres, mémorisés pour toute l'app : plus récentes d'abord (défaut),
+plus anciennes d'abord, par nom. Changer d'ordre ne redemande rien à la box, le tri est local.
+
+Deux choix à connaître :
+
+- **La date est celle de modification du fichier**, pas la date de prise de vue. L'API ne
+  renvoie que `modification`. Lire la date EXIF demanderait de télécharger un bout de chaque
+  fichier avant de pouvoir trier, ce qui est intenable sur un grand dossier.
+- **Les dossiers restent alphabétiques.** Le mtime d'un dossier dit quand on a écrit dedans
+  pour la dernière fois, ce qui n'est presque jamais ce qu'on entend par « la date de ces photos ».
+
+Les fichiers sans date vont à la fin, pas au 1ᵉʳ janvier 1970.
+
 ## Tenue à l'échelle
 
 La galerie est supposée très grande. Ce qui a été fait pour ça :
