@@ -57,15 +57,10 @@ actor ThumbCache {
     }
 
     /// AVFoundation range-requests only the atoms it needs, so this never pulls the whole video.
-    /// ponytail: AVURLAssetHTTPHeaderFieldsKey is undocumented — a resource-loader delegate is the
-    /// supported route if Apple ever drops it. Playback uses the same key, so both fail together.
     private func frame(_ item: Item, client: FreeboxClient, maxPixel: CGFloat) async -> UIImage? {
-        guard let token = try? await client.currentSession() else { return nil }
+        guard let source = try? await client.videoAsset(item.path) else { return nil }
 
-        let asset = AVURLAsset(url: client.fileURL(item.path), options: [
-            "AVURLAssetHTTPHeaderFieldsKey": ["X-Fbx-App-Auth": token]
-        ])
-        let generator = AVAssetImageGenerator(asset: asset)
+        let generator = AVAssetImageGenerator(asset: source.asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: maxPixel, height: maxPixel)
 
@@ -73,6 +68,7 @@ actor ThumbCache {
         for seconds in [1.0, 0.0] {
             let time = CMTime(seconds: seconds, preferredTimescale: 600)
             if let (cgImage, _) = try? await generator.image(at: time) {
+                withExtendedLifetime(source) {}   // the resource loader must outlive the request
                 return UIImage(cgImage: cgImage)
             }
         }

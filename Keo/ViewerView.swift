@@ -1,4 +1,5 @@
 import AVKit
+import Combine
 import QuickLook
 import SwiftUI
 
@@ -126,25 +127,56 @@ private struct VideoPage: View {
     let item: Item
     let client: FreeboxClient
 
+    @State private var source: AuthenticatedAsset?   // owns the resource loader
     @State private var player: AVPlayer?
+    @State private var failure: String?
 
     var body: some View {
         ZStack {
             Color.black
             if let player {
                 VideoPlayer(player: player)
+            } else if let failure {
+                ContentUnavailableView("Lecture impossible", systemImage: "play.slash",
+                                       description: Text(failure))
             } else {
                 ProgressView().tint(.white)
             }
         }
         .task(id: item.path) {
-            guard player == nil, let token = try? await client.currentSession() else { return }
-            let asset = AVURLAsset(url: client.fileURL(item.path), options: [
-                "AVURLAssetHTTPHeaderFieldsKey": ["X-Fbx-App-Auth": token]
-            ])
-            player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+            guard player == nil else { return }
+            do {
+                let source = try await client.videoAsset(item.path)
+                let playerItem = AVPlayerItem(asset: source.asset)
+                let player = AVPlayer(playerItem: playerItem)
+
+                self.source = source
+                self.player = player
+                player.play()
+
+                await reportFailure(of: playerItem)
+            } catch {
+                failure = error.localizedDescription
+            }
         }
         .onDisappear { player?.pause() }
+    }
+
+    /// Without this a broken stream just spins forever with nothing to go on.
+    private func reportFailure(of playerItem: AVPlayerItem) async {
+        for await status in playerItem.publisher(for: \.status).values {
+            switch status {
+            case .failed:
+                failure = playerItem.error?.localizedDescription
+                       ?? "Le flux n'a pas pu être lu."
+                player = nil
+                return
+            case .readyToPlay:
+                return
+            default:
+                continue
+            }
+        }
     }
 }
 

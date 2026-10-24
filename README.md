@@ -25,6 +25,7 @@ donc tout passe par `fs/ls` et `dl` de l'API Freebox OS.
 | `Keo/Thumbs.swift` | Vignettes : aperçu EXIF via range 256 Ko, image vidéo via `AVAssetImageGenerator`, cache disque + mémoire |
 | `Keo/BrowserView.swift` | Grille `LazyVGrid`, dossiers, documents |
 | `Keo/ViewerView.swift` | Plein écran : zoom `UIScrollView`, `AVPlayer`, QuickLook |
+| `Keo/VideoAsset.swift` | `AVAssetResourceLoaderDelegate` qui porte `X-Fbx-App-Auth` jusqu'à AVFoundation |
 | `Keo/Downloads.swift` | File d'attente, pellicule (`PHAssetCreationRequest`), feuille de partage |
 | `Keo/DownloadJob.swift` | Arithmétique de progression d'un lot (isolée pour être testable) |
 
@@ -55,8 +56,10 @@ Annuler. Même chose en plein écran, sur l'élément affiché.
   est signé par la CA Freebox, absente du magasin iOS — il faudra l'épingler.
 - **Pas de vignettes côté serveur.** `fs/thumbnail` n'existe pas dans l'API : Keo lit l'aperçu
   JPEG embarqué via une requête Range de 256 Ko, sinon télécharge le fichier (plafond 40 Mo).
-- **Vignettes vidéo via `AVAssetImageGenerator`** — AVFoundation ne tire que les plages HTTP
-  nécessaires, mais sur un MP4 dont l'atome `moov` est en fin de fichier il faut deux allers-retours.
+- **Vidéo : le transport passe par un resource loader.** `AVURLAssetHTTPHeaderFieldsKey` n'est pas
+  documenté et iOS l'ignore, donc AVFoundation partait en 403 — vignette et lecture tombaient
+  ensemble. `AuthenticatedAsset` refait les requêtes via `URLSession` avec le bon en-tête.
+  Sur un MP4 dont l'atome `moov` est en fin de fichier, il faut deux allers-retours.
 
 ## Pièges de l'API Freebox, vérifiés sur la box
 

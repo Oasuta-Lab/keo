@@ -223,6 +223,13 @@ actor FreeboxClient {
         return destination
     }
 
+    /// The single place AVFoundation gets a playable asset — player and thumbnailer both use it.
+    func videoAsset(_ path: String) async throws -> AuthenticatedAsset {
+        AuthenticatedAsset(url: fileURL(path),
+                           token: try await currentSession(),
+                           filename: (path as NSString).lastPathComponent)
+    }
+
     /// AVPlayer and friends need the raw URL plus the session header.
     nonisolated func fileURL(_ path: String) -> URL {
         Self.apiURL(base: endpoint.base, suffix: "dl/\(Self.encode(path))")
