@@ -30,11 +30,27 @@ enum ImageDecoding {
                                       exifOrientation: properties[kCGImagePropertyOrientation] as? Int)
     }
 
+    /// Same, from a downloaded prefix rather than a whole file. 4 KB is enough for both JPEG
+    /// and HEIC — but the source must *not* be the incremental one used for previews: in
+    /// non-final incremental mode ImageIO refuses to parse HEIF metadata and returns nothing.
+    static func captureDate(prefix: Data) -> Date? {
+        guard let source = CGImageSourceCreateWithData(prefix as CFData, sourceOptions) else {
+            return nil
+        }
+        return captureDate(in: source)
+    }
+
     /// The date the shutter actually fired, read from the file's metadata. The listing only
     /// carries the file's modification time, which on a NAS is often the day it was copied.
     static func captureDate(fileAt url: URL) -> Date? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions) else {
+            return nil
+        }
+        return captureDate(in: source)
+    }
+
+    private static func captureDate(in source: CGImageSource) -> Date? {
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
                 as? [CFString: Any] else {
             return nil
         }

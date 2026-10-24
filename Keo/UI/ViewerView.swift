@@ -67,7 +67,8 @@ struct ViewerView: View {
 
     private var caption: MediaDate? {
         guard let current else { return nil }
-        return MediaDate(capture: captured[current.id], modification: current.modified)
+        return MediaDate(capture: captured[current.id] ?? current.captureDate,
+                         modification: current.modified)
     }
 
     private var chrome: some View {

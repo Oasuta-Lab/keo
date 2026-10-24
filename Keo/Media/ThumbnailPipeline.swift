@@ -95,9 +95,12 @@ actor ThumbnailPipeline {
     }
 
     private func still(_ item: Item, client: FreeboxClient, maxPixel: CGFloat) async -> UIImage? {
-        if let probe = try? await client.bytes(item.path, prefix: probeBytes),
-           let image = ImageDecoding.embeddedPreview(probe, maxPixel: maxPixel) {
-            return image
+        if let probe = try? await client.bytes(item.path, prefix: probeBytes) {
+            // The prefix is already here, so the capture date costs nothing to read.
+            await CaptureDateIndex.shared.record(ImageDecoding.captureDate(prefix: probe), for: item)
+            if let image = ImageDecoding.embeddedPreview(probe, maxPixel: maxPixel) {
+                return image
+            }
         }
         // No embedded preview: fall back to the file itself, streamed to disk rather than
         // held in memory, and deleted as soon as it is decoded.

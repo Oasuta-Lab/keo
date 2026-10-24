@@ -189,6 +189,42 @@ assert(undated.last?.year == nil, "pas d'année pour les sans-date")
 
 assert(MediaGrouping.sections(from: [], calendar: utc, locale: fr).isEmpty)
 
+// MARK: - Dates de prise de vue appliquées après coup
+
+// Le cas réel : tout a été copié sur le NAS le même jour, donc tous les mtimes sont identiques.
+let copyDay = Date(timeIntervalSince1970: 1_700_000_000)
+func copied(_ name: String) -> Item {
+    Item(path: "/a/\(name)", name: name, isDirectory: false, size: 10,
+         modified: copyDay, mimeType: "image/jpeg")
+}
+
+let bulk = FolderContents([copied("a.jpg"), copied("b.jpg"), copied("c.jpg")], order: .newest)
+assert(bulk.media.allSatisfy { $0.timelineDate == copyDay },
+       "sans EXIF, la timeline retombe sur la date de copie")
+
+let discovered: [Item.ID: Date] = [
+    "/a/a.jpg": Date(timeIntervalSince1970: 1_500_000_000),   // la plus ancienne
+    "/a/b.jpg": Date(timeIntervalSince1970: 1_600_000_000),
+    "/a/c.jpg": Date(timeIntervalSince1970: 1_650_000_000),   // la plus récente
+]
+let resolved = bulk.applying(discovered, order: .newest)
+assert(resolved.media.map(\.name) == ["c.jpg", "b.jpg", "a.jpg"],
+       "une fois les dates EXIF connues, l'ordre devient le vrai ordre chronologique")
+assert(resolved.media[0].captureDate != nil && resolved.media[0].timelineDate != copyDay,
+       "la date de prise de vue prime sur le mtime")
+assert(resolved.media[0].modified == copyDay, "le mtime d'origine reste disponible")
+
+assert(bulk.applying([:], order: .newest).media.map(\.name) == bulk.media.map(\.name),
+       "sans rien à appliquer, la liste n'est pas remuée")
+
+// Et le regroupement suit : un bloc unique devient une vraie timeline.
+let beforeScan = MediaGrouping.sections(from: bulk.media, calendar: utc, locale: fr)
+assert(beforeScan.count == 1, "mtimes identiques = une seule section, donc un rail inutile")
+
+let afterScan = MediaGrouping.sections(from: resolved.media, calendar: utc, locale: fr)
+assert(afterScan.count == 3, "après le scan, chaque photo retrouve son mois — \(afterScan.map(\.id))")
+assert(afterScan.map(\.startIndex) == [0, 1, 2])
+
 // MARK: - Date affichée en plein écran
 
 let shot = Date(timeIntervalSince1970: 1_000_000)
@@ -324,4 +360,4 @@ assert(job.position == 4, "la position ne dépasse pas le total")
 assert(DownloadJob(total: 0, completed: 0, currentName: "", currentFraction: 0).fraction == 0,
        "un lot vide ne divise pas par zéro")
 
-print("ok — lecture seule, envelope, chemins, classification, aperçus, dates, sections, tri, éviction, progression")
+print("ok — lecture seule, envelope, chemins, classification, aperçus, dates EXIF, sections, tri, éviction, progression")

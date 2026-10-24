@@ -21,6 +21,7 @@ struct BrowserView: View {
     /// Only built when sorting by date — grouping a name-sorted grid by month would be noise.
     @State private var sections: [MediaSection] = []
     @State private var activeSection: MediaSection.ID?
+    @StateObject private var scan = DateScan()
 
     private var sectioned: Bool { order != .name && !sections.isEmpty }
 
@@ -90,7 +91,9 @@ struct BrowserView: View {
         .overlay { status }
         .overlay(alignment: .bottom) {
             // Root only, and out of the way whenever an action bar is up.
-            if path == FreeboxClient.rootPath, !selecting, !downloader.isRunning {
+            if let progress = scan.progress {
+                DateScanChip(progress: progress).padding(.bottom, 8)
+            } else if path == FreeboxClient.rootPath, !selecting, !downloader.isRunning {
                 BuildStampLabel().padding(.bottom, 8)
             }
         }
@@ -120,6 +123,7 @@ struct BrowserView: View {
             }
         }
         .task(id: path) { await load() }
+        .onDisappear { scan.cancel() }
         // Reordering is a local question: no reason to ask the box again.
         .onChange(of: order) { _, new in
             contents = contents.reordered(by: new)
@@ -254,6 +258,22 @@ struct BrowserView: View {
         selection = []
     }
 
+    /// Dates already known are folded in before the first paint; the rest are fetched in the
+    /// background and applied in one go, so the grid never reshuffles while being scrolled.
+    private func resolveDates() async {
+        let known = await CaptureDateIndex.shared.known(contents.media)
+        if !known.isEmpty {
+            contents = contents.applying(known, order: order)
+            rebuildSections()
+        }
+        guard order != .name else { return }
+        scan.start(contents.media, client: client) { found in
+            guard !found.isEmpty else { return }
+            contents = contents.applying(found, order: order)
+            rebuildSections()
+        }
+    }
+
     private func rebuildSections() {
         sections = order == .name ? [] : MediaGrouping.sections(from: contents.media)
         activeSection = sections.first?.id
@@ -264,6 +284,7 @@ struct BrowserView: View {
             contents = try await client.list(path, order: order)
             rebuildSections()
             error = nil
+            await resolveDates()
         } catch {
             self.error = error.localizedDescription
         }

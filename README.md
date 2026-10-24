@@ -73,12 +73,34 @@ Sans aucune date, rien ne s'affiche plutôt qu'une date inventée.
 C'est aussi la réponse à la limite du tri : en plein écran, la vraie date est connue. La
 grille, elle, ne peut pas trier là-dessus sans télécharger un bout de chaque fichier.
 
+## Dates réelles plutôt que dates de copie
+
+Sur un NAS, la date de modification est souvent le jour où tout a été copié : tous les
+fichiers portent alors la même, et trier ou regrouper par date ne donne rien. Keo lit donc la
+vraie date de prise de vue.
+
+Mesuré avant d'être conçu : **4 Ko de préfixe suffisent** à lire `DateTimeOriginal`, en JPEG
+comme en HEIC. Attention au piège — en HEIC il faut une source `CGImageSourceCreateWithData`,
+car en mode incrémental non finalisé ImageIO refuse de parser les métadonnées HEIF et ne rend
+rien, quel que soit le nombre d'octets fournis.
+
+- À l'ouverture d'un dossier, les dates déjà connues sont appliquées **avant le premier rendu**.
+- Les fichiers jamais vus sont analysés en tâche de fond, 6 en parallèle, 4 Ko chacun. Un
+  dossier de 10 000 photos coûte donc environ 40 Mo, **une seule fois**.
+- Le pipeline de vignettes enregistre la date au passage : il télécharge déjà 256 Ko par image,
+  la lecture est gratuite.
+- `CaptureDateIndex` persiste tout dans Application Support, y compris les fichiers **sans**
+  date — sinon chaque visite les réanalyserait indéfiniment.
+- Le réordonnancement n'a lieu **qu'à la fin du scan**, pas pendant : la grille ne se réorganise
+  jamais sous le doigt. Une pastille discrète affiche l'avancement.
+
 ## Timeline
 
 Quand le tri est par date, la grille se regroupe et un rail apparaît à droite.
 
 - **En-têtes collants** par mois, avec le compte de photos. Un dossier qui tient dans un seul
   mois se regroupe par jour : sinon le regroupement n'apprendrait rien.
+- Les dates viennent de l'EXIF dès que le scan ci-dessus est passé.
 - **Rail de densité.** La hauteur de chaque segment est la part de photos de la période, donc
   la forme du rail *est* la distribution — un long segment, c'est un mois où tu as beaucoup
   photographié. Les changements d'année sont étiquetés. On le glisse pour sauter directement.

@@ -66,7 +66,7 @@ enum MediaGrouping {
 
     private static func needsDayGranularity(_ media: [Item], calendar: Calendar) -> Bool {
         var months = Set<String>()
-        for item in media where item.modified != nil {
+        for item in media where item.timelineDate != nil {
             months.insert(key(for: item, byDay: false, calendar: calendar))
             if months.count > 1 { return false }
         }
@@ -74,7 +74,7 @@ enum MediaGrouping {
     }
 
     private static func key(for item: Item, byDay: Bool, calendar: Calendar) -> String {
-        guard let date = item.modified else { return undatedID }
+        guard let date = item.timelineDate else { return undatedID }
         let parts = calendar.dateComponents([.year, .month, .day], from: date)
         let year = parts.year ?? 0
         let month = parts.month ?? 0
@@ -84,7 +84,7 @@ enum MediaGrouping {
 
     private static func title(for item: Item, key: String, byDay: Bool,
                               calendar: Calendar, locale: Locale) -> String {
-        guard let date = item.modified else { return "Sans date" }
+        guard let date = item.timelineDate else { return "Sans date" }
         let formatter = DateFormatter()
         formatter.locale = locale
         formatter.calendar = calendar

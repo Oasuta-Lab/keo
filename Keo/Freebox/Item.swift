@@ -10,6 +10,13 @@ struct Item: Identifiable, Hashable, Sendable {
     let modified: Date?
     let mimeType: String?
 
+    /// Filled in once the file's own metadata has been read. On a NAS the modification date is
+    /// often the day everything was copied, which makes it useless for a timeline.
+    var captureDate: Date?
+
+    /// What the timeline and the date sort actually use.
+    var timelineDate: Date? { captureDate ?? modified }
+
     var id: String { path }
 
     enum Kind: Sendable { case folder, image, video, other }
@@ -21,7 +28,8 @@ struct Item: Identifiable, Hashable, Sendable {
     var isMedia: Bool { kind == .image || kind == .video }
 
     init(path: String, name: String, isDirectory: Bool, size: Int64,
-         modified: Date?, mimeType: String?) {
+         modified: Date?, mimeType: String?, captureDate: Date? = nil) {
+        self.captureDate = captureDate
         self.path = path
         self.name = name
         self.isDirectory = isDirectory
@@ -79,7 +87,7 @@ enum ItemOrder: String, CaseIterable, Sendable {
         case .name:
             return a.name.localizedStandardCompare(b.name) == .orderedAscending
         case .newest, .oldest:
-            switch (a.modified, b.modified) {
+            switch (a.timelineDate, b.timelineDate) {
             case let (first?, second?):
                 guard first != second else {
                     return a.name.localizedStandardCompare(b.name) == .orderedAscending
@@ -106,6 +114,21 @@ struct FolderContents: Sendable {
     static let empty = FolderContents(folders: [], media: [], documents: [])
 
     var isEmpty: Bool { folders.isEmpty && media.isEmpty && documents.isEmpty }
+
+    /// Folds freshly discovered capture dates into the listing and re-sorts.
+    func applying(_ dates: [Item.ID: Date], order: ItemOrder) -> FolderContents {
+        guard !dates.isEmpty else { return self }
+        func enrich(_ items: [Item]) -> [Item] {
+            items.map { item in
+                guard let date = dates[item.id], item.captureDate != date else { return item }
+                var copy = item
+                copy.captureDate = date
+                return copy
+            }
+        }
+        return FolderContents(folders: folders, media: enrich(media), documents: enrich(documents))
+            .reordered(by: order)
+    }
     var selectableCount: Int { media.count + documents.count }
     /// Grid order, so a selection can be replayed in the order the user sees.
     var selectable: [Item] { media + documents }
