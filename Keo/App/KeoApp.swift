@@ -4,6 +4,7 @@ import SwiftUI
 struct KeoApp: App {
     @StateObject private var store = Store()
     @StateObject private var downloader = Downloader()
+    @StateObject private var indexer = Indexer()
 
     var body: some Scene {
         WindowGroup {
@@ -19,6 +20,7 @@ struct KeoApp: App {
             }
             .environmentObject(store)
             .environmentObject(downloader)
+            .environmentObject(indexer)
             .preferredColorScheme(.dark)
         }
     }

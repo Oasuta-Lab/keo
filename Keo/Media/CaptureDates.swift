@@ -81,12 +81,22 @@ final class DateScan: ObservableObject {
     }
 
     /// `onFinished` receives every date discovered during the pass.
+    /// Above this, scanning on open is the painful part: a 15 000 photo folder would grind
+    /// every time you walk into it. Those belong to the deliberate pass in `Indexer`.
+    static let automaticLimit = 2_000
+
+    /// `tooLarge` is called instead of scanning when the folder is beyond `automaticLimit`.
     func start(_ media: [Item], client: FreeboxClient,
+               tooLarge: @escaping (Int) -> Void = { _ in },
                onFinished: @escaping ([Item.ID: Date]) -> Void) {
         task?.cancel()
         task = Task { [weak self] in
             let pending = await CaptureDateIndex.shared.needsScan(media)
             guard !pending.isEmpty, let self else { return }
+            guard pending.count <= Self.automaticLimit else {
+                tooLarge(pending.count)
+                return
+            }
 
             self.progress = Progress(done: 0, total: pending.count)
             var found: [Item.ID: Date] = [:]

@@ -22,6 +22,10 @@ struct BrowserView: View {
     @State private var sections: [MediaSection] = []
     @State private var activeSection: MediaSection.ID?
     @StateObject private var scan = DateScan()
+    @EnvironmentObject private var indexer: Indexer
+    @State private var showingIndexing = false
+    /// How many files here still have no date, when it is too many to read on the fly.
+    @State private var unindexed = 0
 
     private var sectioned: Bool { order != .name && !sections.isEmpty }
 
@@ -102,6 +106,14 @@ struct BrowserView: View {
             // Root only, and out of the way whenever an action bar is up.
             if let progress = scan.progress {
                 DateScanChip(progress: progress).padding(.bottom, 8)
+            } else if indexer.state.isRunning, let progress = indexer.state.progress {
+                IndexingChip(fraction: progress.fraction, pending: progress.pending) {
+                    showingIndexing = true
+                }
+                .padding(.bottom, 8)
+            } else if unindexed > 0, !selecting, !downloader.isRunning {
+                UnindexedChip(count: unindexed) { showingIndexing = true }
+                    .padding(.bottom, 8)
             } else if path == FreeboxClient.rootPath, !selecting, !downloader.isRunning {
                 BuildStampLabel().padding(.bottom, 8)
             }
@@ -118,6 +130,13 @@ struct BrowserView: View {
         }
         .sheet(item: $downloader.share) { payload in
             ShareSheet(urls: payload.urls)
+        }
+        .sheet(isPresented: $showingIndexing) {
+            IndexingView(client: client)
+        }
+        // The global pass covers this folder too; re-apply what it found.
+        .onChange(of: indexer.state.isRunning) { _, running in
+            if !running { Task { await resolveDates() } }
         }
         .alert("Téléchargement interrompu", isPresented: showingError) {
             Button("OK") { downloader.error = nil }
@@ -189,7 +208,13 @@ struct BrowserView: View {
                             }
                         }
                     }
+                    Divider()
+                    Button("Indexation des dates…", systemImage: "calendar.badge.clock") {
+                        showingIndexing = true
+                    }
+
                     if path == FreeboxClient.rootPath {
+                        Divider()
                         Button("Déconnexion", systemImage: "rectangle.portrait.and.arrow.right",
                                role: .destructive) { store.signOut() }
                     }
@@ -275,8 +300,12 @@ struct BrowserView: View {
             contents = contents.applying(known, order: order)
             rebuildSections()
         }
-        guard order != .name else { return }
-        scan.start(contents.media, client: client) { found in
+        // Don't fight the global indexer for the box's attention.
+        guard order != .name, !indexer.state.isRunning else { return }
+        unindexed = 0
+        scan.start(contents.media, client: client) { count in
+            unindexed = count
+        } onFinished: { found in
             guard !found.isEmpty else { return }
             contents = contents.applying(found, order: order)
             rebuildSections()
@@ -315,13 +344,15 @@ private struct SectionHeader: View {
     let section: MediaSection
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
+        // Count sits next to the title, not on the trailing edge: that side belongs to the
+        // timeline rail's year labels, and the two were drawing on top of each other.
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(section.title)
                 .font(.headline)
-            Spacer()
             Text("\(section.items.count)")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)

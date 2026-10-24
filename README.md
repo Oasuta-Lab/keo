@@ -62,7 +62,7 @@ Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copi
 |---|---|
 | `Keo/App/` | Entrée, `Store` (session, association), trousseau, tampon de build |
 | `Keo/Freebox/` | `Item` et `FolderContents`, transports, client, asset vidéo authentifié |
-| `Keo/Media/` | Pipeline de vignettes, décodage ImageIO, cache disque évincé en LRU |
+| `Keo/Media/` | Pipeline de vignettes, décodage ImageIO, cache disque LRU, index des dates |
 | `Keo/Downloads/` | File d'attente, pellicule, feuille de partage |
 | `Keo/UI/` | Association, grille, visionneuse plein écran |
 
@@ -106,6 +106,17 @@ rien, quel que soit le nombre d'octets fournis.
   date — sinon chaque visite les réanalyserait indéfiniment.
 - Le réordonnancement n'a lieu **qu'à la fin du scan**, pas pendant : la grille ne se réorganise
   jamais sous le doigt. Une pastille discrète affiche l'avancement.
+
+### Indexation globale
+
+Au-delà de **2 000 fichiers sans date**, un dossier ne se scanne plus tout seul à l'ouverture :
+cela grinçait à chaque visite d'un gros dossier. Une pastille annonce alors combien de fichiers
+sont sans date et ouvre l'écran d'indexation (menu « … » → *Indexation des dates*).
+
+Cet écran lance un parcours complet du NAS depuis la racine, avec le dossier en cours, les
+compteurs et un bouton d'arrêt. Il continue pendant la navigation, cède la priorité aux
+vignettes, et persiste au fur et à mesure : un arrêt ne coûte que les fichiers non encore lus.
+Le scan local est suspendu tant qu'il tourne, pour ne pas se disputer la box.
 
 ## Dossiers
 
