@@ -36,7 +36,8 @@ struct IndexingView: View {
                         }
                         .tint(.red)   // sinon l'icône garde la couleur d'accent, le texte est rouge
                     } else {
-                        Button("Lancer l'indexation", systemImage: "play.fill") {
+                        Button(indexer.state.isPaused ? "Reprendre" : "Lancer l'indexation",
+                               systemImage: "play.fill") {
                             indexer.start(client: client)
                         }
                         Button("Revérifier tous les dossiers",
@@ -122,6 +123,10 @@ struct IndexingView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+            } else if indexer.state.isPaused {
+                Label("En pause — reprend là où elle s'est arrêtée",
+                      systemImage: "pause.circle.fill")
+                    .foregroundStyle(.orange)
             } else {
                 Label("Terminée", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)

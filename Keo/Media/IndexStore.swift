@@ -69,6 +69,7 @@ actor IndexStore {
         )
 
         ready = true
+        retryDatelessAfterReaderChange()
         repairKinds()
         migrateFromJSON(in: folder)
     }
@@ -427,6 +428,30 @@ actor IndexStore {
         sqlite3_wal_checkpoint_v2(db, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil)
     }
 
+    /// How much of a file the date reader looks at. Bumping this re-queues every file that
+    /// came back without a date, because a better reader may now find one — the old 4 KB
+    /// probe missed 61 % of them, and those rows would otherwise stay wrong for ever.
+    private static let readerVersion: Int64 = 2
+
+    private func retryDatelessAfterReaderChange() {
+        guard let seen = try? value(forKey: "readerVersion") ?? 0,
+              seen < Self.readerVersion else { return }
+        do {
+            try exec("BEGIN IMMEDIATE")
+            // Only the dateless ones: a date already found is still a date.
+            try exec("UPDATE file SET read = 0 WHERE read = 1 AND capture IS NULL")
+            // Their folders can no longer claim to be complete.
+            try exec("""
+                UPDATE folder SET mtime = NULL WHERE id IN
+                (SELECT DISTINCT folder_id FROM file WHERE read = 0)
+                """)
+            try setValue(Self.readerVersion, forKey: "readerVersion")
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+        }
+    }
+
     /// Rows written before `kind` existed inherited 0, which means "folder" — so every photo
     /// already indexed came back from the cache as a folder you could tap into. The name is
     /// enough to work out what they really are.
@@ -469,6 +494,12 @@ actor IndexStore {
     }
 
     #if DEBUG
+    /// Recreates a database written by an older, worse date reader.
+    func rewindReaderVersionForChecks() throws {
+        try open()
+        try setValue(0, forKey: "readerVersion")
+    }
+
     /// Recreates the state of a database written before `kind` existed.
     func rewriteKindsAsUnknownForChecks() throws {
         try open()

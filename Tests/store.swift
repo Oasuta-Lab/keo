@@ -175,6 +175,29 @@ func checkIndexStore() async throws {
     assert(stillToRead.count == 1,
            "et il reste à lire : présent au listing n'est pas lu")
 
+    // --- un meilleur lecteur fait réessayer les photos restées sans date ---------------
+    let reader = home.appendingPathComponent("reader")
+    try FileManager.default.createDirectory(at: reader, withIntermediateDirectories: true)
+    let dated = photo("avec.jpg", in: "/NAS/Vieux", size: 10)
+    let undatedYet = photo("sans.jpg", in: "/NAS/Vieux", size: 20)
+
+    let before2 = IndexStore(directory: reader)
+    let g2 = try await before2.beginGeneration()
+    try await before2.commit([(dated, shot), (undatedYet, nil)], in: "/NAS/Vieux",
+                             generation: g2,
+                             stamp: FolderStamp.Completion(modified: folderTime, childCount: 2,
+                                                           mediaCount: 2, bytes: 30))
+    try await before2.rewindReaderVersionForChecks()
+
+    let after2 = IndexStore(directory: reader)
+    let toRetry = try await after2.unread([dated, undatedYet], in: "/NAS/Vieux")
+    assert(toRetry.map(\.name) == ["sans.jpg"],
+           "seules les photos restées sans date sont réessayées — \(toRetry.map(\.name))")
+    let keptAfterUpgrade = try await after2.known([dated], in: "/NAS/Vieux")
+    assert(keptAfterUpgrade[dated.id] == shot, "une date déjà trouvée n'est jamais rejetée")
+    let reopened = try await after2.isUnchanged("/NAS/Vieux", modified: folderTime, childCount: 2)
+    assert(!reopened, "et leur dossier ne peut plus se dire terminé")
+
     let nothing = try await tree.listing("/NAS/Inconnu")
     assert(nothing.isEmpty, "un dossier inconnu ne fabrique pas de listing")
 

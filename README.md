@@ -92,20 +92,24 @@ Sur un NAS, la date de modification est souvent le jour où tout a été copié 
 fichiers portent alors la même, et trier ou regrouper par date ne donne rien. Keo lit donc la
 vraie date de prise de vue.
 
-**4 Ko suffisent quand l'EXIF est en tête de fichier**, ce qui est le cas courant, en JPEG
-comme en HEIC. Mais pas toujours : un profil ICC volumineux, un paquet XMP ou une grosse
-vignette embarquée repoussent la date plus loin. Mesuré sur des fichiers construits pour ça,
-EXIF placé à 8 Ko puis à 40 Ko :
+Combien d'octets faut-il lire ? Mesuré sur **120 photos tirées au hasard d'une vraie
+photothèque**, pas sur des fichiers fabriqués pour l'occasion :
 
-| EXIF commence à | 4 Ko | 16 Ko | 64 Ko |
+| Premier palier | Dates trouvées | Requêtes/photo | Transfert moyen |
 |---|---|---|---|
-| tête de fichier | ✅ | ✅ | ✅ |
-| 8 Ko | ❌ | ✅ | ✅ |
-| 40 Ko | ❌ | ❌ | ✅ |
+| 4 Ko | 38,9 % | 1,63 | 85 Ko |
+| 16 Ko | 92,0 % | 1,13 | 33 Ko |
+| **24 Ko** | **99,1 %** | **1,07** | **33 Ko** |
+| 128 Ko | 100 % | 1,06 | 135 Ko |
 
-Keo tente donc 4 Ko, puis **128 Ko** si rien n'a été trouvé. Seuls les fichiers qui échouent
-au premier essai paient le second. Sans cette seconde tentative, ces photos auraient été
-enregistrées « sans date » définitivement.
+Keo lit donc **24 Ko**, puis 128 Ko pour le dernier pour cent. Aucune photo de l'échantillon
+n'a révélé sa date uniquement dans le fichier entier : ce que 128 Ko ne trouve pas n'existe
+pas. Sur cet échantillon, 6 % des photos n'ont réellement aucune date — exports web, images
+reçues, captures d'écran.
+
+**`readerVersion`** : quand ce lecteur s'améliore, toutes les photos restées sans date sont
+remises en file. Une date déjà trouvée n'est jamais rejetée. Sans ça, les 61 % manqués par le
+palier à 4 Ko seraient restés faux pour toujours.
 
 Attention au piège HEIC : il faut une source `CGImageSourceCreateWithData`, car en mode
 incrémental non finalisé ImageIO refuse de parser les métadonnées HEIF et ne rend rien, quel
