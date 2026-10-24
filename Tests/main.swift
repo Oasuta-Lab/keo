@@ -189,6 +189,60 @@ assert(undated.last?.year == nil, "pas d'année pour les sans-date")
 
 assert(MediaGrouping.sections(from: [], calendar: utc, locale: fr).isEmpty)
 
+// MARK: - Géométrie du rail de la timeline
+
+import CoreGraphics
+
+let railHeight: CGFloat = 900
+
+// Trois mois concentrent l'essentiel : en proportions pures les autres seraient des traits.
+let busy = RailLayout.segments(counts: [2100, 1400, 1800, 30, 25, 15], height: railHeight)
+assert(busy.count == 6)
+assert(abs(busy[0].start) < 0.0001, "le premier segment part du haut")
+let lastEnd = busy[5].start + busy[5].height
+assert(abs(lastEnd - 1) < 0.001, "les segments couvrent exactement le rail — \(lastEnd)")
+for segment in busy {
+    assert(segment.height * railHeight >= RailLayout.minimumSegment - 0.001,
+           "chaque période reste visible et cliquable — \(segment.height * railHeight) pt")
+}
+assert(busy[0].height > busy[3].height * 5, "la densité reste lisible malgré le plancher")
+
+// Trop de périodes pour donner un plancher à chacune : on retombe sur les proportions.
+let crowded = RailLayout.segments(counts: Array(repeating: 1, count: 400), height: 100)
+assert(crowded.count == 400)
+assert(abs(crowded.reduce(0) { $0 + $1.height } - 1) < 0.001,
+       "même saturé, le rail couvre exactement sa hauteur")
+
+assert(RailLayout.segments(counts: [], height: railHeight).isEmpty)
+assert(RailLayout.segments(counts: [5], height: 0).isEmpty, "hauteur nulle, pas de division")
+
+// Les années trop proches ne doivent pas se chevaucher.
+let dense = RailLayout.segments(counts: [10, 10, 10, 10], height: railHeight)
+let allYears = RailLayout.yearPositions(years: ["2026", "2025", "2024", "2023"],
+                                        segments: dense, height: railHeight)
+assert(allYears.count == 4, "bien espacées, toutes s'affichent")
+for pair in zip(allYears, allYears.dropFirst()) {
+    assert(pair.1.y - pair.0.y >= RailLayout.minimumYearGap, "espacement minimal respecté")
+}
+
+let squeezed = RailLayout.segments(counts: [1, 1, 1, 1], height: 60)
+let fewYears = RailLayout.yearPositions(years: ["2026", "2025", "2024", "2023"],
+                                        segments: squeezed, height: 60)
+assert(fewYears.count < 4, "sur un rail court, on n'empile pas les étiquettes")
+
+// Aucune étiquette ne sort de l'écran.
+for label in allYears {
+    assert(label.y >= RailLayout.edgeInset, "pas sous la barre d'état — \(label.y)")
+    assert(label.y <= railHeight - RailLayout.edgeInset - RailLayout.labelHeight + 0.001,
+           "pas coupée en bas — \(label.y)")
+}
+
+// Le glissé retombe sur la bonne période.
+assert(RailLayout.index(at: 0, in: busy) == 0)
+assert(RailLayout.index(at: 1, in: busy) == 5, "le bas du rail vise la dernière période")
+assert(RailLayout.index(at: -5, in: busy) == 0, "au-dessus du rail, on reste sur la première")
+assert(RailLayout.index(at: 0.5, in: []) == nil)
+
 // MARK: - Dates de prise de vue appliquées après coup
 
 // Le cas réel : tout a été copié sur le NAS le même jour, donc tous les mtimes sont identiques.
@@ -360,4 +414,4 @@ assert(job.position == 4, "la position ne dépasse pas le total")
 assert(DownloadJob(total: 0, completed: 0, currentName: "", currentFraction: 0).fraction == 0,
        "un lot vide ne divise pas par zéro")
 
-print("ok — lecture seule, envelope, chemins, classification, aperçus, dates EXIF, sections, tri, éviction, progression")
+print("ok — lecture seule, envelope, chemins, classification, aperçus, dates EXIF, sections, rail, tri, éviction, progression")

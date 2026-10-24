@@ -10,6 +10,8 @@ enum FreeboxError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .api(_, let message): return message
+        case .http(504), .http(503):
+            return "La Freebox n'a pas répondu à temps. Elle est peut-être occupée — réessaie."
         case .http(let code): return "Erreur réseau (\(code))."
         case .denied: return "Association refusée sur la Freebox."
         case .pairingTimedOut: return "Pas de réponse sur l'écran de la Freebox."
@@ -88,8 +90,16 @@ struct ReadOnlyTransport: Sendable {
     }
 
     func json<T: Decodable>(_ url: URL, token: String? = nil, as type: T.Type) async throws -> T {
-        let (data, _) = try await session.data(for: request(url, token: token))
+        let (data, response) = try await session.data(for: request(url, token: token))
+        try Self.checkStatus(response)
         return try Envelope.unwrap(data, as: type)
+    }
+
+    /// Without this, a 504 hands its HTML error page to `JSONDecoder` and the user is told
+    /// "the data couldn't be read because it isn't in the correct format".
+    static func checkStatus(_ response: URLResponse) throws {
+        guard let http = response as? HTTPURLResponse else { throw FreeboxError.http(0) }
+        guard (200..<300).contains(http.statusCode) else { throw FreeboxError.http(http.statusCode) }
     }
 
     /// `prefix` caps the download to the first N bytes, for embedded-preview probes.
@@ -157,7 +167,8 @@ struct LoginTransport: Sendable {
     let session: URLSession
 
     func get<T: Decodable>(_ url: URL, as type: T.Type) async throws -> T {
-        let (data, _) = try await session.data(from: url)
+        let (data, response) = try await session.data(from: url)
+        try ReadOnlyTransport.checkStatus(response)
         return try Envelope.unwrap(data, as: type)
     }
 
@@ -167,7 +178,8 @@ struct LoginTransport: Sendable {
         call.setValue("application/json", forHTTPHeaderField: "Content-Type")
         call.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, _) = try await session.data(for: call)
+        let (data, response) = try await session.data(for: call)
+        try ReadOnlyTransport.checkStatus(response)
         return try Envelope.unwrap(data, as: type)
     }
 }

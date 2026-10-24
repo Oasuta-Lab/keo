@@ -132,8 +132,10 @@ actor FreeboxClient {
         var cursor: String?
         var page = 0
 
+        var size = Self.pageSize
+
         repeat {
-            let batch = try await listPage(path, cursor: cursor)
+            let batch = try await withTimeoutRetry(path, cursor: cursor, size: &size)
             all.append(contentsOf: batch.items)
             cursor = batch.cursor
             page += 1
@@ -150,9 +152,24 @@ actor FreeboxClient {
 
     /// 2 000 is where it flattens out: bigger pages are no faster and hold more in memory.
     private static let pageSize = 2_000
+    private static let smallestPage = 250
     private static let pageLimit = 200
 
-    private func listPage(_ path: String, cursor: String?) async throws -> (items: [Item], cursor: String?) {
+    /// The box times out on its own under load. Asking for less is what gets through, so each
+    /// failure halves the page before trying again instead of giving up on the folder.
+    private func withTimeoutRetry(_ path: String, cursor: String?,
+                                  size: inout Int) async throws -> (items: [Item], cursor: String?) {
+        while true {
+            do {
+                return try await listPage(path, cursor: cursor, limit: size)
+            } catch let error as FreeboxError where error.isBoxOverloaded && size > Self.smallestPage {
+                size = max(size / 2, Self.smallestPage)
+            }
+        }
+    }
+
+    private func listPage(_ path: String, cursor: String?,
+                          limit: Int) async throws -> (items: [Item], cursor: String?) {
         struct Entry: Decodable {
             let path: String        // base64
             let name: String
@@ -169,7 +186,7 @@ actor FreeboxClient {
             let cursor: String?
         }
 
-        var suffix = "fs/ls/\(FreeboxPath.encode(path))?limit=\(Self.pageSize)"
+        var suffix = "fs/ls/\(FreeboxPath.encode(path))?limit=\(limit)"
         if let cursor, let escaped = cursor.addingPercentEncoding(withAllowedCharacters: .alphanumerics) {
             suffix += "&cursor=\(escaped)"
         }
@@ -276,6 +293,12 @@ actor FreeboxClient {
 private extension FreeboxError {
     var isForbidden: Bool {
         if case .http(403) = self { return true }
+        return false
+    }
+
+    /// The box gave up before the backend finished, rather than refusing the request.
+    var isBoxOverloaded: Bool {
+        if case .http(let code) = self { return code == 503 || code == 504 }
         return false
     }
 }

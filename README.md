@@ -125,7 +125,10 @@ Quand le tri est par date, la grille se regroupe et un rail apparaît à droite.
 - **En-têtes collants** par mois, avec le compte de photos. Un dossier qui tient dans un seul
   mois se regroupe par jour : sinon le regroupement n'apprendrait rien.
 - Les dates viennent de l'EXIF dès que le scan ci-dessus est passé.
-- **Rail de densité.** La hauteur de chaque segment est la part de photos de la période, donc
+- **Rail de densité.** Chaque période reçoit un plancher de 5 pt avant que le reste soit
+  réparti au prorata : en proportions pures, un mois creux devenait un trait d'un pixel,
+  invisible et impossible à viser au doigt. Les libellés d'année s'écartent des bords et ne
+  s'affichent qu'espacés de 26 pt, sinon ils se chevauchaient. La hauteur de chaque segment est la part de photos de la période, donc
   la forme du rail *est* la distribution — un long segment, c'est un mois où tu as beaucoup
   photographié. Les changements d'année sont étiquetés. On le glisse pour sauter directement.
 - Le segment de la période à l'écran est mis en avant, via la position des en-têtes rendus.
@@ -195,8 +198,10 @@ rm -f /tmp/keocheck   # sinon un echec de compilation relance l'ancien binaire
 swiftc -swift-version 6 Keo/Freebox/Item.swift Keo/Freebox/Transport.swift \
   Keo/Freebox/FreeboxClient.swift Keo/Downloads/DownloadJob.swift \
   Keo/Freebox/MediaSection.swift Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift \
-  Keo/UI/MediaDate.swift Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
+  Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
 ```
+
+La géométrie du rail vit dans `RailLayout`, sans SwiftUI, précisément pour être vérifiable.
 
 Couvre la garantie de lecture seule, l'enveloppe `{success, result}`, l'encodage des chemins,
 la classification des médias, l'éviction LRU et l'arithmétique de progression.
