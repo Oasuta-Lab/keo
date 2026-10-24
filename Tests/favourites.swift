@@ -112,5 +112,70 @@ func checkFavourites() async throws {
     let keptMembers = try await store.items(in: trips)
     assert(keptMembers.map(\.name) == ["a.jpg"], "ni leurs membres")
 
-    print("ok — favoris, raccourcis, collections, et leur survie au balayage de l'index")
+    // --- un favori dont le fichier a disparu du NAS ------------------------------------
+    let shelf = IndexStore(directory: home.appendingPathComponent("shelf"))
+    try FileManager.default.createDirectory(at: home.appendingPathComponent("shelf"),
+                                            withIntermediateDirectories: true)
+    let vanishedFile = photo("parti.jpg", in: album, size: 11)
+    let stays = photo("reste.jpg", in: album, size: 22)
+    let unknownFolder = photo("ailleurs.jpg", in: "/NAS/Jamais lu", size: 33)
+    try await shelf.setFavourite([vanishedFile, stays, unknownFolder], true)
+
+    // Avant toute indexation, aucun verdict : rien ne doit être accusé de manquer.
+    var verdict = try await shelf.resolve([vanishedFile, stays, unknownFolder])
+    assert(verdict.missing.isEmpty,
+           "sans dossier indexé, on ne déclare rien manquant — \(verdict.missing.map { $0.name })")
+
+    // Le dossier est lu de bout en bout, et « parti.jpg » n'y est pas.
+    let pass = try await shelf.beginGeneration()
+    try await shelf.commit([(stays, nil)], in: album, generation: pass,
+                           stamp: FolderStamp.Completion(modified: Date(), childCount: 1,
+                                                         mediaCount: 1, bytes: 22),
+                           present: [stays], sweep: true)
+
+    verdict = try await shelf.resolve([vanishedFile, stays, unknownFolder])
+    assert(verdict.missing.map { $0.name } == ["parti.jpg"],
+           "seul le fichier absent d'un dossier lu entièrement manque — \(verdict.missing.map { $0.name })")
+    assert(verdict.present.contains { $0.name == "reste.jpg" })
+    assert(verdict.present.contains { $0.name == "ailleurs.jpg" },
+           "un dossier jamais lu ne condamne pas ses favoris")
+
+    // --- un fichier deplace est suivi, pas declare perdu --------------------------------
+    let elsewhere = "/NAS/Photos/Trie"
+    let moved = photo("voyageur.jpg", in: album, size: 44)
+    try await shelf.setFavourite([moved], true)
+    let later = try await shelf.beginGeneration()
+    try await shelf.commit([(photo("voyageur.jpg", in: elsewhere, size: 44), shot)],
+                           in: elsewhere, generation: later,
+                           stamp: FolderStamp.Completion(modified: Date(), childCount: 1,
+                                                         mediaCount: 1, bytes: 44),
+                           present: [photo("voyageur.jpg", in: elsewhere, size: 44)], sweep: true)
+
+    verdict = try await shelf.resolve([moved])
+    assert(verdict.missing.isEmpty, "un fichier retrouvé ailleurs n'est pas perdu")
+    assert(verdict.present.first?.path == elsewhere + "/voyageur.jpg",
+           "et son chemin est corrigé — \(String(describing: verdict.present.first?.path))")
+    let repathed = try await shelf.favourites()
+    assert(repathed.contains { $0.path == elsewhere + "/voyageur.jpg" },
+           "la correction est persistée, pas seulement affichée")
+
+    // --- les raccourcis suivent la même règle -------------------------------------------
+    let vanished = folder("/NAS/Photos/Supprime")
+    try await shelf.setShortcut(vanished, true)
+
+    // Tant que le parent n'a pas ete lu, aucun verdict.
+    var folders = try await shelf.resolveFolders([vanished])
+    assert(folders.missing.isEmpty,
+           "parent jamais indexé : on ne condamne pas le raccourci")
+
+    // Le parent est lu de bout en bout, et « Supprime » n'en fait pas partie.
+    let parentPass = try await shelf.beginGeneration()
+    try await shelf.commit([], in: "/NAS/Photos", generation: parentPass,
+                           stamp: FolderStamp.Completion(modified: Date(), childCount: 0,
+                                                         mediaCount: 0, bytes: 0))
+    folders = try await shelf.resolveFolders([vanished])
+    assert(folders.missing.map { $0.name } == ["Supprime"],
+           "un dossier absent d'un parent indexé manque — \(folders.missing.map { $0.name })")
+
+    print("ok — favoris, raccourcis, collections, survie au balayage, et détection des disparus")
 }

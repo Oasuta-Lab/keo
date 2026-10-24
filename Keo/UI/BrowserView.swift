@@ -38,6 +38,8 @@ struct BrowserView: View {
     @State private var folderStats: [String: FolderStats] = [:]
     /// True while the grid shows what the index remembers rather than a fresh listing.
     @State private var fromCache = false
+    /// Saved items whose file the index no longer finds on the NAS.
+    @State private var missing: [Item] = []
 
     @State private var collections: [IndexStore.Collection] = []
     @State private var choosingCollection = false
@@ -130,6 +132,7 @@ struct BrowserView: View {
         // and a cover attached after it inherits that action — the viewer's pager then starts
         // pulling a refresh spinner when you swipe down to dismiss.
         .refreshable { await load() }
+        .safeAreaInset(edge: .top, spacing: 0) { missingBanner }
         .overlay { status }
         .overlay(alignment: .bottom) {
             // Root only, and out of the way whenever an action bar is up.
@@ -291,6 +294,49 @@ struct BrowserView: View {
             await refreshLibrary()
             selecting = false
             selection = []
+        }
+    }
+
+    /// Never purged behind the user's back: a file that is gone is worth saying out loud, and
+    /// removing it stays a deliberate tap.
+    @ViewBuilder
+    private var missingBanner: some View {
+        if !missing.isEmpty, !source.isOnNAS {
+            HStack(spacing: 10) {
+                Image(systemName: "questionmark.folder")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(missing.count == 1
+                         ? "1 élément introuvable sur le NAS"
+                         : "\(missing.count) éléments introuvables sur le NAS")
+                        .font(.footnote.weight(.medium))
+                    Text("Supprimés, ou sur un dossier pas encore indexé")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Retirer") { dropMissing() }
+                    .font(.footnote.weight(.medium))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.bar)
+        }
+    }
+
+    private func dropMissing() {
+        let doomed = missing
+        Task {
+            switch source {
+            case .favourites:
+                try? await IndexStore.shared.setFavourite(doomed, false)
+            case .collection(let id, _):
+                try? await IndexStore.shared.setMembership(doomed, in: id, false)
+            case .folder:
+                break
+            }
+            missing = []
+            await loadLocal()
         }
     }
 
@@ -480,13 +526,16 @@ struct BrowserView: View {
 
     private func loadLocal() async {
         do {
-            let items: [Item]
+            let saved: [Item]
             switch source {
-            case .favourites: items = try await IndexStore.shared.favourites()
-            case .collection(let id, _): items = try await IndexStore.shared.items(in: id)
-            case .folder: items = []
+            case .favourites: saved = try await IndexStore.shared.favourites()
+            case .collection(let id, _): saved = try await IndexStore.shared.items(in: id)
+            case .folder: saved = []
             }
-            contents = FolderContents(items, order: order)
+            // A moved file is quietly repathed; only a genuinely absent one is set aside.
+            let resolved = try await IndexStore.shared.resolve(saved)
+            missing = resolved.missing
+            contents = FolderContents(resolved.present, order: order)
             rebuildSections()
             error = nil
         } catch {

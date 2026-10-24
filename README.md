@@ -226,6 +226,22 @@ grille.
 Le mot « collection » est délibéré : **rien n'est créé sur le NAS**. « Album » laisserait croire
 qu'un dossier a été écrit sur la box, ce que Keo ne fait jamais.
 
+### Quand un favori disparaît du NAS
+
+Rien n'est purgé dans le dos de l'utilisateur. La règle est de distinguer **« absent »** de
+**« inconnu »** :
+
+- Un fichier dont le dossier n'a **jamais été lu entièrement** est inconnu, pas disparu. Le
+  condamner cacherait des photos parfaitement valides.
+- Un fichier absent d'un dossier **portant un marquage de complétion** est réellement parti.
+- Un fichier retrouvé ailleurs **sous le même nom et la même taille** a bougé, pas disparu :
+  son chemin est corrigé en silence et persisté. L'identité de synchronisation dérivant du nom
+  et de la taille, ce déplacement ne génère aucun trafic entre appareils.
+- Plusieurs correspondances : on ne devine pas, même doctrine que l'adoption des dates.
+
+Les introuvables s'affichent dans un bandeau qui annonce leur nombre, et leur retrait reste
+**un geste délibéré**. Les raccourcis suivent la même règle, marqués d'un signe orange.
+
 ### Elles survivent à l'index, pas l'inverse
 
 `favourite`, `shortcut`, `collection` et `collection_item` sont **clés sur le chemin**, pas sur

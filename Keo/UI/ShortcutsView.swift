@@ -7,6 +7,8 @@ struct ShortcutsView: View {
     @EnvironmentObject private var sync: CloudSync
     @State private var shortcuts: [Item] = []
     @State private var stats: [String: FolderStats] = [:]
+    /// Pinned folders the index no longer finds.
+    @State private var missing: Set<String> = []
 
     var body: some View {
         List {
@@ -29,8 +31,17 @@ struct ShortcutsView: View {
             ForEach(shortcuts) { folder in
                 NavigationLink(value: BrowserSource.folder(folder)) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(folder.name)
-                        Text(detail(for: folder))
+                        HStack(spacing: 6) {
+                            Text(folder.name)
+                            if missing.contains(folder.path) {
+                                Image(systemName: "questionmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        Text(missing.contains(folder.path)
+                             ? "Introuvable sur le NAS — balaye pour retirer"
+                             : detail(for: folder))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
@@ -71,5 +82,8 @@ struct ShortcutsView: View {
     private func reload() async {
         shortcuts = (try? await IndexStore.shared.shortcuts()) ?? []
         stats = (try? await IndexStore.shared.stats(for: shortcuts.map(\.path))) ?? [:]
+        // Marked, never removed on its own: the folder may simply not be indexed yet.
+        let resolved = try? await IndexStore.shared.resolveFolders(shortcuts)
+        missing = Set(resolved?.missing.map(\.path) ?? [])
     }
 }

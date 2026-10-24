@@ -1367,6 +1367,137 @@ actor IndexStore {
         return sqlite3_column_int64(lookup, 0)
     }
 
+
+    // MARK: Vanished items
+
+    /// A saved item, checked against what the index actually saw on the NAS.
+    struct Resolved: Sendable {
+        /// Still there — possibly at a new path, if the file simply moved.
+        let present: [Item]
+        /// The folder was read end to end and this file was not in it. Gone, not merely unread.
+        let missing: [Item]
+    }
+
+    /// Sorts saved favourites or collection members into what still exists and what does not.
+    ///
+    /// The distinction that matters: "not in the index" is not "deleted". A file whose folder
+    /// has never been fully read is simply unknown, and accusing it of being gone would hide
+    /// perfectly good photos. Only a file absent from a folder the index read end to end — one
+    /// carrying a completion stamp — counts as missing.
+    ///
+    /// A file found elsewhere under the same name and size has moved, not vanished: its path is
+    /// quietly updated. The sync identity is derived from name and size, so repathing causes no
+    /// churn between devices.
+    func resolve(_ items: [Item]) throws -> Resolved {
+        try open()
+        guard !items.isEmpty else { return Resolved(present: [], missing: []) }
+
+        var present: [Item] = []
+        var missing: [Item] = []
+
+        for item in items {
+            let parent = (item.path as NSString).deletingLastPathComponent
+            guard let folder = try folderID(parent, create: false), try isStamped(folder) else {
+                present.append(item)      // never fully read: no verdict
+                continue
+            }
+            if try fileExists(in: folder, name: item.name, size: item.size) {
+                present.append(item)
+                continue
+            }
+            if let moved = try locate(name: item.name, size: item.size), moved != parent {
+                let repathed = Item(path: moved + "/" + item.name, name: item.name,
+                                    isDirectory: false, size: item.size, modified: nil,
+                                    mimeType: nil, captureDate: item.captureDate)
+                try repath(from: item, to: repathed)
+                present.append(repathed)
+                continue
+            }
+            missing.append(item)
+        }
+        return Resolved(present: present, missing: missing)
+    }
+
+    /// Same question for a pinned folder: does the index still know it?
+    func resolveFolders(_ folders: [Item]) throws -> Resolved {
+        try open()
+        var present: [Item] = []
+        var missing: [Item] = []
+
+        for folder in folders {
+            if try folderID(folder.path, create: false) != nil {
+                present.append(folder)
+                continue
+            }
+            let parent = (folder.path as NSString).deletingLastPathComponent
+            guard let parentID = try folderID(parent, create: false), try isStamped(parentID) else {
+                present.append(folder)    // parent never read: no verdict
+                continue
+            }
+            missing.append(folder)
+        }
+        return Resolved(present: present, missing: missing)
+    }
+
+    private func isStamped(_ folder: Int64) throws -> Bool {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT mtime FROM folder WHERE id = ?", into: &statement)
+        sqlite3_bind_int64(statement, 1, folder)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return false }
+        return sqlite3_column_type(statement, 0) != SQLITE_NULL
+    }
+
+    private func fileExists(in folder: Int64, name: String, size: Int64) throws -> Bool {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT 1 FROM file WHERE folder_id = ? AND name = ? AND size = ?",
+                    into: &statement)
+        sqlite3_bind_int64(statement, 1, folder)
+        bind(statement, 2, name)
+        sqlite3_bind_int64(statement, 3, size)
+        return sqlite3_step(statement) == SQLITE_ROW
+    }
+
+    /// The folder holding this exact file, when there is exactly one. Several matches are an
+    /// ambiguity we refuse to guess at, same doctrine as date adoption.
+    private func locate(name: String, size: Int64) throws -> String? {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        let sql = "SELECT d.path FROM file fi JOIN folder d ON d.id = fi.folder_id "
+                + "WHERE fi.name = ? AND fi.size = ? LIMIT 2"
+        try prepare(sql, into: &statement)
+        bind(statement, 1, name)
+        sqlite3_bind_int64(statement, 2, size)
+
+        var found: [String] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let path = sqlite3_column_text(statement, 0) else { continue }
+            found.append(String(cString: path))
+        }
+        return found.count == 1 ? found[0] : nil
+    }
+
+    private func repath(from old: Item, to new: Item) throws {
+        try exec("BEGIN IMMEDIATE")
+        do {
+            for table in ["favourite", "collection_item"] {
+                var statement: OpaquePointer?
+                defer { sqlite3_finalize(statement) }
+                try prepare("UPDATE OR IGNORE \(table) SET path = ? WHERE path = ? AND size = ?",
+                            into: &statement)
+                bind(statement, 1, new.path)
+                bind(statement, 2, old.path)
+                sqlite3_bind_int64(statement, 3, old.size)
+                guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+            }
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+    }
+
     // MARK: Migration
 
     /// A first index already paid for must not be paid for twice.
