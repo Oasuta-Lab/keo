@@ -131,6 +131,20 @@ actor IndexStore {
       added REAL    NOT NULL,
       PRIMARY KEY (collection_id, path, size)
     ) WITHOUT ROWID;
+
+    -- The sync journal: one row per personalisation record that differs from what CloudKit
+    -- last acknowledged. Written in the same transaction as the change itself, so a kill
+    -- can never lose a change nor send one twice: a row survives until the server has
+    -- confirmed it, and re-sending an already-applied row is idempotent by record name.
+    -- `server` carries the CloudKit system fields after a conflict, so the retry can build
+    -- on the server's version instead of colliding with it again.
+    CREATE TABLE IF NOT EXISTS sync_pending (
+      record_name TEXT PRIMARY KEY,
+      op      INTEGER NOT NULL,      -- 0 save, 1 delete
+      payload TEXT,                  -- SyncPayload JSON for saves, NULL for deletes
+      changed REAL NOT NULL,
+      server  BLOB
+    );
     """
 
     // MARK: Generations
@@ -595,12 +609,19 @@ actor IndexStore {
                     sqlite3_bind_int64(statement, 2, item.size)
                 }
                 guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+
+                let identity = SyncIdentity.favourite(path: item.path, size: item.size)
+                try journal(on ? .save : .delete, identity, payload: on
+                    ? .favourite(path: item.path, name: item.name, size: item.size,
+                                 added: now, modified: now)
+                    : nil)
             }
             try exec("COMMIT")
         } catch {
             try? exec("ROLLBACK")
             throw error
         }
+        notifyJournal()
     }
 
     func favourites() throws -> [Item] {
@@ -624,19 +645,32 @@ actor IndexStore {
 
     func setShortcut(_ folder: Item, _ on: Bool) throws {
         try open()
-        var statement: OpaquePointer?
-        defer { sqlite3_finalize(statement) }
-        if on {
-            try prepare("INSERT OR IGNORE INTO shortcut (path, name, added) VALUES (?, ?, ?)",
-                        into: &statement)
-            bind(statement, 1, folder.path)
-            bind(statement, 2, folder.name)
-            sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
-        } else {
-            try prepare("DELETE FROM shortcut WHERE path = ?", into: &statement)
-            bind(statement, 1, folder.path)
+        try exec("BEGIN IMMEDIATE")
+        do {
+            var statement: OpaquePointer?
+            defer { sqlite3_finalize(statement) }
+            let now = Date().timeIntervalSince1970
+            if on {
+                try prepare("INSERT OR IGNORE INTO shortcut (path, name, added) VALUES (?, ?, ?)",
+                            into: &statement)
+                bind(statement, 1, folder.path)
+                bind(statement, 2, folder.name)
+                sqlite3_bind_double(statement, 3, now)
+            } else {
+                try prepare("DELETE FROM shortcut WHERE path = ?", into: &statement)
+                bind(statement, 1, folder.path)
+            }
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+
+            try journal(on ? .save : .delete, .shortcut(path: folder.path), payload: on
+                ? .shortcut(path: folder.path, name: folder.name, added: now, modified: now)
+                : nil)
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
         }
-        guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+        notifyJournal()
     }
 
     func shortcuts() throws -> [Item] {
@@ -682,40 +716,100 @@ actor IndexStore {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { throw Failure.write("nom vide") }
 
-        var insert: OpaquePointer?
-        defer { sqlite3_finalize(insert) }
-        try prepare("INSERT OR IGNORE INTO collection (name, created) VALUES (?, ?)", into: &insert)
-        bind(insert, 1, trimmed)
-        sqlite3_bind_double(insert, 2, Date().timeIntervalSince1970)
-        guard sqlite3_step(insert) == SQLITE_DONE else { throw Failure.write(message) }
+        let id: Int64
+        try exec("BEGIN IMMEDIATE")
+        do {
+            var insert: OpaquePointer?
+            defer { sqlite3_finalize(insert) }
+            try prepare("INSERT OR IGNORE INTO collection (name, created) VALUES (?, ?)",
+                        into: &insert)
+            bind(insert, 1, trimmed)
+            sqlite3_bind_double(insert, 2, Date().timeIntervalSince1970)
+            guard sqlite3_step(insert) == SQLITE_DONE else { throw Failure.write(message) }
 
-        var lookup: OpaquePointer?
-        defer { sqlite3_finalize(lookup) }
-        try prepare("SELECT id FROM collection WHERE name = ?", into: &lookup)
-        bind(lookup, 1, trimmed)
-        guard sqlite3_step(lookup) == SQLITE_ROW else { throw Failure.write(message) }
-        return sqlite3_column_int64(lookup, 0)
+            var lookup: OpaquePointer?
+            defer { sqlite3_finalize(lookup) }
+            try prepare("SELECT id, created FROM collection WHERE name = ?", into: &lookup)
+            bind(lookup, 1, trimmed)
+            guard sqlite3_step(lookup) == SQLITE_ROW else { throw Failure.write(message) }
+            id = sqlite3_column_int64(lookup, 0)
+            let created = sqlite3_column_double(lookup, 1)
+
+            // Journalled even when the name already existed: the save is idempotent, and the
+            // device that lost the created-date tie simply adopts the other's.
+            try journal(.save, .collection(name: trimmed),
+                        payload: .collection(name: trimmed, created: created,
+                                             modified: Date().timeIntervalSince1970))
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+        notifyJournal()
+        return id
     }
 
+    /// A collection's sync identity is its name, so a rename is a delete of the old identity
+    /// plus a save of the new — members included, since their record names embed the name.
     func renameCollection(_ id: Int64, to name: String) throws {
         try open()
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        var statement: OpaquePointer?
-        defer { sqlite3_finalize(statement) }
-        try prepare("UPDATE collection SET name = ? WHERE id = ?", into: &statement)
-        bind(statement, 1, trimmed)
-        sqlite3_bind_int64(statement, 2, id)
-        guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+        guard let old = try collectionRow(id), old.name != trimmed else { return }
+
+        try exec("BEGIN IMMEDIATE")
+        do {
+            var statement: OpaquePointer?
+            defer { sqlite3_finalize(statement) }
+            try prepare("UPDATE collection SET name = ? WHERE id = ?", into: &statement)
+            bind(statement, 1, trimmed)
+            sqlite3_bind_int64(statement, 2, id)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+
+            let now = Date().timeIntervalSince1970
+            try journal(.delete, .collection(name: old.name), payload: nil)
+            try journal(.save, .collection(name: trimmed),
+                        payload: .collection(name: trimmed, created: old.created, modified: now))
+            for member in try memberRows(of: id) {
+                try journal(.delete, .member(collection: old.name, path: member.path,
+                                             size: member.size), payload: nil)
+                try journal(.save, .member(collection: trimmed, path: member.path,
+                                           size: member.size),
+                            payload: .member(collection: trimmed, path: member.path,
+                                             name: member.name, size: member.size,
+                                             added: member.added, modified: now))
+            }
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+        notifyJournal()
     }
 
     func deleteCollection(_ id: Int64) throws {
         try open()
-        try exec("DELETE FROM collection WHERE id = \(id)")
+        guard let row = try collectionRow(id) else { return }
+        try exec("BEGIN IMMEDIATE")
+        do {
+            // The members' tombstones must be written before the cascade erases them.
+            for member in try memberRows(of: id) {
+                try journal(.delete, .member(collection: row.name, path: member.path,
+                                             size: member.size), payload: nil)
+            }
+            try journal(.delete, .collection(name: row.name), payload: nil)
+            try exec("DELETE FROM collection WHERE id = \(id)")
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+        notifyJournal()
     }
 
     func setMembership(_ items: [Item], in collectionID: Int64, _ on: Bool) throws {
         try open()
+        guard let owner = try collectionRow(collectionID) else { return }
         try exec("BEGIN IMMEDIATE")
         do {
             var statement: OpaquePointer?
@@ -739,12 +833,20 @@ actor IndexStore {
                     sqlite3_bind_int64(statement, 3, item.size)
                 }
                 guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+
+                let identity = SyncIdentity.member(collection: owner.name, path: item.path,
+                                                   size: item.size)
+                try journal(on ? .save : .delete, identity, payload: on
+                    ? .member(collection: owner.name, path: item.path, name: item.name,
+                              size: item.size, added: now, modified: now)
+                    : nil)
             }
             try exec("COMMIT")
         } catch {
             try? exec("ROLLBACK")
             throw error
         }
+        notifyJournal()
     }
 
     func items(in collectionID: Int64) throws -> [Item] {
@@ -802,6 +904,467 @@ actor IndexStore {
             return Item(path: row.path, name: row.name, isDirectory: false, size: row.size,
                         modified: nil, mimeType: nil, captureDate: capture)
         }
+    }
+
+    // MARK: Sync journal
+
+    /// Everything here exists for the iCloud mirror. SQLite stays the source of truth: these
+    /// methods record what must be pushed and apply what was fetched, nothing more.
+
+    struct SyncChange: Equatable, Sendable {
+        enum Op: Int64 { case save = 0, delete = 1 }
+        let recordName: String
+        let op: Op
+        let payload: String?
+        let changed: Double
+        let server: Data?
+    }
+
+    private var onJournal: (@Sendable () -> Void)?
+
+    /// The sync engine registers here to learn the journal grew. One observer is enough;
+    /// nothing else has any business knowing.
+    func setJournalObserver(_ observer: (@Sendable () -> Void)?) {
+        onJournal = observer
+    }
+
+    private func notifyJournal() { onJournal?() }
+
+    /// Written in the same transaction as the change it mirrors, so a kill can never lose a
+    /// change nor invent one. One row per record: a re-toggle collapses onto itself.
+    private func journal(_ op: SyncChange.Op, _ identity: SyncIdentity,
+                         payload: SyncPayload?) throws {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("""
+            INSERT INTO sync_pending (record_name, op, payload, changed, server)
+            VALUES (?, ?, ?, ?, NULL)
+            ON CONFLICT(record_name) DO UPDATE SET op = excluded.op, payload = excluded.payload,
+                changed = excluded.changed, server = excluded.server
+            """, into: &statement)
+        bind(statement, 1, identity.recordName)
+        sqlite3_bind_int64(statement, 2, op.rawValue)
+        if let payload {
+            bind(statement, 3, try payload.encoded())
+            sqlite3_bind_double(statement, 4, payload.modified)
+        } else {
+            sqlite3_bind_null(statement, 3)
+            sqlite3_bind_double(statement, 4, Date().timeIntervalSince1970)
+        }
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+    }
+
+    func pendingSyncChanges() throws -> [SyncChange] {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT record_name, op, payload, changed, server FROM sync_pending",
+                    into: &statement)
+        var changes: [SyncChange] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let raw = sqlite3_column_text(statement, 0),
+                  let op = SyncChange.Op(rawValue: sqlite3_column_int64(statement, 1))
+            else { continue }
+            changes.append(SyncChange(
+                recordName: String(cString: raw),
+                op: op,
+                payload: sqlite3_column_text(statement, 2).map { String(cString: $0) },
+                changed: sqlite3_column_double(statement, 3),
+                server: sqlite3_column_blob(statement, 4).map {
+                    Data(bytes: $0, count: Int(sqlite3_column_bytes(statement, 4)))
+                }
+            ))
+        }
+        return changes
+    }
+
+    /// One row by key — the engine asks for records one by one while building a batch, and a
+    /// full-table read per record would turn the first upload into an O(n²) stall.
+    func pendingSyncChange(recordName: String) throws -> SyncChange? {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT op, payload, changed, server FROM sync_pending WHERE record_name = ?",
+                    into: &statement)
+        bind(statement, 1, recordName)
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let op = SyncChange.Op(rawValue: sqlite3_column_int64(statement, 0))
+        else { return nil }
+        return SyncChange(
+            recordName: recordName,
+            op: op,
+            payload: sqlite3_column_text(statement, 1).map { String(cString: $0) },
+            changed: sqlite3_column_double(statement, 2),
+            server: sqlite3_column_blob(statement, 3).map {
+                Data(bytes: $0, count: Int(sqlite3_column_bytes(statement, 3)))
+            }
+        )
+    }
+
+    /// Removes an acknowledged save — unless the row was rewritten during the round trip:
+    /// a favourite re-toggled while the batch was in flight must still be sent.
+    func clearSyncPendingSave(recordName: String, ifUnchangedSince stamp: Double) throws {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("DELETE FROM sync_pending WHERE record_name = ? AND op = 0 AND changed <= ?",
+                    into: &statement)
+        bind(statement, 1, recordName)
+        sqlite3_bind_double(statement, 2, stamp)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+    }
+
+    /// Removes an acknowledged delete. The guard here is the op itself, not a clock: if the
+    /// user re-added the record meanwhile, the row flipped to a save and is kept.
+    func clearSyncPendingDelete(recordName: String) throws {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("DELETE FROM sync_pending WHERE record_name = ? AND op = 1", into: &statement)
+        bind(statement, 1, recordName)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+    }
+
+    /// Stores the server's system fields after a save conflict, so the retry builds on the
+    /// server's version instead of colliding with it a second time. `nil` clears a stale
+    /// base — needed when the server record turns out to have been deleted meanwhile.
+    func attachServerRecord(_ archive: Data?, to recordName: String) throws {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("UPDATE sync_pending SET server = ? WHERE record_name = ? AND op = 0",
+                    into: &statement)
+        if let archive {
+            archive.withUnsafeBytes { bytes in
+                _ = sqlite3_bind_blob(statement, 1, bytes.baseAddress, Int32(bytes.count),
+                                      transientText)
+            }
+        } else {
+            sqlite3_bind_null(statement, 1)
+        }
+        bind(statement, 2, recordName)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+    }
+
+    /// Applies a batch fetched from CloudKit, without journalling any of it back — which is
+    /// what prevents two devices from bouncing the same change for ever.
+    ///
+    /// Two deliberate asymmetries, both the assumed resurrection bias:
+    /// - a remote delete is skipped while this device still holds an unpushed save of the
+    ///   record — the save will go up and the record reappears everywhere;
+    /// - a remote save cancels a pending local delete of the same record.
+    /// In the twisted cases a favourite reappears rather than disappears: one tap re-removes
+    /// it, a silent loss is unrecoverable.
+    func applyRemote(saves: [SyncPayload], deletes: [String]) throws {
+        try open()
+        try exec("BEGIN IMMEDIATE")
+        do {
+            if !deletes.isEmpty { try applyRemoteDeletes(Set(deletes)) }
+            // Collections first: a member may need its collection row from the same batch.
+            for payload in saves where payload.kind == "collection" {
+                try applyRemoteSave(payload)
+            }
+            for payload in saves where payload.kind != "collection" {
+                try applyRemoteSave(payload)
+            }
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    /// A remote delete only carries the record name — a hash. The rows are found by hashing
+    /// what is here: a linear pass, fine for a few thousand rows of personalisation.
+    private func applyRemoteDeletes(_ names: Set<String>) throws {
+        let keep = Set(try pendingSyncChanges().filter { $0.op == .save }.map(\.recordName))
+        let doomed = names.subtracting(keep)
+        guard !doomed.isEmpty else { return }
+
+        for row in try favouriteRows()
+        where doomed.contains(SyncIdentity.favourite(path: row.path, size: row.size).recordName) {
+            var statement: OpaquePointer?
+            defer { sqlite3_finalize(statement) }
+            try prepare("DELETE FROM favourite WHERE path = ? AND size = ?", into: &statement)
+            bind(statement, 1, row.path)
+            sqlite3_bind_int64(statement, 2, row.size)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+        }
+
+        for folder in try shortcutPaths()
+        where doomed.contains(SyncIdentity.shortcut(path: folder).recordName) {
+            var statement: OpaquePointer?
+            defer { sqlite3_finalize(statement) }
+            try prepare("DELETE FROM shortcut WHERE path = ?", into: &statement)
+            bind(statement, 1, folder)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+        }
+
+        for collection in try collectionRows() {
+            for member in try memberRows(of: collection.id)
+            where doomed.contains(SyncIdentity.member(collection: collection.name,
+                                                      path: member.path,
+                                                      size: member.size).recordName) {
+                var statement: OpaquePointer?
+                defer { sqlite3_finalize(statement) }
+                try prepare("DELETE FROM collection_item WHERE collection_id = ? AND path = ? "
+                          + "AND size = ?", into: &statement)
+                sqlite3_bind_int64(statement, 1, collection.id)
+                bind(statement, 2, member.path)
+                sqlite3_bind_int64(statement, 3, member.size)
+                guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+            }
+            if doomed.contains(SyncIdentity.collection(name: collection.name).recordName) {
+                try exec("DELETE FROM collection WHERE id = \(collection.id)")
+            }
+        }
+    }
+
+    private func applyRemoteSave(_ payload: SyncPayload) throws {
+        // A record forged or truncated on the way in is dropped, not half-applied.
+        guard let identity = payload.identity else { return }
+
+        // Resurrection bias: an incoming save beats a pending local delete.
+        var cancel: OpaquePointer?
+        defer { sqlite3_finalize(cancel) }
+        try prepare("DELETE FROM sync_pending WHERE record_name = ? AND op = 1", into: &cancel)
+        bind(cancel, 1, identity.recordName)
+        guard sqlite3_step(cancel) == SQLITE_DONE else { throw Failure.write(message) }
+
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        switch identity {
+        case .favourite(let path, let size):
+            try prepare("INSERT OR IGNORE INTO favourite (path, name, size, added) "
+                      + "VALUES (?, ?, ?, ?)", into: &statement)
+            bind(statement, 1, path)
+            bind(statement, 2, payload.name ?? (path as NSString).lastPathComponent)
+            sqlite3_bind_int64(statement, 3, size)
+            sqlite3_bind_double(statement, 4, payload.added ?? payload.modified)
+        case .shortcut(let path):
+            try prepare("INSERT OR IGNORE INTO shortcut (path, name, added) VALUES (?, ?, ?)",
+                        into: &statement)
+            bind(statement, 1, path)
+            bind(statement, 2, payload.name ?? (path as NSString).lastPathComponent)
+            sqlite3_bind_double(statement, 3, payload.added ?? payload.modified)
+        case .collection(let name):
+            try prepare("INSERT OR IGNORE INTO collection (name, created) VALUES (?, ?)",
+                        into: &statement)
+            bind(statement, 1, name)
+            sqlite3_bind_double(statement, 2, payload.created ?? payload.modified)
+        case .member(let collection, let path, let size):
+            // A member whose collection was deleted on another device recreates it: the
+            // resurrection bias again — deletion versus addition resolves to the addition.
+            guard let owner = try collectionID(named: collection,
+                                               created: payload.modified) else { return }
+            try prepare("INSERT OR IGNORE INTO collection_item "
+                      + "(collection_id, path, name, size, added) VALUES (?, ?, ?, ?, ?)",
+                        into: &statement)
+            sqlite3_bind_int64(statement, 1, owner)
+            bind(statement, 2, path)
+            bind(statement, 3, payload.name ?? (path as NSString).lastPathComponent)
+            sqlite3_bind_int64(statement, 4, size)
+            sqlite3_bind_double(statement, 5, payload.added ?? payload.modified)
+        }
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+    }
+
+    /// First engine start on a device that already holds personalisation — the current user's
+    /// case: every row is journalled once, so everything goes up. No duplicates on the other
+    /// side, since record names are deterministic. `syncSeeded` makes it once ever.
+    @discardableResult
+    func seedSyncJournalIfNeeded() throws -> Bool {
+        try open()
+        guard (try value(forKey: "syncSeeded") ?? 0) == 0 else { return false }
+        try exec("BEGIN IMMEDIATE")
+        do {
+            try journalAllRows()
+            try setValue(1, forKey: "syncSeeded")
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+        notifyJournal()
+        return true
+    }
+
+    /// The CloudKit zone was deleted or its keys reset: local data is the source of truth,
+    /// so everything is queued to be pushed again.
+    func journalAllPersonalisation() throws {
+        try open()
+        try exec("BEGIN IMMEDIATE")
+        do {
+            try journalAllRows()
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+        notifyJournal()
+    }
+
+    /// Saves for every existing row. Deliberately never touches pending deletes: a tombstone
+    /// is not a row, re-journalling must not resurrect what the user just removed.
+    private func journalAllRows() throws {
+        let now = Date().timeIntervalSince1970
+        for row in try favouriteRows() {
+            try journal(.save, .favourite(path: row.path, size: row.size),
+                        payload: .favourite(path: row.path, name: row.name, size: row.size,
+                                            added: row.added, modified: now))
+        }
+        for row in try shortcutRows() {
+            try journal(.save, .shortcut(path: row.path),
+                        payload: .shortcut(path: row.path, name: row.name, added: row.added,
+                                           modified: now))
+        }
+        for collection in try collectionRows() {
+            try journal(.save, .collection(name: collection.name),
+                        payload: .collection(name: collection.name, created: collection.created,
+                                             modified: now))
+            for member in try memberRows(of: collection.id) {
+                try journal(.save, .member(collection: collection.name, path: member.path,
+                                           size: member.size),
+                            payload: .member(collection: collection.name, path: member.path,
+                                             name: member.name, size: member.size,
+                                             added: member.added, modified: now))
+            }
+        }
+    }
+
+    /// Another person's iCloud account signed in: their data must never mix with the previous
+    /// owner's. Everything personal goes; the index stays — it is rebuildable, not personal.
+    func wipePersonalisation() throws {
+        try open()
+        try exec("BEGIN IMMEDIATE")
+        do {
+            try exec("DELETE FROM collection")
+            try exec("DELETE FROM favourite")
+            try exec("DELETE FROM shortcut")
+            try exec("DELETE FROM sync_pending")
+            // Nothing old is left to seed, and the new account's data has yet to arrive.
+            try setValue(1, forKey: "syncSeeded")
+            try setValue(0, forKey: "syncFetched")
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    /// Which iCloud account this database's personalisation belongs to.
+    func syncAccountID() throws -> String? {
+        try open()
+        return try textValue(forKey: "syncAccount")
+    }
+
+    func setSyncAccountID(_ id: String) throws {
+        try open()
+        try setTextValue(id, forKey: "syncAccount")
+    }
+
+    /// Distinguishes "empty because nothing has arrived yet" from "empty because there is
+    /// nothing": only a completed first fetch may claim the latter.
+    func syncFetchedOnce() throws -> Bool {
+        try open()
+        return (try value(forKey: "syncFetched") ?? 0) == 1
+    }
+
+    func setSyncFetchedOnce() throws {
+        try open()
+        try setValue(1, forKey: "syncFetched")
+    }
+
+    func personalisationIsEmpty() throws -> Bool {
+        try open()
+        return try scalar("SELECT (SELECT count(*) FROM favourite) "
+                        + "+ (SELECT count(*) FROM shortcut) "
+                        + "+ (SELECT count(*) FROM collection)") == 0
+    }
+
+    // Row readers shared by the journal and the remote-delete scan.
+
+    private func favouriteRows() throws -> [(path: String, name: String, size: Int64,
+                                             added: Double)] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT path, name, size, added FROM favourite", into: &statement)
+        var rows: [(String, String, Int64, Double)] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let path = sqlite3_column_text(statement, 0),
+                  let name = sqlite3_column_text(statement, 1) else { continue }
+            rows.append((String(cString: path), String(cString: name),
+                         sqlite3_column_int64(statement, 2), sqlite3_column_double(statement, 3)))
+        }
+        return rows
+    }
+
+    private func shortcutRows() throws -> [(path: String, name: String, added: Double)] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT path, name, added FROM shortcut", into: &statement)
+        var rows: [(String, String, Double)] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let path = sqlite3_column_text(statement, 0),
+                  let name = sqlite3_column_text(statement, 1) else { continue }
+            rows.append((String(cString: path), String(cString: name),
+                         sqlite3_column_double(statement, 2)))
+        }
+        return rows
+    }
+
+    private func shortcutPaths() throws -> [String] {
+        try shortcutRows().map(\.path)
+    }
+
+    private func collectionRows() throws -> [(id: Int64, name: String, created: Double)] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT id, name, created FROM collection", into: &statement)
+        var rows: [(Int64, String, Double)] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let name = sqlite3_column_text(statement, 1) else { continue }
+            rows.append((sqlite3_column_int64(statement, 0), String(cString: name),
+                         sqlite3_column_double(statement, 2)))
+        }
+        return rows
+    }
+
+    private func collectionRow(_ id: Int64) throws -> (name: String, created: Double)? {
+        try collectionRows().first { $0.id == id }.map { ($0.name, $0.created) }
+    }
+
+    private func memberRows(of collectionID: Int64) throws -> [(path: String, name: String,
+                                                                size: Int64, added: Double)] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT path, name, size, added FROM collection_item "
+                  + "WHERE collection_id = ?", into: &statement)
+        sqlite3_bind_int64(statement, 1, collectionID)
+        var rows: [(String, String, Int64, Double)] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let path = sqlite3_column_text(statement, 0),
+                  let name = sqlite3_column_text(statement, 1) else { continue }
+            rows.append((String(cString: path), String(cString: name),
+                         sqlite3_column_int64(statement, 2), sqlite3_column_double(statement, 3)))
+        }
+        return rows
+    }
+
+    private func collectionID(named name: String, created: Double) throws -> Int64? {
+        var insert: OpaquePointer?
+        defer { sqlite3_finalize(insert) }
+        try prepare("INSERT OR IGNORE INTO collection (name, created) VALUES (?, ?)", into: &insert)
+        bind(insert, 1, name)
+        sqlite3_bind_double(insert, 2, created)
+        guard sqlite3_step(insert) == SQLITE_DONE else { throw Failure.write(message) }
+
+        var lookup: OpaquePointer?
+        defer { sqlite3_finalize(lookup) }
+        try prepare("SELECT id FROM collection WHERE name = ?", into: &lookup)
+        bind(lookup, 1, name)
+        guard sqlite3_step(lookup) == SQLITE_ROW else { return nil }
+        return sqlite3_column_int64(lookup, 0)
     }
 
     // MARK: Migration
@@ -925,6 +1488,26 @@ actor IndexStore {
         bind(statement, 1, key)
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
         return sqlite3_column_int64(statement, 0)
+    }
+
+    private func textValue(forKey key: String) throws -> String? {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT v FROM meta WHERE k = ?", into: &statement)
+        bind(statement, 1, key)
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let raw = sqlite3_column_text(statement, 0) else { return nil }
+        return String(cString: raw)
+    }
+
+    private func setTextValue(_ value: String, forKey key: String) throws {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                    into: &statement)
+        bind(statement, 1, key)
+        bind(statement, 2, value)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
     }
 
     private func setValue(_ value: Int64, forKey key: String) throws {

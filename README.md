@@ -64,6 +64,7 @@ Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copi
 | `Keo/Freebox/` | `Item` et `FolderContents`, transports, client, asset vidéo authentifié |
 | `Keo/Media/` | Pipeline de vignettes, décodage ImageIO, cache disque LRU, index des dates |
 | `Keo/Downloads/` | File d'attente, pellicule, feuille de partage |
+| `Keo/Sync/` | Miroir CloudKit de la personnalisation : identité des enregistrements, moteur |
 | `Keo/UI/` | Association, grille, visionneuse plein écran |
 
 Les dépendances vont vers l'intérieur : `UI` → `Media`/`Downloads` → `Freebox`. Rien dans
@@ -232,11 +233,108 @@ une ligne de l'index. Un balayage, un « Tout relire depuis zéro », ou un doss
 soir ne doivent jamais emporter les favoris de quelqu'un. C'est vérifié : les checks effacent
 tout l'index et exigent que favoris, collections et membres soient toujours là.
 
-Conséquence assumée : tout est **local à l'appareil**. Supprimer l'app les emporte. Une
-synchronisation iCloud serait un autre chantier.
+Elles sont aussi la seule chose qui mérite de survivre à l'appareil : c'est exactement ce que
+la synchronisation iCloud ci-dessous miroite — et rien d'autre.
 
 Une collection emprunte à l'index la date de prise de vue qu'il connaît déjà, donc elle se
 trie et se regroupe exactement comme un dossier.
+
+## Synchronisation iCloud de la personnalisation
+
+`Keo/Sync/` miroite les quatre tables de personnalisation — `favourite`, `shortcut`,
+`collection`, `collection_item` — dans la base **privée** CloudKit, via `CKSyncEngine`.
+Framework système, donc toujours zéro dépendance. L'index, lui, **n'est pas synchronisé** :
+il est volumineux et se reconstruit depuis le NAS ; la personnalisation, elle, est
+irremplaçable et pèse quelques centaines de Ko.
+
+**SQLite reste la source de vérité.** CloudKit est un miroir, et le moteur ne décide jamais
+rien : il pousse ce que le journal lui donne et applique ce qu'il reçoit.
+
+Trois idées portent tout le reste :
+
+- **`recordName` déterministe** (`SyncModel.swift`) : le nom d'un enregistrement est un hash
+  stable de l'action de l'utilisateur — « ce fichier est un favori », « ce dossier est
+  épinglé ». Deux appareils qui ajoutent le même favori écrivent *le même* enregistrement :
+  l'ajout est idempotent et le conflit de doublon disparaît par construction. Une collection
+  est identifiée par son **nom** ; la renommer est donc une suppression de l'ancienne
+  identité plus une création de la nouvelle, membres compris — coûteux en enregistrements,
+  mais deux appareils qui créent « Vacances » chacun de leur côté n'en font qu'une.
+- **Un journal de changements** (`sync_pending` dans `IndexStore`), écrit **dans la même
+  transaction** que le changement qu'il reflète. Un kill ne peut donc ni perdre une
+  modification ni en inventer une : la ligne survit jusqu'à l'acquittement du serveur, et la
+  renvoyer est inoffensif puisque le nom est déterministe. Une ligne par enregistrement —
+  ajouter puis retirer se replie sur la dernière opération. Appliquer un changement *reçu*
+  ne passe jamais par le journal : c'est ce qui interdit à deux appareils de se renvoyer le
+  même changement pour toujours.
+- **Dernier écrivain gagne, par enregistrement, avec un biais assumé vers la résurrection.**
+  Une suppression distante est ignorée tant qu'un ajout local n'est pas encore poussé ; un
+  ajout distant annule une suppression locale en attente. Dans les cas tordus, un favori
+  réapparaît plutôt qu'il ne disparaît : un favori en trop se re-supprime en un tap, un favori
+  perdu en silence est irrécupérable. Les horloges ne départagent que deux *ajouts* du même
+  enregistrement — dont le contenu est identique par construction, l'identité étant dans la
+  clé — donc une horloge décalée peut au pire choisir la date d'ajout de l'autre appareil,
+  jamais perdre un favori.
+
+### Les cas limites, et ce que fait le code
+
+| Cas | Réponse |
+|---|---|
+| Pas de compte, iCloud coupé pour Keo, contrôle parental | `status = .off`, l'app est exactement l'app d'avant, en local, avec une ligne discrète en bas des onglets de personnalisation. Jamais de dialogue |
+| Changement de compte iCloud | L'identifiant du compte est mémorisé dans `meta`. Un **autre** compte qui arrive efface la personnalisation et le journal (`wipePersonalisation`) : on ne mélange jamais deux personnes, ni en poussant les données de l'un chez l'autre, ni l'inverse. Une **déconnexion** n'efface rien : les données restent locales |
+| Hors ligne prolongé | Le journal accumule, replié par enregistrement ; au retour, `CKSyncEngine` pousse et les noms déterministes absorbent les doublons |
+| App tuée avec des envois en attente | Le journal est dans la transaction du changement ; l'état du moteur est persisté (`sync-state.json`). Une ligne ne sort du journal qu'à l'acquittement, et seulement si elle n'a pas été réécrite pendant l'aller-retour |
+| Réinstallation | Tant que la première récupération n'est pas terminée (`syncFetched`), un onglet vide affiche « Récupération en cours » au lieu de « Aucun favori » : vide-parce-que-rien-n'est-arrivé n'est pas vide-parce-qu'il-n'y-a-rien |
+| Premier lancement avec des données locales (l'utilisateur actuel) | `seedSyncJournalIfNeeded` journalise tout l'existant, une fois (`syncSeeded`). Les noms déterministes garantissent zéro doublon côté serveur |
+| Zone supprimée dans Réglages → iCloud → Stockage | Le local est la source de vérité : la zone est recréée et tout re-remonte — sans transformer les suppressions en attente en ajouts |
+| Quota plein | Message discret, le journal garde tout, ça repart quand la place revient |
+| `retryAfter`, débit limité, jeton de changement expiré | Gérés par `CKSyncEngine` lui-même — c'est la raison de ce choix |
+| `serverRecordChanged` | Dernier écrivain gagne ; si le local gagne, le nouvel essai est construit **sur** l'enregistrement serveur (system fields archivés dans le journal) pour ne pas re-collisionner |
+| Renommage contre renommage d'une collection | Chacun étant suppression + création, il reste les deux collections, avec les mêmes membres : visible et réparable en un geste, plutôt qu'un des deux renommages perdu en silence |
+| Suppression contre ajout de membre | L'ajout gagne : un membre reçu pour une collection disparue la recrée |
+| Boucle de suppression | Impossible : l'application d'un changement distant ne journalise rien, donc rien ne repart |
+
+### Configuration — ce que le propriétaire doit faire à la main
+
+Le dépôt contient déjà `Keo/Keo.entitlements` (CloudKit, conteneur
+`iCloud.fr.yieldstudio.keo`, `aps-environment`) et le mode background `remote-notification`.
+Le build **simulateur** passe tel quel. Pour un appareil, une fois, dans Xcode avec le compte
+de l'équipe ton équipe Apple :
+
+1. Cible Keo → *Signing & Capabilities* → vérifier que les capacités **iCloud → CloudKit**
+   (conteneur `iCloud.fr.yieldstudio.keo`) et **Push Notifications** apparaissent ; la
+   signature automatique enregistre alors l'App ID et crée le conteneur.
+2. Premier lancement en debug : le schéma (type `Personalisation`, champs chiffrés) se crée
+   tout seul dans l'environnement **Development** au premier enregistrement.
+3. Avant toute distribution : [CloudKit Console](https://icloud.developer.apple.com) →
+   conteneur → *Deploy Schema Changes* vers **Production**. Sans ce clic, une build
+   TestFlight/App Store ne peut rien écrire.
+
+### Vérifier le reste à la main
+
+Tout ce qui est pur — noms, journal, acquittements, résurrection, renommage, graine, zone,
+changement de compte — est couvert par `Tests/sync.swift`. Ce qui exige le vrai iCloud ne se
+simule pas :
+
+- **Deux appareils**, même compte : favori ajouté sur A → apparaît sur B en quelques
+  secondes ; supprimé sur B → disparaît sur A sans revenir.
+- **Hors ligne** : mode avion sur A, dix modifications, mode avion sur B, modifications
+  contradictoires, puis réseau : convergence sans doublon, le favori contesté survit.
+- **Kill** : modifier puis tuer l'app depuis le sélecteur avant la synchro ; relancer : la
+  modification part quand même, une seule fois (visible dans la CloudKit Console).
+- **Réinstallation** : supprimer l'app, réinstaller : « Récupération en cours » puis tout
+  revient.
+- **Zone supprimée** : Réglages → compte → iCloud → Stockage → Keo → Supprimer les données ;
+  au lancement suivant tout re-remonte.
+- **Changement de compte** : se déconnecter d'iCloud (les données restent), se connecter avec
+  un autre compte (elles s'effacent, celles de l'autre compte arrivent).
+
+### Migration et refus
+
+Rien à migrer : les tables locales ne changent pas, le journal s'y ajoute. Au premier
+lancement avec un compte, l'existant remonte tout seul (la graine ci-dessus). Pas de réglage
+dans l'app : iOS fournit déjà l'interrupteur (Réglages → compte → iCloud → Keo), et le couper
+ramène simplement au comportement d'avant — tout local, rien de perdu, le journal attend. Le
+retirer du système pour le redonder dans l'app serait un deuxième endroit où se tromper.
 
 ## Timeline
 
@@ -346,7 +444,9 @@ swiftc -swift-version 6 -D DEBUG Keo/Freebox/Item.swift Keo/Freebox/Transport.sw
   Keo/Freebox/MediaSection.swift Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift \
   Keo/Media/FolderStamp.swift Keo/Media/WalkOutcome.swift Keo/Media/IndexStore.swift \
   Keo/Media/VideoDate.swift Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift \
-  Tests/main.swift Tests/store.swift Tests/videodatechecks.swift \
+  Keo/Sync/SyncModel.swift \
+  Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
+  Tests/sync.swift \
   -o /tmp/keocheck && /tmp/keocheck
 ```
 
@@ -356,7 +456,9 @@ des fichiers disparus, survie des sous-arbres ignorés, adoption après renommag
 depuis les anciens JSON.
 
 Couvre la garantie de lecture seule, l'enveloppe `{success, result}`, l'encodage des chemins,
-la classification des médias, l'éviction LRU et l'arithmétique de progression.
+la classification des médias, l'éviction LRU, l'arithmétique de progression, et toute la
+partie pure de la synchronisation iCloud (`Tests/sync.swift`) — le moteur CloudKit lui-même ne
+se teste qu'à la main, voir plus haut.
 
 ## Pièges de l'API Freebox, vérifiés sur la box
 

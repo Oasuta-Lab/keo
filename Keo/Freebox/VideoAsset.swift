@@ -35,7 +35,7 @@ private struct PendingRequest: @unchecked Sendable {
 /// `@unchecked` for the same reason: the stored state is immutable apart from one
 /// lock-protected dictionary.
 private final class Loader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Sendable {
-    let queue = DispatchQueue(label: "fr.yieldstudio.keo.assetloader")
+    let queue = DispatchQueue(label: "com.oasutalab.dev.assetloader")
 
     private let origin: URL
     private let token: String

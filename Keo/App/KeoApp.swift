@@ -5,6 +5,7 @@ struct KeoApp: App {
     @StateObject private var store = Store()
     @StateObject private var downloader = Downloader()
     @StateObject private var indexer = Indexer()
+    @StateObject private var sync = CloudSync()
 
     var body: some Scene {
         WindowGroup {
@@ -18,7 +19,11 @@ struct KeoApp: App {
             .environmentObject(store)
             .environmentObject(downloader)
             .environmentObject(indexer)
+            .environmentObject(sync)
             .preferredColorScheme(.dark)
+            // Independent of the Freebox pairing: favourites can come back from iCloud
+            // before the box has ever answered.
+            .task { await sync.start() }
         }
     }
 }

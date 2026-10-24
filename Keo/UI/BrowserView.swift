@@ -10,6 +10,7 @@ struct BrowserView: View {
 
     @EnvironmentObject private var store: Store
     @EnvironmentObject private var downloader: Downloader
+    @EnvironmentObject private var sync: CloudSync
 
     /// Split by kind once, at load. Filtering in computed properties re-scanned the whole
     /// listing on every body evaluation, which is what made large folders stutter.
@@ -142,6 +143,8 @@ struct BrowserView: View {
             } else if unindexed > 0, !selecting, !downloader.isRunning {
                 UnindexedChip(count: unindexed) { showingIndexing = true }
                     .padding(.bottom, 8)
+            } else if source == .favourites, !selecting, !downloader.isRunning {
+                SyncFootnote().padding(.bottom, 8)
             } else if source.isRoot, !selecting, !downloader.isRunning {
                 BuildStampLabel().padding(.bottom, 8)
             }
@@ -192,6 +195,12 @@ struct BrowserView: View {
         }
         .task(id: source.id) { await load() }
         .task(id: source.id) { await refreshLibrary() }
+        // Favourites and collection members arrived from another device land without a tap
+        // here: repaint the local sources on each sync transition.
+        .onChange(of: sync.status) {
+            guard !source.isOnNAS else { return }
+            Task { await loadLocal() }
+        }
         .onChange(of: selection) { _, _ in Task { await refreshSelectionState() } }
         .confirmationDialog("Ajouter à une collection", isPresented: $choosingCollection,
                             titleVisibility: .visible) {
@@ -295,7 +304,12 @@ struct BrowserView: View {
             ContentUnavailableView("Connexion impossible", systemImage: "externaldrive.badge.xmark",
                                    description: Text(error))
         } else if contents.isEmpty {
-            ContentUnavailableView("Dossier vide", systemImage: "folder")
+            if source == .favourites, sync.status == .recovering {
+                // Empty because nothing has arrived yet, not because there is nothing.
+                SyncRecoveryView()
+            } else {
+                ContentUnavailableView("Dossier vide", systemImage: "folder")
+            }
         }
     }
 

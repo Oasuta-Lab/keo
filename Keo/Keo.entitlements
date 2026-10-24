@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Base privée uniquement : la personnalisation n'est jamais partagée ni publique. -->
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.oasutalab.dev</string>
+	</array>
+	<!-- CKSyncEngine s'abonne aux pushes silencieux pour apprendre les changements des
+	     autres appareils. Xcode bascule la valeur en production à la distribution. -->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>

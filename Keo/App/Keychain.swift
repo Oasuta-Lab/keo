@@ -2,7 +2,9 @@ import Foundation
 import Security
 
 enum Keychain {
-    private static let service = "fr.yieldstudio.keo"
+    /// Derived rather than written out: a hardcoded service silently orphans every stored
+    /// token the day the bundle identifier changes.
+    private static let service = Bundle.main.bundleIdentifier ?? "keo"
 
     private static func query(_ account: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,

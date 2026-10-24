@@ -48,6 +48,12 @@
 	<string>Keo se connecte à votre NAS sur le réseau local pour afficher vos photos et vidéos.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- Pushes silencieux CloudKit : CKSyncEngine apprend ainsi qu'un autre appareil
+	     a modifié les favoris, sans interroger le serveur en boucle. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

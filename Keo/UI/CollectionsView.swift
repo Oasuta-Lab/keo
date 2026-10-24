@@ -4,6 +4,7 @@ import SwiftUI
 struct CollectionsView: View {
     let client: FreeboxClient
 
+    @EnvironmentObject private var sync: CloudSync
     @State private var collections: [IndexStore.Collection] = []
     @State private var naming = false
     @State private var renaming: IndexStore.Collection?
@@ -12,13 +13,19 @@ struct CollectionsView: View {
     var body: some View {
         List {
             if collections.isEmpty {
-                ContentUnavailableView {
-                    Label("Aucune collection", systemImage: "square.stack")
-                } description: {
-                    Text("Range tes photos par thème. Une photo peut appartenir à plusieurs "
-                       + "collections, et rien n'est écrit sur le NAS.")
-                } actions: {
-                    Button("Nouvelle collection") { startCreating() }
+                Group {
+                    if sync.status == .recovering {
+                        SyncRecoveryView()
+                    } else {
+                        ContentUnavailableView {
+                            Label("Aucune collection", systemImage: "square.stack")
+                        } description: {
+                            Text("Range tes photos par thème. Une photo peut appartenir à plusieurs "
+                               + "collections, et rien n'est écrit sur le NAS.")
+                        } actions: {
+                            Button("Nouvelle collection") { startCreating() }
+                        }
+                    }
                 }
                 .listRowBackground(Color.clear)
             }
@@ -72,7 +79,11 @@ struct CollectionsView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) { SyncFootnote() }
         .task { await reload() }
+        // A collection created on another device lands without a tap here: repaint on each
+        // sync transition rather than waiting for the next visit.
+        .onChange(of: sync.status) { Task { await reload() } }
     }
 
     private func startCreating() {
