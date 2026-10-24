@@ -38,12 +38,8 @@ struct BrowserView: View {
     /// True while the grid shows what the index remembers rather than a fresh listing.
     @State private var fromCache = false
 
-    @State private var favouriteCount = 0
     @State private var collections: [IndexStore.Collection] = []
     @State private var shortcuts: [Item] = []
-    @State private var namingCollection = false
-    @State private var collectionName = ""
-    @State private var renaming: IndexStore.Collection?
     @State private var choosingCollection = false
     /// Paths of folders already pinned, so a tile's menu can say the right thing.
     @State private var pinned: Set<String> = []
@@ -198,39 +194,21 @@ struct BrowserView: View {
             }
         }
         .task(id: source.id) { await load() }
-        .task(id: favouriteCount) { await refreshLibrary() }
+        .task(id: source.id) { await refreshLibrary() }
         .onChange(of: selection) { _, _ in Task { await refreshSelectionState() } }
         .confirmationDialog("Ajouter à une collection", isPresented: $choosingCollection,
                             titleVisibility: .visible) {
             ForEach(collections) { collection in
                 Button(collection.name) { addSelection(to: collection) }
             }
-            Button("Nouvelle collection…") {
-                renaming = nil
-                collectionName = ""
-                namingCollection = true
-            }
             Button("Annuler", role: .cancel) {}
         }
-        .alert(renaming == nil ? "Nouvelle collection" : "Renommer",
-               isPresented: Binding(get: { namingCollection || renaming != nil },
-                                    set: { if !$0 { namingCollection = false; renaming = nil } })) {
-            TextField("Nom", text: $collectionName)
-            Button("Annuler", role: .cancel) { namingCollection = false; renaming = nil }
-            Button("Valider") {
-                let name = collectionName
-                let target = renaming
-                namingCollection = false
-                renaming = nil
-                Task {
-                    if let target {
-                        try? await IndexStore.shared.renameCollection(target.id, to: name)
-                    } else {
-                        try? await IndexStore.shared.createCollection(named: name)
-                    }
-                    await refreshLibrary()
-                }
+        .confirmationDialog("Ajouter à une collection", isPresented: $choosingCollection,
+                            titleVisibility: .visible) {
+            ForEach(collections) { collection in
+                Button(collection.name) { addSelection(to: collection) }
             }
+            Button("Annuler", role: .cancel) {}
         }
         .task {
             // A relaunch after iOS killed the app mid-index still has somewhere to pick up.
@@ -261,72 +239,29 @@ struct BrowserView: View {
         .padding(.vertical, 2)
     }
 
-    /// Favourites, collections and shortcuts, shown above the folders at the root only.
+    /// Pinned folders, at the root only. Favourites and collections have their own tabs now,
+    /// so repeating them here would be two doors to the same room.
     @ViewBuilder
     private var library: some View {
-        if source.isRoot, !selecting {
+        if source.isRoot, !selecting, !shortcuts.isEmpty {
             VStack(spacing: 0) {
-                NavigationLink(value: BrowserSource.favourites) {
-                    LibraryRow(symbol: "heart.fill", title: "Favoris",
-                               detail: favouriteCount > 0 ? favouriteCount.formatted() : nil,
-                               dimmed: favouriteCount == 0)
-                }
-                .buttonStyle(.plain)
+                Text("Raccourcis")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 4)
 
-                ForEach(collections) { collection in
-                    NavigationLink(value: BrowserSource.collection(id: collection.id,
-                                                                   name: collection.name)) {
-                        LibraryRow(symbol: "square.stack", title: collection.name,
-                                   detail: collection.count.formatted(), dimmed: false)
+                ForEach(shortcuts) { folder in
+                    NavigationLink(value: BrowserSource.folder(folder)) {
+                        LibraryRow(symbol: "folder.fill", title: folder.name, detail: nil)
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
-                        Button("Renommer…", systemImage: "pencil") {
-                            renaming = collection
-                            collectionName = collection.name
-                        }
-                        Button("Supprimer", systemImage: "trash", role: .destructive) {
-                            Task {
-                                try? await IndexStore.shared.deleteCollection(collection.id)
-                                await refreshLibrary()
-                            }
-                        }
-                    }
-                }
-
-                Button {
-                    renaming = nil
-                    collectionName = ""
-                    namingCollection = true
-                } label: {
-                    LibraryRow(symbol: "plus", title: "Nouvelle collection",
-                               detail: nil, dimmed: true)
-                }
-                .buttonStyle(.plain)
-
-                if !shortcuts.isEmpty {
-                    Text("Raccourcis")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
-                        .padding(.top, 14)
-                        .padding(.bottom, 4)
-
-                    ForEach(shortcuts) { folder in
-                        NavigationLink(value: BrowserSource.folder(folder)) {
-                            LibraryRow(symbol: "folder.fill", title: folder.name,
-                                       detail: nil, dimmed: false)
-                        }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button("Retirer des raccourcis", systemImage: "star.slash",
-                                   role: .destructive) {
-                                Task {
-                                    try? await IndexStore.shared.setShortcut(folder, false)
-                                    await refreshLibrary()
-                                }
-                            }
+                        Button("Retirer des raccourcis", systemImage: "star.slash",
+                               role: .destructive) {
+                            togglePin(folder)
                         }
                     }
                 }
@@ -339,8 +274,6 @@ struct BrowserView: View {
 
     private func refreshLibrary() async {
         collections = (try? await IndexStore.shared.collections()) ?? []
-        guard source.isRoot else { return }
-        favouriteCount = (try? await IndexStore.shared.favouriteCount()) ?? 0
         shortcuts = (try? await IndexStore.shared.shortcuts()) ?? []
         pinned = Set(shortcuts.map(\.path))
     }
@@ -836,16 +769,14 @@ private struct LibraryRow: View {
     let symbol: String
     let title: String
     let detail: String?
-    let dimmed: Bool
 
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: symbol)
                 .font(.body)
-                .foregroundStyle(dimmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
+                .foregroundStyle(.tint)
                 .frame(width: 26)
             Text(title)
-                .foregroundStyle(dimmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
             Spacer()
             if let detail {
                 Text(detail)

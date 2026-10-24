@@ -213,8 +213,14 @@ Deux niveaux, parce qu'ils répondent à deux gestes différents :
   dans plusieurs collections.
 - **Raccourcis** — des dossiers épinglés, par appui long sur leur tuile.
 
-Les trois apparaissent en haut de la racine uniquement, et disparaissent dès qu'on entre dans
-un dossier.
+**Favoris** et **Collections** sont des onglets ; les **raccourcis** restent en haut de la
+racine de l'onglet Parcourir.
+
+Un tiroir latéral aurait été la forme évidente, et c'est précisément ce que les guidelines
+d'Apple écartent : une navigation cachée derrière une icône est une navigation que personne ne
+trouve. Les onglets sont ce que Photos utilise pour le même découpage. Retaper l'onglet actif
+remonte à sa racine, et sur iOS 26 la barre se réduit au défilement pour ne rien voler à la
+grille.
 
 Le mot « collection » est délibéré : **rien n'est créé sur le NAS**. « Album » laisserait croire
 qu'un dossier a été écrit sur la box, ce que Keo ne fait jamais.
