@@ -135,6 +135,26 @@ assert(contents.selectable.map(\.name) == ["clip.mp4", "x.jpg", "notes.pdf"],
      + "et sans date le tri retombe sur le nom")
 assert(FolderContents([]).isEmpty)
 
+// MARK: - Date affichée en plein écran
+
+let shot = Date(timeIntervalSince1970: 1_000_000)
+let copied = Date(timeIntervalSince1970: 2_000_000)
+
+let fromExif = MediaDate(capture: shot, modification: copied)
+assert(fromExif?.source == .capture, "la date de prise de vue prime sur le mtime")
+assert(fromExif?.date == shot)
+assert(fromExif?.text.hasPrefix("Modifié le") == false,
+       "une vraie date de prise de vue s'affiche nue")
+
+let fromMtime = MediaDate(capture: nil, modification: copied)
+assert(fromMtime?.source == .modification)
+assert(fromMtime?.text.hasPrefix("Modifié le") == true,
+       "sans EXIF on annonce que c'est la date de modification, pas la prise de vue")
+
+assert(MediaDate(capture: nil, modification: nil) == nil,
+       "sans aucune date, on n'affiche rien plutôt qu'une date inventée")
+assert(MediaDate(capture: shot, modification: nil)?.source == .capture)
+
 // MARK: - Acceptation d'un aperçu embarqué
 
 func size(_ w: CGFloat, _ h: CGFloat) -> CGSize { CGSize(width: w, height: h) }
@@ -250,4 +270,4 @@ assert(job.position == 4, "la position ne dépasse pas le total")
 assert(DownloadJob(total: 0, completed: 0, currentName: "", currentFraction: 0).fraction == 0,
        "un lot vide ne divise pas par zéro")
 
-print("ok — lecture seule, envelope, chemins, classification, aperçus, tri, éviction, progression")
+print("ok — lecture seule, envelope, chemins, classification, aperçus, dates, tri, éviction, progression")

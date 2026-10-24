@@ -60,6 +60,19 @@ Le découpage en paquets SPM a été volontairement différé : à cette taille 
 cérémonie sans réduire la complexité. Les frontières sont déjà posées pour le faire le jour où
 plusieurs personnes travaillent dessus en parallèle.
 
+## Date affichée en plein écran
+
+Le nom et la date apparaissent en haut, dans une capsule translucide.
+
+La date vient de l'**EXIF** (`DateTimeOriginal`) quand le fichier la porte — lisible
+gratuitement, puisque la visionneuse télécharge déjà l'original. Pour les vidéos, c'est
+`creationDate` de l'asset. À défaut, la date de modification est affichée **préfixée de
+« Modifié le »** : une date de copie ne doit jamais passer pour une date de prise de vue.
+Sans aucune date, rien ne s'affiche plutôt qu'une date inventée.
+
+C'est aussi la réponse à la limite du tri : en plein écran, la vraie date est connue. La
+grille, elle, ne peut pas trier là-dessus sans télécharger un bout de chaque fichier.
+
 ## Tri
 
 Menu « … » → trois ordres, mémorisés pour toute l'app : plus récentes d'abord (défaut),

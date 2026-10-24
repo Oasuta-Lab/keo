@@ -14,6 +14,8 @@ struct ViewerView: View {
     @State private var drag: CGSize = .zero
     /// Pinched in, the scroll view owns the pan — stay out of its way.
     @State private var zoomed = false
+    /// Capture dates discovered while opening a file, keyed by path.
+    @State private var captured: [Item.ID: Date] = [:]
 
     init(client: FreeboxClient, items: [Item], start: Item) {
         self.client = client
@@ -48,7 +50,8 @@ struct ViewerView: View {
         ScrollView(.horizontal) {
             LazyHStack(spacing: 0) {
                 ForEach(items) { item in
-                    Page(item: item, client: client, zoomed: $zoomed)
+                    Page(item: item, client: client, zoomed: $zoomed,
+                         onCaptureDate: { captured[item.id] = $0 })
                         .containerRelativeFrame(.horizontal)
                         .id(item.id)
                 }
@@ -62,10 +65,36 @@ struct ViewerView: View {
         .ignoresSafeArea()
     }
 
+    private var caption: MediaDate? {
+        guard let current else { return nil }
+        return MediaDate(capture: captured[current.id], modification: current.modified)
+    }
+
     private var chrome: some View {
-        HStack {
+        HStack(spacing: 12) {
             Button { dismiss() } label: { Glyph("xmark") }
-            Spacer()
+
+            Spacer(minLength: 0)
+
+            if let current {
+                VStack(spacing: 1) {
+                    Text(current.name)
+                        .font(.footnote.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if let caption {
+                        Text(caption.text)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(.ultraThinMaterial, in: Capsule())
+            }
+
+            Spacer(minLength: 0)
             Menu {
                 if let current {
                     if current.isMedia {
@@ -130,12 +159,16 @@ private struct Page: View {
     let item: Item
     let client: FreeboxClient
     @Binding var zoomed: Bool
+    let onCaptureDate: (Date) -> Void
 
     var body: some View {
         switch item.kind {
-        case .video: VideoPage(item: item, client: client)
-        case .other: DocumentPage(item: item, client: client)
-        default: ImagePage(item: item, client: client, zoomed: $zoomed)
+        case .video:
+            VideoPage(item: item, client: client, onCaptureDate: onCaptureDate)
+        case .other:
+            DocumentPage(item: item, client: client)
+        default:
+            ImagePage(item: item, client: client, zoomed: $zoomed, onCaptureDate: onCaptureDate)
         }
     }
 }
@@ -144,6 +177,7 @@ private struct ImagePage: View {
     let item: Item
     let client: FreeboxClient
     @Binding var zoomed: Bool
+    let onCaptureDate: (Date) -> Void
 
     @State private var image: UIImage?
     @State private var sharp = false
@@ -175,6 +209,9 @@ private struct ImagePage: View {
             }
             defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
 
+            // The full file is already here, so the real shooting date is free to read.
+            if let taken = ImageDecoding.captureDate(fileAt: file) { onCaptureDate(taken) }
+
             // ponytail: 3000 px cap keeps a big scan off the memory ceiling; raise it if you
             // routinely pinch deeper than that.
             if let full = ImageDecoding.downsample(fileAt: file, maxPixel: 3000) {
@@ -189,6 +226,7 @@ private struct ImagePage: View {
 private struct VideoPage: View {
     let item: Item
     let client: FreeboxClient
+    let onCaptureDate: (Date) -> Void
 
     @State private var source: AuthenticatedAsset?   // owns the resource loader
     @State private var player: AVPlayer?
@@ -216,6 +254,11 @@ private struct VideoPage: View {
                 self.source = authenticated
                 self.player = player
                 player.play()
+
+                if let stamp = try? await authenticated.asset.load(.creationDate),
+                   let taken = try? await stamp.load(.dateValue) {
+                    onCaptureDate(taken)
+                }
 
                 await reportFailure(of: playerItem)
             } catch {

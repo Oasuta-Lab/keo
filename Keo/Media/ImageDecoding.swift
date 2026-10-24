@@ -30,6 +30,31 @@ enum ImageDecoding {
                                       exifOrientation: properties[kCGImagePropertyOrientation] as? Int)
     }
 
+    /// The date the shutter actually fired, read from the file's metadata. The listing only
+    /// carries the file's modification time, which on a NAS is often the day it was copied.
+    static func captureDate(fileAt url: URL) -> Date? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, sourceOptions),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any] else {
+            return nil
+        }
+        let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any]
+        let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
+
+        let stamp = exif?[kCGImagePropertyExifDateTimeOriginal] as? String
+                 ?? exif?[kCGImagePropertyExifDateTimeDigitized] as? String
+                 ?? tiff?[kCGImagePropertyTIFFDateTime] as? String
+        return stamp.flatMap(exifFormatter.date(from:))
+    }
+
+    /// EXIF stamps look like "2026:10:24 15:03:41", with no timezone — read as local time.
+    private static let exifFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
+        return formatter
+    }()
+
     /// JPEG has no alpha: a transparent PNG round-tripped through it comes back pure white,
     /// which is what those blank grid cells were.
     static func cacheData(for image: UIImage) -> Data? {
