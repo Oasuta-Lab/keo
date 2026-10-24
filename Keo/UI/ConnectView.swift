@@ -4,6 +4,12 @@ struct ConnectView: View {
     @EnvironmentObject private var store: Store
 
     var body: some View {
+        content
+            // A reinstall still holds the key; only the address was lost with UserDefaults.
+            .task { await store.reconnectIfPossible() }
+    }
+
+    private var content: some View {
         VStack(spacing: 28) {
             Spacer()
 

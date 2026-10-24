@@ -16,9 +16,36 @@ final class Store: ObservableObject {
     private let login = LoginTransport(session: ReadOnlyTransport.makeSession())
 
     init() {
-        guard let base = URL(string: apiBase), let token = Keychain.get(account: host) else { return }
+        guard let token = Keychain.get(account: host) else { return }
+        guard let base = URL(string: apiBase) else { return }
         client = FreeboxClient(endpoint: FreeboxEndpoint(base: base, boxName: boxName),
                                appToken: token)
+    }
+
+    /// Reconnects without asking the box again after a reinstall.
+    ///
+    /// The app token survives in the keychain, but the API address lived in `UserDefaults`,
+    /// which is wiped with the app — so Keo asked for a new pairing while already holding the
+    /// key. The address needs no authentication to rediscover, so there is nothing to ask.
+    func reconnectIfPossible() async {
+        guard client == nil, phase == .idle,
+              let token = Keychain.get(account: host), apiBase.isEmpty else { return }
+
+        phase = .discovering
+        do {
+            let endpoint = try await FreeboxEndpoint.discover(host: host, using: login)
+            let candidate = FreeboxClient(endpoint: endpoint, appToken: token)
+            _ = try await candidate.list(FreeboxClient.rootPath)   // the token may have been revoked
+
+            apiBase = endpoint.base.absoluteString
+            boxName = endpoint.boxName
+            client = candidate
+            phase = .idle
+        } catch {
+            // Stale key, or the box is away: fall back to pairing rather than nagging.
+            Keychain.delete(account: host)
+            phase = .idle
+        }
     }
 
     func pair() async {
