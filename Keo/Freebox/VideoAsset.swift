@@ -11,12 +11,12 @@ final class AuthenticatedAsset {
     let asset: AVURLAsset
     private let loader: Loader
 
-    init(url: URL, token: String, filename: String) {
-        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    init(source: VideoSource) {
+        var components = URLComponents(url: source.url, resolvingAgainstBaseURL: false)
         components?.scheme = Self.scheme
-        let tagged = components?.url ?? url
+        let tagged = components?.url ?? source.url
 
-        loader = Loader(origin: url, token: token, filename: filename)
+        loader = Loader(origin: source.url, token: source.token, filename: source.filename)
         asset = AVURLAsset(url: tagged)
         asset.resourceLoader.setDelegate(loader, queue: loader.queue)
     }
@@ -25,7 +25,16 @@ final class AuthenticatedAsset {
     private static let scheme = "keo-fbx"
 }
 
-private final class Loader: NSObject, AVAssetResourceLoaderDelegate {
+/// AVFoundation hands a loading request to exactly one delegate and does not touch it again
+/// until we finish it, so carrying it into a task is safe — the compiler cannot see that
+/// guarantee, hence the box.
+private struct PendingRequest: @unchecked Sendable {
+    let request: AVAssetResourceLoadingRequest
+}
+
+/// `@unchecked` for the same reason: the stored state is immutable apart from one
+/// lock-protected dictionary.
+private final class Loader: NSObject, AVAssetResourceLoaderDelegate, @unchecked Sendable {
     let queue = DispatchQueue(label: "fr.yieldstudio.keo.assetloader")
 
     private let origin: URL
@@ -45,8 +54,9 @@ private final class Loader: NSObject, AVAssetResourceLoaderDelegate {
     func resourceLoader(_ resourceLoader: AVAssetResourceLoader,
                         shouldWaitForLoadingOfRequestedResource request: AVAssetResourceLoadingRequest) -> Bool {
         let key = ObjectIdentifier(request)
+        let pending = PendingRequest(request: request)
         let task = Task { [weak self] in
-            await self?.serve(request)
+            await self?.serve(pending.request)
             self?.forget(key)
         }
         lock.withLock { tasks[key] = task }
@@ -67,7 +77,7 @@ private final class Loader: NSObject, AVAssetResourceLoaderDelegate {
     // modest chunks, so this stays small — switch to a streaming delegate if that ever changes.
     private func serve(_ request: AVAssetResourceLoadingRequest) async {
         var call = URLRequest(url: origin)
-        call.setValue(token, forHTTPHeaderField: "X-Fbx-App-Auth")
+        call.setValue(token, forHTTPHeaderField: ReadOnlyTransport.authHeader)
 
         if let data = request.dataRequest {
             let start = data.requestedOffset

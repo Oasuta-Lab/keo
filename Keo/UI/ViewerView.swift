@@ -6,11 +6,11 @@ import SwiftUI
 struct ViewerView: View {
     let client: FreeboxClient
     let items: [Item]
-    @State var current: Item
 
     @EnvironmentObject private var downloader: Downloader
     @Environment(\.dismiss) private var dismiss
 
+    @State private var currentID: Item.ID?
     @State private var drag: CGSize = .zero
     /// Pinched in, the scroll view owns the pan — stay out of its way.
     @State private var zoomed = false
@@ -18,30 +18,57 @@ struct ViewerView: View {
     init(client: FreeboxClient, items: [Item], start: Item) {
         self.client = client
         self.items = items
-        _current = State(initialValue: start)
+        _currentID = State(initialValue: start.id)
+    }
+
+    private var current: Item? {
+        guard let currentID else { return items.first }
+        return items.first { $0.id == currentID } ?? items.first
     }
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
+            pager
+                .offset(y: drag.height)
+                .scaleEffect(shrink)
+                .simultaneousGesture(dismissDrag)
+        }
+        .overlay(alignment: .top) { chrome.opacity(1 - progress) }
+        .overlay(alignment: .bottom) { DownloadBar(downloader: downloader) }
+        .sheet(item: $downloader.share) { payload in
+            ShareSheet(urls: payload.urls)
+        }
+        .statusBarHidden()
+    }
 
-            TabView(selection: $current) {
+    /// A paging `ScrollView` rather than `TabView`: a page-style TabView keeps structural
+    /// identity for every element, which collapses on a library of thousands.
+    private var pager: some View {
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
                 ForEach(items) { item in
-                    Page(item: item, client: client, zoomed: $zoomed).tag(item)
+                    Page(item: item, client: client, zoomed: $zoomed)
+                        .containerRelativeFrame(.horizontal)
+                        .id(item.id)
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .ignoresSafeArea()
-            .offset(y: drag.height)
-            .scaleEffect(shrink)
-            .simultaneousGesture(dismissDrag)
+            .scrollTargetLayout()
         }
-        .overlay(alignment: .top) {
-            HStack {
-                Button { dismiss() } label: { Glyph("xmark") }
-                Spacer()
-                Menu {
-                    if current.kind == .image || current.kind == .video {
+        .scrollTargetBehavior(.paging)
+        .scrollPosition(id: $currentID)
+        .scrollIndicators(.hidden)
+        .scrollDisabled(zoomed)
+        .ignoresSafeArea()
+    }
+
+    private var chrome: some View {
+        HStack {
+            Button { dismiss() } label: { Glyph("xmark") }
+            Spacer()
+            Menu {
+                if let current {
+                    if current.isMedia {
                         Button("Enregistrer dans Photos", systemImage: "photo.badge.arrow.down") {
                             downloader.save([current], from: client, to: .photos)
                         }
@@ -49,43 +76,32 @@ struct ViewerView: View {
                     Button("Partager", systemImage: "square.and.arrow.up") {
                         downloader.save([current], from: client, to: .share)
                     }
-                } label: {
-                    Glyph("square.and.arrow.down")
                 }
-                .disabled(downloader.isRunning)
+            } label: {
+                Glyph("square.and.arrow.down")
             }
-            .padding(.horizontal, 16)
-            .opacity(1 - progress)
+            .disabled(downloader.isRunning || current == nil)
         }
-        .overlay(alignment: .bottom) {
-            DownloadBar(downloader: downloader)
-        }
-        .sheet(item: $downloader.share) { payload in
-            ShareSheet(urls: payload.urls)
-        }
-        .statusBarHidden()
+        .padding(.horizontal, 16)
     }
+
+    // MARK: Swipe to dismiss
 
     /// How far along the dismiss we are, 0 to 1.
-    private var progress: Double {
-        min(abs(drag.height) / 220, 1)
-    }
+    private var progress: Double { min(abs(drag.height) / 220, 1) }
+    private var shrink: Double { 1 - progress * 0.12 }
 
-    private var shrink: Double {
-        1 - progress * 0.12
-    }
-
-    /// `simultaneousGesture` so the page swipe keeps working; the dominant axis decides which wins.
+    /// `simultaneousGesture` so the horizontal paging keeps working; the dominant axis wins.
     private var dismissDrag: some Gesture {
         DragGesture(minimumDistance: 12)
             .onChanged { value in
-                guard !zoomed, abs(value.translation.height) > abs(value.translation.width) else { return }
+                guard !zoomed,
+                      abs(value.translation.height) > abs(value.translation.width) else { return }
                 drag = value.translation
             }
             .onEnded { value in
                 guard !zoomed, drag != .zero else { return }
-                let flung = value.predictedEndTranslation.height > 400
-                if value.translation.height > 140 || flung {
+                if value.translation.height > 140 || value.predictedEndTranslation.height > 400 {
                     dismiss()
                 } else {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { drag = .zero }
@@ -108,7 +124,7 @@ private struct Glyph: View {
     }
 }
 
-// MARK: - Page
+// MARK: - Pages
 
 private struct Page: View {
     let item: Item
@@ -145,17 +161,24 @@ private struct ImagePage: View {
             }
         }
         .task(id: item.path) {
-            // Cached grid thumbnail first so the page is never blank, then the real thing.
-            if let preview = await ThumbCache.shared.thumbnail(for: item, client: client) {
-                if image == nil { image = preview }
+            // The grid thumbnail first so the page is never blank, then the real thing.
+            if image == nil,
+               let preview = await ThumbnailPipeline.shared.thumbnail(for: item, client: client) {
+                image = preview
             }
-            guard !sharp else { return }
-            guard let data = try? await client.data(item.path) else {
+            guard !sharp, !Task.isCancelled else { return }
+
+            // Streamed to disk and decoded from the file: a 50 MP original never becomes a Data.
+            guard let file = try? await client.download(item.path) else {
                 failed = image == nil
                 return
             }
-            // ponytail: 3000 px cap keeps a 60 MP scan off the memory ceiling; raise if you pinch deep.
-            if let full = ThumbCache.downsample(data, maxPixel: 3000) {
+            defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+
+            // ponytail: 3000 px cap keeps a big scan off the memory ceiling; raise it if you
+            // routinely pinch deeper than that.
+            if let full = ImageDecoding.downsample(fileAt: file, maxPixel: 3000) {
+                guard !Task.isCancelled else { return }
                 image = full
                 sharp = true
             }
@@ -186,11 +209,11 @@ private struct VideoPage: View {
         .task(id: item.path) {
             guard player == nil else { return }
             do {
-                let source = try await client.videoAsset(item.path)
-                let playerItem = AVPlayerItem(asset: source.asset)
+                let authenticated = AuthenticatedAsset(source: try await client.videoSource(item.path))
+                let playerItem = AVPlayerItem(asset: authenticated.asset)
                 let player = AVPlayer(playerItem: playerItem)
 
-                self.source = source
+                self.source = authenticated
                 self.player = player
                 player.play()
 
@@ -207,8 +230,7 @@ private struct VideoPage: View {
         for await status in playerItem.publisher(for: \.status).values {
             switch status {
             case .failed:
-                failure = playerItem.error?.localizedDescription
-                       ?? "Le flux n'a pas pu être lu."
+                failure = playerItem.error?.localizedDescription ?? "Le flux n'a pas pu être lu."
                 player = nil
                 return
             case .readyToPlay:
@@ -268,10 +290,7 @@ private struct ZoomableImage: UIViewRepresentable {
         imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         scrollView.addSubview(imageView)
         context.coordinator.imageView = imageView
-        context.coordinator.onZoom = { zoomed in
-            // Deferred: UIScrollView reports this mid-layout, SwiftUI dislikes that.
-            DispatchQueue.main.async { self.zoomed = zoomed }
-        }
+        bind(context.coordinator)
 
         let doubleTap = UITapGestureRecognizer(target: context.coordinator,
                                                action: #selector(Coordinator.doubleTap(_:)))
@@ -282,12 +301,17 @@ private struct ZoomableImage: UIViewRepresentable {
     }
 
     func updateUIView(_ scrollView: UIScrollView, context: Context) {
-        context.coordinator.onZoom = { zoomed in
-            DispatchQueue.main.async { self.zoomed = zoomed }
-        }
+        bind(context.coordinator)
         guard context.coordinator.imageView?.image !== image else { return }
         context.coordinator.imageView?.image = image
         scrollView.setZoomScale(1, animated: false)
+    }
+
+    private func bind(_ coordinator: Coordinator) {
+        coordinator.onZoom = { zoomed in
+            // Deferred: UIScrollView reports this mid-layout, SwiftUI dislikes that.
+            DispatchQueue.main.async { self.zoomed = zoomed }
+        }
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }

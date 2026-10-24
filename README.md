@@ -1,6 +1,20 @@
 # Keo
 
 Galerie photos/vidéos iOS native pour Freebox, via l'API Freebox OS.
+SwiftUI, Swift 6 en concurrence stricte, aucune dépendance externe.
+
+## Règle non négociable
+
+**Keo ne modifie jamais rien sur le NAS.** Pas de déplacement, pas de renommage, pas de
+suppression, pas d'écriture. Ce n'est pas une intention, c'est une contrainte structurelle :
+
+- `ReadOnlyTransport` est la seule porte vers le NAS et n'expose que des lectures. Aucun
+  paramètre de méthode HTTP, aucun corps de requête. Écrire demanderait d'ajouter une méthode
+  à ce type.
+- La poignée de main de login, seul endroit qui fait un `POST`, vit dans `LoginTransport`,
+  hors de portée du chemin de données.
+- `Tests/main.swift` relit les sources et échoue si un `PUT`/`DELETE`/`MOVE` ou une route
+  `fs/mv`, `fs/rm`, `fs/mkdir`… apparaît ailleurs que dans un commentaire.
 
 ## Lancer
 
@@ -8,68 +22,80 @@ Galerie photos/vidéos iOS native pour Freebox, via l'API Freebox OS.
 open Keo.xcodeproj     # ⌘R
 ```
 
-Au premier lancement : « Associer à la Freebox », puis **appuyer sur ✓ sur la face
-avant du Freebox Server**. Le jeton d'application va dans le trousseau iOS.
+Au premier lancement : « Associer à la Freebox », puis **appuyer sur ✓ sur la face avant du
+Freebox Server**. Le jeton d'application va dans le trousseau iOS.
 
-Si la navigation renvoie une erreur de droits : Freebox OS → Paramètres → Gestion des
-accès → Applications → Keo → cocher « Accès aux fichiers ».
+Si la navigation renvoie une erreur de droits : Freebox OS → Paramètres → Gestion des accès →
+Applications → Keo → cocher « Accès aux fichiers ».
 
-Pas de WebDAV sur la Freebox (vérifié : 404 sur `/dav`, `/webdav`, aucun en-tête `DAV:`),
-donc tout passe par `fs/ls` et `dl` de l'API Freebox OS.
+## Structure
 
-## Ce qu'il y a dedans
-
-| Fichier | Rôle |
+| Dossier | Rôle |
 |---|---|
-| `Keo/Freebox.swift` | API Freebox OS : association, session HMAC-SHA1, `fs/ls`, `dl` |
-| `Keo/Thumbs.swift` | Vignettes : aperçu EXIF via range 256 Ko, image vidéo via `AVAssetImageGenerator`, cache disque + mémoire |
-| `Keo/BrowserView.swift` | Grille `LazyVGrid`, dossiers, documents |
-| `Keo/ViewerView.swift` | Plein écran : zoom `UIScrollView`, `AVPlayer`, QuickLook, fermeture au glissé |
-| `Keo/VideoAsset.swift` | `AVAssetResourceLoaderDelegate` qui porte `X-Fbx-App-Auth` jusqu'à AVFoundation |
-| `Keo/Downloads.swift` | File d'attente, pellicule (`PHAssetCreationRequest`), feuille de partage |
-| `Keo/DownloadJob.swift` | Arithmétique de progression d'un lot (isolée pour être testable) |
+| `Keo/App/` | Entrée, `Store` (session, association), trousseau |
+| `Keo/Freebox/` | `Item` et `FolderContents`, transports, client, asset vidéo authentifié |
+| `Keo/Media/` | Pipeline de vignettes, décodage ImageIO, cache disque évincé en LRU |
+| `Keo/Downloads/` | File d'attente, pellicule, feuille de partage |
+| `Keo/UI/` | Association, grille, visionneuse plein écran |
 
-## Vérif
+Les dépendances vont vers l'intérieur : `UI` → `Media`/`Downloads` → `Freebox`. Rien dans
+`Freebox` ne connaît SwiftUI.
+
+Le découpage en paquets SPM a été volontairement différé : à cette taille il ajouterait de la
+cérémonie sans réduire la complexité. Les frontières sont déjà posées pour le faire le jour où
+plusieurs personnes travaillent dessus en parallèle.
+
+## Tenue à l'échelle
+
+La galerie est supposée très grande. Ce qui a été fait pour ça :
+
+| Point | Choix |
+|---|---|
+| Mémoire des vignettes | Budget en **octets** (80 Mo), pas en nombre d'images |
+| Concurrence | Deux portes : 4 fetchs visibles, 2 préchargements — un prefetch ne bloque jamais une cellule à l'écran |
+| Doublons | Une tâche par clé, partagée par tous les appelants |
+| Préchargement | Fenêtre de 24 éléments en avance sur le défilement |
+| Cache disque | 512 Mo, éviction LRU au lancement |
+| Grandes images | Téléchargées sur disque puis décodées depuis le fichier — jamais de `Data` plein format en mémoire |
+| Découpage du dossier | `FolderContents` calculé une fois au chargement, pas à chaque rendu |
+| Visionneuse | `ScrollView` paginé + `LazyHStack`, pas un `TabView` qui garde l'identité de tous les éléments |
+
+Les idées viennent de [Nuke](https://github.com/kean/Nuke) ; le fetch est maison parce qu'une
+vignette Keo est une requête Range de 256 Ko plus un décodage d'aperçu embarqué, pas un
+téléchargement d'URL.
+
+## Vérifier
 
 ```sh
 rm -f /tmp/keocheck   # sinon un echec de compilation relance l'ancien binaire
-swiftc -swift-version 5 Keo/Freebox.swift Keo/DownloadJob.swift Keo/VideoAsset.swift \
-  Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
+swiftc -swift-version 6 Keo/Freebox/Item.swift Keo/Freebox/Transport.swift \
+  Keo/Freebox/FreeboxClient.swift Keo/Downloads/DownloadJob.swift \
+  Keo/Media/DiskCache.swift Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
 ```
 
-## Télécharger
-
-Menu « … » → **Sélectionner**, puis cocher les vignettes. Deux destinations :
-
-- **Photos** — va dans la pellicule iOS. Réservé aux images et vidéos : le bouton se désactive
-  si la sélection contient un PDF ou un `.procreate`.
-- **Partager** — feuille de partage iOS, donc Fichiers, AirDrop, Mail… et tous les types.
-
-La barre de progression affiche le fichier en cours, la position dans le lot et un bouton
-Annuler. Même chose en plein écran, sur l'élément affiché.
-
-## Limites connues
-
-- **Pas de téléchargement de dossier entier** — la sélection porte sur des fichiers.
-- **Téléchargements en série, pas en parallèle** — une barre de progression lisible plutôt
-  qu'un débit maximal.
-
-- **LAN uniquement.** L'accès distant (`kcux1ir3.fbxos.fr:41349`) marche, mais son certificat
-  est signé par la CA Freebox, absente du magasin iOS — il faudra l'épingler.
-- **Pas de vignettes côté serveur.** `fs/thumbnail` n'existe pas dans l'API : Keo lit l'aperçu
-  JPEG embarqué via une requête Range de 256 Ko, sinon télécharge le fichier (plafond 40 Mo).
-- **Vidéo : le transport passe par un resource loader.** `AVURLAssetHTTPHeaderFieldsKey` n'est pas
-  documenté et iOS l'ignore, donc AVFoundation partait en 403 — vignette et lecture tombaient
-  ensemble. `AuthenticatedAsset` refait les requêtes via `URLSession` avec le bon en-tête.
-  Sur un MP4 dont l'atome `moov` est en fin de fichier, il faut deux allers-retours.
+Couvre la garantie de lecture seule, l'enveloppe `{success, result}`, l'encodage des chemins,
+la classification des médias, l'éviction LRU et l'arithmétique de progression.
 
 ## Pièges de l'API Freebox, vérifiés sur la box
 
 - `fs/ls` renvoie `result = {"entries": [...]}`, **pas** un tableau nu.
 - Les chemins sont du base64 percent-encodé. `URL.appendingPathComponent` ré-encode le `%`
-  (`Lw%3D%3D` → `Lw%253D%253D`) et la box répond `invalid_request` : construire l'URL
-  avec `URL(string:relativeTo:)`.
-- `dl/` honore `Range` (206 Partial Content), ce qui rend viable la lecture de l'aperçu
-  embarqué : 256 Ko lus sur un JPEG de 2 Mo suffisent à sortir une vignette 400 px.
+  (`Lw%3D%3D` → `Lw%253D%253D`) et la box répond `invalid_request` : construire l'URL avec
+  `URL(string:relativeTo:)`.
+- `dl/` honore `Range` (206 Partial Content) : 256 Ko d'un JPEG de 2 Mo suffisent à extraire
+  un aperçu embarqué de 400 px.
+- `fs/thumbnail` **n'existe pas**, la box ne génère aucune vignette.
+- `AVURLAssetHTTPHeaderFieldsKey` n'est pas documenté et iOS l'ignore : AVFoundation doit
+  passer par un `AVAssetResourceLoaderDelegate` pour porter `X-Fbx-App-Auth`.
 - `mafreebox.freebox.fr` résout vers une IP publique : ATS a besoin d'une exception de
   domaine, `NSAllowsLocalNetworking` ne suffit pas.
+
+## Limites connues
+
+- **LAN uniquement.** L'accès distant existe côté box mais son certificat vient de la CA
+  Freebox, absente du magasin iOS. Un VPN IKEv2 sur la Freebox est la meilleure réponse : le
+  téléphone se retrouve sur le réseau local et l'app n'a pas une ligne à changer.
+- **Pas de téléchargement de dossier entier** — la sélection porte sur des fichiers.
+- **Téléchargements en série** — une barre de progression lisible plutôt qu'un débit maximal.
+- **Pas de cible de tests Xcode.** La logique vérifiable est pure et le script ci-dessus suffit ;
+  à ajouter le jour où il faudra tester du code qui a besoin du simulateur.

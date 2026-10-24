@@ -8,28 +8,21 @@ struct BrowserView: View {
     @EnvironmentObject private var store: Store
     @EnvironmentObject private var downloader: Downloader
 
-    @State private var items: [Item] = []
+    /// Split by kind once, at load. Filtering in computed properties re-scanned the whole
+    /// listing on every body evaluation, which is what made large folders stutter.
+    @State private var contents = FolderContents.empty
     @State private var error: String?
     @State private var loaded = false
     @State private var viewing: Item?
     @State private var selecting = false
     @State private var selection: Set<Item> = []
 
-    private var folders: [Item] { items.filter { $0.kind == .folder } }
-    private var media: [Item] { items.filter { $0.kind == .image || $0.kind == .video } }
-    private var documents: [Item] { items.filter { $0.kind == .other } }
-
-    /// The photo library only takes photos and videos — a PDF would fail mid-batch.
-    private var selectionFitsPhotos: Bool {
-        !selection.isEmpty && selection.allSatisfy { $0.kind == .image || $0.kind == .video }
-    }
-
     private let columns = [GridItem(.adaptive(minimum: 110), spacing: 2)]
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(folders) { folder in
+                ForEach(contents.folders) { folder in
                     NavigationLink(value: folder) {
                         Row(item: folder, icon: "folder.fill", selected: nil)
                     }
@@ -37,12 +30,13 @@ struct BrowserView: View {
                     .disabled(selecting)
                 }
 
-                if !media.isEmpty {
+                if !contents.media.isEmpty {
                     LazyVGrid(columns: columns, spacing: 2) {
-                        ForEach(media) { item in
+                        ForEach(Array(contents.media.enumerated()), id: \.element) { index, item in
                             Button { tap(item) } label: {
                                 Thumb(item: item, client: client,
-                                      selected: selecting ? selection.contains(item) : nil)
+                                      selected: selecting ? selection.contains(item) : nil,
+                                      lookahead: lookahead(after: index))
                             }
                             .buttonStyle(.plain)
                         }
@@ -50,7 +44,7 @@ struct BrowserView: View {
                     .padding(.vertical, 2)
                 }
 
-                ForEach(documents) { document in
+                ForEach(contents.documents) { document in
                     Button { tap(document) } label: {
                         Row(item: document, icon: "doc.fill",
                             selected: selecting ? selection.contains(document) : nil)
@@ -59,23 +53,16 @@ struct BrowserView: View {
                 }
             }
         }
-        .overlay {
-            if !loaded {
-                ProgressView()
-            } else if let error {
-                ContentUnavailableView("Connexion impossible", systemImage: "externaldrive.badge.xmark",
-                                       description: Text(error))
-            } else if items.isEmpty {
-                ContentUnavailableView("Dossier vide", systemImage: "folder")
-            }
-        }
+        .overlay { status }
         .navigationTitle(selecting ? selectionTitle : title)
-        .navigationBarTitleDisplayMode(selecting || folders.isEmpty ? .inline : .large)
+        .navigationBarTitleDisplayMode(selecting || contents.folders.isEmpty ? .inline : .large)
         .navigationDestination(for: Item.self) { folder in
             BrowserView(client: client, path: folder.path, title: folder.name)
         }
         .fullScreenCover(item: $viewing) { item in
-            ViewerView(client: client, items: media.isEmpty ? [item] : media, start: item)
+            ViewerView(client: client,
+                       items: contents.media.isEmpty ? [item] : contents.media,
+                       start: item)
         }
         .sheet(item: $downloader.share) { payload in
             ShareSheet(urls: payload.urls)
@@ -96,7 +83,19 @@ struct BrowserView: View {
         .refreshable { await load() }
     }
 
-    // MARK: Bars
+    // MARK: Pieces
+
+    @ViewBuilder
+    private var status: some View {
+        if !loaded {
+            ProgressView()
+        } else if let error {
+            ContentUnavailableView("Connexion impossible", systemImage: "externaldrive.badge.xmark",
+                                   description: Text(error))
+        } else if contents.isEmpty {
+            ContentUnavailableView("Dossier vide", systemImage: "folder")
+        }
+    }
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
@@ -108,7 +107,7 @@ struct BrowserView: View {
                 }
             } else {
                 Menu {
-                    if !media.isEmpty || !documents.isEmpty {
+                    if contents.selectableCount > 0 {
                         Button("Sélectionner", systemImage: "checkmark.circle") { selecting = true }
                     }
                     if path == FreeboxClient.rootPath {
@@ -124,23 +123,21 @@ struct BrowserView: View {
 
     private var selectionBar: some View {
         HStack(spacing: 18) {
-            Button(selection.count == selectableCount ? "Aucun" : "Tout") {
-                selection = selection.count == selectableCount ? [] : Set(media + documents)
+            Button(selection.count == contents.selectableCount ? "Aucun" : "Tout") {
+                selection = selection.count == contents.selectableCount
+                    ? []
+                    : Set(contents.selectable)
             }
             .font(.footnote)
 
             Spacer()
 
-            Button {
-                start(.photos)
-            } label: {
+            Button { start(.photos) } label: {
                 Label("Photos", systemImage: "photo.badge.arrow.down")
             }
             .disabled(!selectionFitsPhotos || downloader.isRunning)
 
-            Button {
-                start(.share)
-            } label: {
+            Button { start(.share) } label: {
                 Label("Partager", systemImage: "square.and.arrow.up")
             }
             .disabled(selection.isEmpty || downloader.isRunning)
@@ -152,14 +149,26 @@ struct BrowserView: View {
         .background(.bar)
     }
 
-    private var selectableCount: Int { media.count + documents.count }
+    /// The photo library only takes photos and videos — a PDF would fail mid-batch.
+    private var selectionFitsPhotos: Bool {
+        !selection.isEmpty && selection.allSatisfy(\.isMedia)
+    }
 
     private var selectionTitle: String {
-        selection.isEmpty ? "Sélectionner" : "\(selection.count) sélectionné\(selection.count > 1 ? "s" : "")"
+        selection.isEmpty
+            ? "Sélectionner"
+            : "\(selection.count) sélectionné\(selection.count > 1 ? "s" : "")"
     }
 
     private var showingError: Binding<Bool> {
         Binding(get: { downloader.error != nil }, set: { if !$0 { downloader.error = nil } })
+    }
+
+    /// The window a cell warms up when it appears — roughly two screens ahead.
+    private func lookahead(after index: Int) -> ArraySlice<Item> {
+        let start = index + 1
+        guard start < contents.media.count else { return [] }
+        return contents.media[start..<min(start + 24, contents.media.count)]
     }
 
     // MARK: Actions
@@ -173,8 +182,7 @@ struct BrowserView: View {
     }
 
     private func start(_ destination: Downloader.Destination) {
-        // Keep the on-screen order rather than the Set's.
-        let ordered = (media + documents).filter { selection.contains($0) }
+        let ordered = contents.selectable.filter { selection.contains($0) }
         downloader.save(ordered, from: client, to: destination)
         selecting = false
         selection = []
@@ -182,7 +190,7 @@ struct BrowserView: View {
 
     private func load() async {
         do {
-            items = try await client.list(path)
+            contents = try await client.list(path)
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -198,6 +206,7 @@ private struct Thumb: View {
     let client: FreeboxClient
     /// nil when not selecting.
     let selected: Bool?
+    let lookahead: ArraySlice<Item>
 
     @State private var image: UIImage?
 
@@ -232,7 +241,9 @@ private struct Thumb: View {
                     Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                         .font(.title3)
                         .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, selected ? AnyShapeStyle(.tint) : AnyShapeStyle(.black.opacity(0.3)))
+                        .foregroundStyle(.white,
+                                         selected ? AnyShapeStyle(.tint)
+                                                  : AnyShapeStyle(.black.opacity(0.3)))
                         .shadow(radius: 2)
                         .padding(5)
                 }
@@ -241,7 +252,10 @@ private struct Thumb: View {
                 if selected == true { Color.black.opacity(0.25) }
             }
             .task(id: item.path) {
-                let loaded = await ThumbCache.shared.thumbnail(for: item, client: client)
+                // Warm what is coming before awaiting our own, so the queue fills in scroll order.
+                await ThumbnailPipeline.shared.prefetch(Array(lookahead), client: client)
+                let loaded = await ThumbnailPipeline.shared.thumbnail(for: item, client: client)
+                guard !Task.isCancelled else { return }
                 withAnimation(.easeOut(duration: 0.18)) { image = loaded }
             }
     }
