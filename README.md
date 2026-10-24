@@ -107,6 +107,16 @@ rien, quel que soit le nombre d'octets fournis.
 - Le réordonnancement n'a lieu **qu'à la fin du scan**, pas pendant : la grille ne se réorganise
   jamais sous le doigt. Une pastille discrète affiche l'avancement.
 
+## Dossiers
+
+Affichés en tuiles plutôt qu'en liste, avec le nombre d'éléments que la box renvoie déjà dans
+le listing (`filecount`). Les documents restent en lignes : ils sont peu nombreux et une liste
+leur convient mieux.
+
+Pas de photo de couverture pour l'instant : il faudrait un `fs/ls` par dossier, soit 4,5 Mo
+pour couvrir un dossier de 20 000 photos. Les couvertures deviendront gratuites quand le cache
+de listing existera.
+
 ## Timeline
 
 Quand le tri est par date, la grille se regroupe et un rail apparaît à droite.

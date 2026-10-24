@@ -14,6 +14,9 @@ struct Item: Identifiable, Hashable, Sendable {
     /// often the day everything was copied, which makes it useless for a timeline.
     var captureDate: Date?
 
+    /// Number of entries inside, when the box reports it. Free: it is already in the listing.
+    let childCount: Int?
+
     /// What the timeline and the date sort actually use.
     var timelineDate: Date? { captureDate ?? modified }
 
@@ -28,8 +31,10 @@ struct Item: Identifiable, Hashable, Sendable {
     var isMedia: Bool { kind == .image || kind == .video }
 
     init(path: String, name: String, isDirectory: Bool, size: Int64,
-         modified: Date?, mimeType: String?, captureDate: Date? = nil) {
+         modified: Date?, mimeType: String?, childCount: Int? = nil,
+         captureDate: Date? = nil) {
         self.captureDate = captureDate
+        self.childCount = childCount
         self.path = path
         self.name = name
         self.isDirectory = isDirectory

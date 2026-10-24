@@ -26,6 +26,8 @@ struct BrowserView: View {
     private var sectioned: Bool { order != .name && !sections.isEmpty }
 
     private let columns = [GridItem(.adaptive(minimum: 110), spacing: 2)]
+    /// Wider than a photo cell: a folder tile has to carry a readable name.
+    private let folderColumns = [GridItem(.adaptive(minimum: 150), spacing: 10)]
     fileprivate static let gridSpace = "keo.grid"
 
     /// The last header that has already passed the top edge: that is the period on screen.
@@ -39,12 +41,19 @@ struct BrowserView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    ForEach(contents.folders) { folder in
-                        NavigationLink(value: folder) {
-                            Row(item: folder, icon: "folder.fill", selected: nil)
+                    if !contents.folders.isEmpty {
+                        LazyVGrid(columns: folderColumns, spacing: 10) {
+                            ForEach(contents.folders) { folder in
+                                NavigationLink(value: folder) {
+                                    FolderTile(folder: folder)
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(selecting)
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .disabled(selecting)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
+                        .padding(.bottom, 14)
                     }
 
                     if sectioned {
@@ -389,6 +398,44 @@ private struct Thumb: View {
                 guard !Task.isCancelled else { return }
                 withAnimation(.easeOut(duration: 0.18)) { image = loaded }
             }
+    }
+}
+
+private struct FolderTile: View {
+    let folder: Item
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ZStack(alignment: .bottomTrailing) {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(.tint.opacity(0.16))
+                    .aspectRatio(4 / 3, contentMode: .fit)
+
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 34))
+                    .foregroundStyle(.tint)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if let count = folder.childCount, count > 0 {
+                    Text("\(count)")
+                        .font(.caption2.monospacedDigit().weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .padding(8)
+                }
+            }
+
+            Text(folder.name)
+                .font(.subheadline)
+                .lineLimit(2, reservesSpace: true)
+                .multilineTextAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 6)
+                .padding(.horizontal, 2)
+        }
+        .contentShape(Rectangle())
     }
 }
 

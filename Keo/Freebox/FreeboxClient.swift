@@ -129,6 +129,7 @@ actor FreeboxClient {
             let size: Int64?
             let modification: TimeInterval?
             let hidden: Bool?
+            let filecount: Int?
         }
         // fs/ls answers `result = {"entries": [...]}`, not a bare array.
         struct Listing: Decodable { let entries: [Entry] }
@@ -146,7 +147,8 @@ actor FreeboxClient {
                      isDirectory: entry.type == "dir",
                      size: entry.size ?? 0,
                      modified: entry.modification.map { Date(timeIntervalSince1970: $0) },
-                     mimeType: entry.mimetype)
+                     mimeType: entry.mimetype,
+                     childCount: entry.type == "dir" ? entry.filecount : nil)
             }
 
         return FolderContents(items, order: order)
