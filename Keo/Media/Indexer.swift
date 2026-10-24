@@ -17,6 +17,8 @@ final class Indexer: ObservableObject {
         var datesRead = 0
         var adopted = 0
         var unreadable = 0
+        /// Folders that could not even be listed. Any of these makes the pass incomplete.
+        var unreachable = 0
         /// Files read but carrying no capture date at all.
         var dateless = 0
         /// Current folder only. A global bar moves by 0.17 % per batch on a 14 600 photo
@@ -80,6 +82,8 @@ final class Indexer: ObservableObject {
     private static let publishEvery = 20
     /// Backstop against a symlink loop turning this into an infinite walk.
     private static let folderLimit = 5_000
+    /// Consecutive unreachable folders before concluding the box is gone.
+    private static let giveUpAfter = 3
 
     private enum Job {
         case walk(root: String, client: FreeboxClient, scope: Scope?)
@@ -218,6 +222,8 @@ final class Indexer: ObservableObject {
             var pending: [(path: String, modified: Date?, childCount: Int?)] =
                 [(root, nil, nil)]
             var visited = 0
+            var listingFailures = 0
+            var consecutiveFailures = 0
 
             while !pending.isEmpty, !Task.isCancelled, visited < Self.folderLimit {
                 let folder = pending.removeFirst()
@@ -239,7 +245,22 @@ final class Indexer: ObservableObject {
                 progress.folderTotal = 0
                 state = .running(progress)
 
-                guard let contents = try? await client.list(folder.path, order: .name) else {
+                let contents: FolderContents
+                do {
+                    contents = try await client.list(folder.path, order: .name)
+                    consecutiveFailures = 0
+                } catch {
+                    // A failed listing is not an empty folder. Counting it keeps the pass from
+                    // calling itself complete — and from sweeping away everything it never
+                    // reached, which is how a suspended app used to destroy its own index.
+                    listingFailures += 1
+                    consecutiveFailures += 1
+                    progress.unreachable += 1
+                    state = .running(progress)
+
+                    // The box is gone, or we are being suspended: stop rather than grind the
+                    // whole tree into failures.
+                    if consecutiveFailures >= Self.giveUpAfter { break }
                     continue
                 }
                 pending.append(contentsOf: contents.folders.map {
@@ -262,8 +283,12 @@ final class Indexer: ObservableObject {
                             stamp: completion, client: client, progress: &progress)
             }
 
-            // Only a pass that ran to the end may decide what has disappeared.
-            if !Task.isCancelled, visited < Self.folderLimit {
+            // Only a pass that truly saw everything may decide what has disappeared.
+            let complete = WalkOutcome.isComplete(
+                cancelled: Task.isCancelled, visited: visited, limit: Self.folderLimit,
+                listingFailures: listingFailures, queueEmpty: pending.isEmpty
+            )
+            if complete {
                 try await IndexStore.shared.sweepFolders(generation: generation)
                 lastIndexedAt = Date().timeIntervalSince1970
                 walkCompleted = true

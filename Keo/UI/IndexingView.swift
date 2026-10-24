@@ -17,6 +17,10 @@ struct IndexingView: View {
                 Section {
                     if let progress = indexer.state.progress {
                         report(progress)
+                    } else if knownCount > 0 {
+                        Label("\(knownCount.formatted()) photos indexées",
+                              systemImage: "checkmark.circle")
+                            .foregroundStyle(.secondary)
                     } else {
                         Label("Jamais lancée", systemImage: "clock.badge.questionmark")
                             .foregroundStyle(.secondary)
@@ -149,6 +153,13 @@ struct IndexingView: View {
         row("Dates connues au total", max(progress.indexedOverall, 0))
         if progress.dateless > 0 {
             row("Sans date de prise de vue", progress.dateless)
+        }
+        if progress.unreachable > 0 {
+            LabeledContent("Dossiers injoignables") {
+                Text(progress.unreachable, format: .number)
+                    .monospacedDigit()
+                    .foregroundStyle(.orange)
+            }
         }
         if progress.unreadable > 0 {
             LabeledContent("Illisibles, à réessayer") {

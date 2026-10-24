@@ -215,6 +215,31 @@ assert(!FolderStamp.isUnchanged(recorded: indexedAt.timeIntervalSince1970, modif
 assert(FolderStamp.stamp(for: nil) == nil,
        "un dossier sans date n'est pas marqué comme terminé")
 
+// MARK: - Un parcours interrompu ne doit jamais se croire complet
+
+// Le cas qui a detruit l'index : l'app suspendue, chaque listing echoue, la file se vide
+// toute seule et la boucle se termine sans annulation.
+assert(!WalkOutcome.isComplete(cancelled: false, visited: 40, limit: 5_000,
+                               listingFailures: 37, queueEmpty: true),
+       "un parcours dont des dossiers étaient injoignables n'est pas complet")
+assert(!WalkOutcome.maySweep(cancelled: false, visited: 40, limit: 5_000,
+                             listingFailures: 1, queueEmpty: true),
+       "et un seul échec suffit à interdire le balayage : il effacerait des dossiers bien vivants")
+
+assert(WalkOutcome.isComplete(cancelled: false, visited: 40, limit: 5_000,
+                              listingFailures: 0, queueEmpty: true),
+       "un parcours sans échec et arrivé au bout est complet")
+
+assert(!WalkOutcome.isComplete(cancelled: true, visited: 40, limit: 5_000,
+                               listingFailures: 0, queueEmpty: true),
+       "une annulation, c'est une pause, pas une fin")
+assert(!WalkOutcome.isComplete(cancelled: false, visited: 5_000, limit: 5_000,
+                               listingFailures: 0, queueEmpty: true),
+       "le garde-fou anti-boucle atteint veut dire qu'on n'a pas tout vu")
+assert(!WalkOutcome.isComplete(cancelled: false, visited: 10, limit: 5_000,
+                               listingFailures: 0, queueEmpty: false),
+       "il reste des dossiers à visiter : on ne conclut pas")
+
 // MARK: - Géométrie du rail de la timeline
 
 import CoreGraphics
@@ -440,7 +465,7 @@ assert(job.position == 4, "la position ne dépasse pas le total")
 assert(DownloadJob(total: 0, completed: 0, currentName: "", currentFraction: 0).fraction == 0,
        "un lot vide ne divise pas par zéro")
 
-print("ok — lecture seule, envelope, chemins, classification, aperçus, dates EXIF, reprise, sections, rail, tri, éviction, progression")
+print("ok — lecture seule, envelope, chemins, classification, aperçus, dates EXIF, reprise, parcours, sections, rail, tri, éviction, progression")
 
 try await checkIndexStore()
 try await checkMigration()
