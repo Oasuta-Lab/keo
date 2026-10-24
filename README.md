@@ -73,6 +73,21 @@ Sans aucune date, rien ne s'affiche plutôt qu'une date inventée.
 C'est aussi la réponse à la limite du tri : en plein écran, la vraie date est connue. La
 grille, elle, ne peut pas trier là-dessus sans télécharger un bout de chaque fichier.
 
+## Timeline
+
+Quand le tri est par date, la grille se regroupe et un rail apparaît à droite.
+
+- **En-têtes collants** par mois, avec le compte de photos. Un dossier qui tient dans un seul
+  mois se regroupe par jour : sinon le regroupement n'apprendrait rien.
+- **Rail de densité.** La hauteur de chaque segment est la part de photos de la période, donc
+  la forme du rail *est* la distribution — un long segment, c'est un mois où tu as beaucoup
+  photographié. Les changements d'année sont étiquetés. On le glisse pour sauter directement.
+- Le segment de la période à l'écran est mis en avant, via la position des en-têtes rendus.
+- Les fichiers **sans date** forment une section en fin de liste plutôt que de disparaître.
+
+Le rail s'efface en mode sélection, et le tri par nom revient à une grille continue sans
+sections — y plaquer des mois n'aurait aucun sens.
+
 ## Tri
 
 Menu « … » → trois ordres, mémorisés pour toute l'app : plus récentes d'abord (défaut),
@@ -133,8 +148,8 @@ est l'affichage progressif — petit aperçu tout de suite, remplacé par la bon
 rm -f /tmp/keocheck   # sinon un echec de compilation relance l'ancien binaire
 swiftc -swift-version 6 Keo/Freebox/Item.swift Keo/Freebox/Transport.swift \
   Keo/Freebox/FreeboxClient.swift Keo/Downloads/DownloadJob.swift \
-  Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift \
-  Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
+  Keo/Freebox/MediaSection.swift Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift \
+  Keo/UI/MediaDate.swift Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
 ```
 
 Couvre la garantie de lecture seule, l'enveloppe `{success, result}`, l'encodage des chemins,

@@ -135,6 +135,60 @@ assert(contents.selectable.map(\.name) == ["clip.mp4", "x.jpg", "notes.pdf"],
      + "et sans date le tri retombe sur le nom")
 assert(FolderContents([]).isEmpty)
 
+// MARK: - Regroupement en sections pour la timeline
+
+var utc = Calendar(identifier: .gregorian)
+utc.timeZone = TimeZone(secondsFromGMT: 0)!
+let fr = Locale(identifier: "fr_FR")
+
+func onDay(_ iso: String, _ name: String) -> Item {
+    let parser = DateFormatter()
+    parser.locale = Locale(identifier: "en_US_POSIX")
+    parser.timeZone = TimeZone(secondsFromGMT: 0)
+    parser.dateFormat = "yyyy-MM-dd"
+    return Item(path: "/a/\(name)", name: name, isDirectory: false, size: 0,
+                modified: parser.date(from: iso), mimeType: "image/jpeg")
+}
+
+let acrossMonths = MediaGrouping.sections(from: [
+    onDay("2024-08-20", "a.jpg"), onDay("2024-08-02", "b.jpg"),
+    onDay("2024-07-15", "c.jpg"),
+    onDay("2023-12-25", "d.jpg"),
+], calendar: utc, locale: fr)
+
+assert(acrossMonths.map(\.id) == ["2024-08", "2024-07", "2023-12"],
+       "une section par mois, dans l'ordre reçu — \(acrossMonths.map(\.id))")
+assert(acrossMonths.map { $0.items.count } == [2, 1, 1])
+assert(acrossMonths.map(\.startIndex) == [0, 2, 3],
+       "startIndex situe la section dans le tableau plat, pour le préchargement")
+assert(acrossMonths[0].year == "2024" && acrossMonths[1].year == nil,
+       "l'année ne s'affiche qu'au changement d'année")
+assert(acrossMonths[2].year == "2023")
+assert(acrossMonths[0].title.contains("2024"), "titre localisé — \(acrossMonths[0].title)")
+
+// Un seul mois et beaucoup de photos : le mois seul ne regrouperait rien.
+let holiday = (1...25).map { onDay(String(format: "2024-08-%02d", ($0 % 20) + 1), "p\($0).jpg") }
+let byDay = MediaGrouping.sections(from: holiday, calendar: utc, locale: fr)
+assert(byDay.count > 1, "un dossier tenant dans un mois se regroupe par jour")
+assert(byDay[0].id.count == 10, "clé au jour près — \(byDay[0].id)")
+
+// Peu de photos dans un seul mois : pas la peine de découper.
+let few = MediaGrouping.sections(from: [onDay("2024-08-20", "a.jpg"), onDay("2024-08-21", "b.jpg")],
+                                 calendar: utc, locale: fr)
+assert(few.map(\.id) == ["2024-08"], "sous le seuil, on garde le mois")
+
+// Les fichiers sans date restent navigables.
+let undated = MediaGrouping.sections(from: [
+    onDay("2024-08-20", "a.jpg"),
+    Item(path: "/a/x.jpg", name: "x.jpg", isDirectory: false, size: 0,
+         modified: nil, mimeType: "image/jpeg"),
+], calendar: utc, locale: fr)
+assert(undated.map(\.id) == ["2024-08", MediaGrouping.undatedID],
+       "les sans-date forment leur propre section plutôt que d'être perdus")
+assert(undated.last?.year == nil, "pas d'année pour les sans-date")
+
+assert(MediaGrouping.sections(from: [], calendar: utc, locale: fr).isEmpty)
+
 // MARK: - Date affichée en plein écran
 
 let shot = Date(timeIntervalSince1970: 1_000_000)
@@ -270,4 +324,4 @@ assert(job.position == 4, "la position ne dépasse pas le total")
 assert(DownloadJob(total: 0, completed: 0, currentName: "", currentFraction: 0).fraction == 0,
        "un lot vide ne divise pas par zéro")
 
-print("ok — lecture seule, envelope, chemins, classification, aperçus, dates, tri, éviction, progression")
+print("ok — lecture seule, envelope, chemins, classification, aperçus, dates, sections, tri, éviction, progression")

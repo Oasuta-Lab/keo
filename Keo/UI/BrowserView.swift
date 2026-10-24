@@ -18,39 +18,67 @@ struct BrowserView: View {
     @State private var selection: Set<Item> = []
     @AppStorage("itemOrder") private var order: ItemOrder = .newest
 
+    /// Only built when sorting by date — grouping a name-sorted grid by month would be noise.
+    @State private var sections: [MediaSection] = []
+    @State private var activeSection: MediaSection.ID?
+
+    private var sectioned: Bool { order != .name && !sections.isEmpty }
+
     private let columns = [GridItem(.adaptive(minimum: 110), spacing: 2)]
+    fileprivate static let gridSpace = "keo.grid"
+
+    /// The last header that has already passed the top edge: that is the period on screen.
+    fileprivate static func topmost(of tops: [String: CGFloat]) -> String? {
+        let passed = tops.filter { $0.value <= 1 }
+        if let lowest = passed.max(by: { $0.value < $1.value }) { return lowest.key }
+        return tops.min(by: { $0.value < $1.value })?.key
+    }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(contents.folders) { folder in
-                    NavigationLink(value: folder) {
-                        Row(item: folder, icon: "folder.fill", selected: nil)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    ForEach(contents.folders) { folder in
+                        NavigationLink(value: folder) {
+                            Row(item: folder, icon: "folder.fill", selected: nil)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(selecting)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(selecting)
-                }
 
-                if !contents.media.isEmpty {
-                    LazyVGrid(columns: columns, spacing: 2) {
-                        ForEach(Array(contents.media.enumerated()), id: \.element) { index, item in
-                            Button { tap(item) } label: {
-                                Thumb(item: item, client: client,
-                                      selected: selecting ? selection.contains(item) : nil,
-                                      lookahead: lookahead(after: index))
+                    if sectioned {
+                        ForEach(sections) { section in
+                            Section {
+                                grid(section.items, from: section.startIndex)
+                            } header: {
+                                SectionHeader(section: section)
                             }
-                            .buttonStyle(.plain)
+                            .id(section.id)
+                        }
+                    } else if !contents.media.isEmpty {
+                        grid(contents.media, from: 0)
+                    }
+
+                    ForEach(contents.documents) { document in
+                        Button { tap(document) } label: {
+                            Row(item: document, icon: "doc.fill",
+                                selected: selecting ? selection.contains(document) : nil)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .coordinateSpace(name: Self.gridSpace)
+            .onPreferenceChange(SectionTopKey.self) { tops in
+                activeSection = Self.topmost(of: tops)
+            }
+            .overlay(alignment: .trailing) {
+                if sectioned, !selecting {
+                    TimelineRail(sections: sections, activeID: activeSection) { id in
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            proxy.scrollTo(id, anchor: .top)
                         }
                     }
-                    .padding(.vertical, 2)
-                }
-
-                ForEach(contents.documents) { document in
-                    Button { tap(document) } label: {
-                        Row(item: document, icon: "doc.fill",
-                            selected: selecting ? selection.contains(document) : nil)
-                    }
-                    .buttonStyle(.plain)
                 }
             }
         }
@@ -93,7 +121,26 @@ struct BrowserView: View {
         }
         .task(id: path) { await load() }
         // Reordering is a local question: no reason to ask the box again.
-        .onChange(of: order) { _, new in contents = contents.reordered(by: new) }
+        .onChange(of: order) { _, new in
+            contents = contents.reordered(by: new)
+            rebuildSections()
+        }
+    }
+
+    /// `offset` is the position of the first item inside the flat media array, so each cell
+    /// can still work out its prefetch window.
+    private func grid(_ items: [Item], from offset: Int) -> some View {
+        LazyVGrid(columns: columns, spacing: 2) {
+            ForEach(Array(items.enumerated()), id: \.element) { index, item in
+                Button { tap(item) } label: {
+                    Thumb(item: item, client: client,
+                          selected: selecting ? selection.contains(item) : nil,
+                          lookahead: lookahead(after: offset + index))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 2)
     }
 
     // MARK: Pieces
@@ -207,14 +254,58 @@ struct BrowserView: View {
         selection = []
     }
 
+    private func rebuildSections() {
+        sections = order == .name ? [] : MediaGrouping.sections(from: contents.media)
+        activeSection = sections.first?.id
+    }
+
     private func load() async {
         do {
             contents = try await client.list(path, order: order)
+            rebuildSections()
             error = nil
         } catch {
             self.error = error.localizedDescription
         }
         loaded = true
+    }
+}
+
+// MARK: - Sections
+
+private struct SectionHeader: View {
+    let section: MediaSection
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(section.title)
+                .font(.headline)
+            Spacer()
+            Text("\(section.items.count)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.bar)
+        .background(
+            GeometryReader { geometry in
+                Color.clear.preference(
+                    key: SectionTopKey.self,
+                    value: [section.id: geometry.frame(in: .named(BrowserView.gridSpace)).minY]
+                )
+            }
+        )
+    }
+}
+
+/// Where each rendered header sits, so the rail can highlight the period on screen.
+private struct SectionTopKey: PreferenceKey {
+    static let defaultValue: [String: CGFloat] = [:]
+
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
+        value.merge(nextValue()) { _, new in new }
     }
 }
 
