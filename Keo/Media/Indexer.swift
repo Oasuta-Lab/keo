@@ -21,6 +21,8 @@ final class Indexer: ObservableObject {
         var folderDone = 0
         var folderTotal = 0
         var indexedOverall = 0
+        /// Files the network refused this time; they stay unknown and are retried later.
+        var unreadable = 0
 
         var pending: Int { max(mediaFound - datesRead - alreadyKnown, 0) }
 
@@ -175,9 +177,12 @@ final class Indexer: ObservableObject {
             progress.folderTotal = pending.count
             state = .running(progress)
 
-            await read(pending, client: client, progress: &progress)
+            let failures = await read(pending, client: client, progress: &progress)
+            progress.unreadable += failures
 
-            if !Task.isCancelled {
+            // Only a folder read end to end can be stamped: otherwise the files the network
+            // swallowed would be skipped for ever.
+            if !Task.isCancelled, failures == 0 {
                 await CaptureDateIndex.shared.markCompleted(path, modified: folderModified)
             }
             progress.indexedOverall = await CaptureDateIndex.shared.count
@@ -194,28 +199,45 @@ final class Indexer: ObservableObject {
         task = nil
     }
 
+    /// Returns how many files could not be read, so the caller knows whether the folder can
+    /// honestly be called done.
+    @discardableResult
     private func read(_ items: [Item], client: FreeboxClient,
-                      progress: inout Progress) async {
-        guard !items.isEmpty else { return }
+                      progress: inout Progress) async -> Int {
+        guard !items.isEmpty else { return 0 }
         var done = 0
+        var failures = 0
 
-        await withTaskGroup(of: (Item, Date?).self) { group in
+        // A failed read must never be stored as "no date": it would be permanent, and the
+        // folder would be stamped complete and never looked at again. A dropped Wi-Fi would
+        // punch holes in the timeline for good.
+        await withTaskGroup(of: (Item, Result<Date?, Error>).self) { group in
             var next = 0
             func feed() {
                 guard next < items.count else { return }
                 let item = items[next]
                 next += 1
                 group.addTask {
-                    let prefix = try? await client.bytes(item.path, prefix: Self.prefixBytes)
-                    return (item, prefix.flatMap(ImageDecoding.captureDate(prefix:)))
+                    do {
+                        let prefix = try await client.bytes(item.path, prefix: Self.prefixBytes)
+                        return (item, .success(ImageDecoding.captureDate(prefix: prefix)))
+                    } catch {
+                        return (item, .failure(error))
+                    }
                 }
             }
             for _ in 0..<min(Self.parallel, items.count) { feed() }
 
             var published = 0
-            while let (item, date) = await group.next() {
+            while let (item, outcome) = await group.next() {
                 if Task.isCancelled { group.cancelAll(); break }
-                await CaptureDateIndex.shared.record(date, for: item)
+                switch outcome {
+                case .success(let date):
+                    await CaptureDateIndex.shared.record(date, for: item)
+                case .failure:
+                    // Left unknown on purpose, so a later pass retries it.
+                    failures += 1
+                }
                 done += 1
                 if done - published >= Self.publishEvery {
                     progress.datesRead += done - published
@@ -230,6 +252,7 @@ final class Indexer: ObservableObject {
 
         progress.folderDone = done
         state = .running(progress)
+        return failures
     }
 
     /// Backstop against a symlink loop turning this into an infinite walk.

@@ -95,6 +95,13 @@ struct IndexingView: View {
         row("Dates lues cette fois", progress.datesRead)
         row("Restantes ici", max(progress.folderTotal - progress.folderDone, 0))
         row("Dates connues au total", max(progress.indexedOverall, 0))
+        if progress.unreadable > 0 {
+            LabeledContent("Illisibles, à réessayer") {
+                Text(progress.unreadable, format: .number)
+                    .monospacedDigit()
+                    .foregroundStyle(.orange)
+            }
+        }
     }
 
     private func row(_ label: String, _ value: Int) -> some View {

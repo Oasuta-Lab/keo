@@ -79,13 +79,13 @@ actor CaptureDateIndex {
 
     func save() {
         guard dirty else { return }
-        if let data = try? JSONEncoder().encode(records) {
-            try? data.write(to: file, options: .atomic)
+        do {
+            try JSONEncoder().encode(records).write(to: file, options: .atomic)
+            try JSONEncoder().encode(completed).write(to: walkFile, options: .atomic)
+            dirty = false
+        } catch {
+            // Keep `dirty` set: a disk that refused the write must be retried, not forgotten.
         }
-        if let data = try? JSONEncoder().encode(completed) {
-            try? data.write(to: walkFile, options: .atomic)
-        }
-        dirty = false
     }
 }
 
@@ -137,23 +137,30 @@ final class DateScan: ObservableObject {
             var found: [Item.ID: Date] = [:]
             var done = 0
 
-            await withTaskGroup(of: (Item, Date?).self) { group in
+            // Same rule as the full indexer: a failed read stays unknown, never "no date".
+            await withTaskGroup(of: (Item, Result<Date?, Error>).self) { group in
                 var next = 0
                 func feed() {
                     guard next < pending.count else { return }
                     let item = pending[next]
                     next += 1
                     group.addTask {
-                        let prefix = try? await client.bytes(item.path, prefix: Self.prefixBytes)
-                        return (item, prefix.flatMap(ImageDecoding.captureDate(prefix:)))
+                        do {
+                            let prefix = try await client.bytes(item.path, prefix: Self.prefixBytes)
+                            return (item, .success(ImageDecoding.captureDate(prefix: prefix)))
+                        } catch {
+                            return (item, .failure(error))
+                        }
                     }
                 }
                 for _ in 0..<min(Self.parallel, pending.count) { feed() }
 
-                while let (item, date) = await group.next() {
+                while let (item, outcome) = await group.next() {
                     if Task.isCancelled { group.cancelAll(); break }
-                    await CaptureDateIndex.shared.record(date, for: item)
-                    if let date { found[item.id] = date }
+                    if case .success(let date) = outcome {
+                        await CaptureDateIndex.shared.record(date, for: item)
+                        if let date { found[item.id] = date }
+                    }
                     done += 1
                     // Publishing every file would invalidate the grid 20 000 times.
                     if done % Self.progressStride == 0 || done == pending.count {
