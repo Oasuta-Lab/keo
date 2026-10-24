@@ -297,6 +297,22 @@ actor IndexStore {
         }
     }
 
+    /// Whether the index knows of any folder nested under this one.
+    ///
+    /// Skipping an unchanged folder also skips listing it, which means never discovering its
+    /// children — a parent whose own files were read would hide an unfinished subtree and let
+    /// the pass believe it had reached the end. Only a folder with no known children may be
+    /// skipped outright.
+    func hasChildFolders(_ folder: String) throws -> Bool {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT 1 FROM folder WHERE substr(path, 1, length(?1) + 1) = ?1 || '/' "
+                  + "LIMIT 1", into: &statement)
+        bind(statement, 1, folder)
+        return sqlite3_step(statement) == SQLITE_ROW
+    }
+
     /// The folder as the last pass saw it. Lets the grid appear immediately, before the box
     /// has had a chance to answer — and it answers in seconds on a folder of 14 600 files.
     func listing(_ folder: String) throws -> [Item] {

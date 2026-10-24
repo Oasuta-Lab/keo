@@ -175,6 +175,16 @@ func checkIndexStore() async throws {
     assert(stillToRead.count == 1,
            "et il reste à lire : présent au listing n'est pas lu")
 
+    // --- un dossier intact mais qui a des enfants doit quand même être listé -----------
+    // C'est le bug qui cassait la reprise : /NAS était sauté comme « intact », donc jamais
+    // listé, donc ses sous-dossiers jamais découverts, et le parcours se croyait terminé.
+    let branching = try await tree.hasChildFolders("/NAS/Album")
+    assert(branching, "/NAS/Album a un sous-dossier connu de l'index")
+    let leaf = try await tree.hasChildFolders("/NAS/Album/Juin")
+    assert(!leaf, "/NAS/Album/Juin n'en a pas : lui peut être sauté sans rien cacher")
+    let unknownBranch = try await tree.hasChildFolders("/NAS/Jamais")
+    assert(!unknownBranch, "un dossier inconnu n'a pas d'enfants connus")
+
     // --- un meilleur lecteur fait réessayer les photos restées sans date ---------------
     let reader = home.appendingPathComponent("reader")
     try FileManager.default.createDirectory(at: reader, withIntermediateDirectories: true)

@@ -7,6 +7,14 @@ import UIKit
 /// There used to be two: a per-folder scan and a background walk, which could work the same
 /// folder at once and double the traffic to the box. This is a single serial worker with a
 /// queue the open folder jumps to the front of.
+/// Lifecycle tracing, debug builds only. Three rounds of plausible-but-wrong fixes is enough:
+/// the next change to this file should be driven by what the device actually reports.
+func trace(_ message: @autoclosure () -> String) {
+    #if DEBUG
+    print("[keo] \(message())")
+    #endif
+}
+
 @MainActor
 final class Indexer: ObservableObject {
     struct Progress: Equatable {
@@ -122,6 +130,8 @@ final class Indexer: ObservableObject {
         if isStalled, case .running(let progress) = state { state = .paused(progress) }
         guard !state.isRunning else { return }
 
+        trace("start root=\(root) scope=\(String(describing: scope)) "
+            + "state=\(state) stalled=\(isStalled) queue=\(queue.count)")
         resumeRoot = root
         resumeWanted = true
         queue.append(.walk(root: root, client: client, scope: scope))
@@ -145,7 +155,8 @@ final class Indexer: ObservableObject {
     /// Picks up an index interrupted by a suspension or a termination. Safe to call on every
     /// launch: it does nothing unless there is something to resume.
     func resumeIfInterrupted(client: FreeboxClient) {
-        guard resumeWanted, !state.isRunning else { return }
+        if case .finished = state { return }      // a completed pass is not an interruption
+        guard resumeWanted, !state.isRunning || isStalled else { return }
         start(from: resumeRoot, client: client)
     }
 
@@ -162,6 +173,7 @@ final class Indexer: ObservableObject {
         runToken += 1
         let token = runToken
         walkCompleted = false
+        trace("pump token=\(token) queue=\(queue.count)")
 
         runner = Task { [weak self] in
             while let job = await self?.nextJob(token) {
@@ -178,12 +190,18 @@ final class Indexer: ObservableObject {
     }
 
     private func nextJob(_ token: Int) -> Job? {
-        guard token == runToken, !queue.isEmpty else { return nil }
+        guard token == runToken else {
+            trace("nextJob refused: token=\(token) current=\(runToken)")
+            return nil
+        }
+        guard !queue.isEmpty else { return nil }
         return queue.removeFirst()
     }
 
     private func finishRun(_ token: Int) {
+        trace("finishRun token=\(token) current=\(runToken) completed=\(walkCompleted)")
         guard token == runToken else { return }   // a superseded worker decides nothing
+        if walkCompleted { resumeWanted = false }
         runner = nil
         await_checkpoint()
         endBackgroundGrace()
@@ -197,6 +215,7 @@ final class Indexer: ObservableObject {
     }
 
     private func halt() {
+        trace("halt state=\(state)")
         runToken += 1          // whatever is still running is now superseded
         runner?.cancel()
         runner = nil
@@ -229,11 +248,14 @@ final class Indexer: ObservableObject {
                 let folder = pending.removeFirst()
                 visited += 1
 
-                // Untouched since it was fully read: not even listed. This is what makes a
-                // second pass cheap.
-                if try await IndexStore.shared.isUnchanged(folder.path,
-                                                           modified: folder.modified,
-                                                           childCount: folder.childCount) {
+                // Untouched since it was fully read, and nothing nested under it: only then
+                // is skipping the listing safe. A folder with children must still be listed,
+                // or the walk never discovers them and declares itself finished two folders in.
+                let untouched = try await IndexStore.shared.isUnchanged(
+                    folder.path, modified: folder.modified, childCount: folder.childCount
+                )
+                let hasChildren = try await IndexStore.shared.hasChildFolders(folder.path)
+                if untouched, !hasChildren {
                     try await IndexStore.shared.touchSubtree(folder.path, generation: generation)
                     progress.foldersSkipped += 1
                     state = .running(progress)
@@ -250,6 +272,7 @@ final class Indexer: ObservableObject {
                     contents = try await client.list(folder.path, order: .name)
                     consecutiveFailures = 0
                 } catch {
+                    trace("list FAILED \(folder.path): \(error.localizedDescription)")
                     // A failed listing is not an empty folder. Counting it keeps the pass from
                     // calling itself complete — and from sweeping away everything it never
                     // reached, which is how a suspended app used to destroy its own index.
@@ -288,6 +311,9 @@ final class Indexer: ObservableObject {
                 cancelled: Task.isCancelled, visited: visited, limit: Self.folderLimit,
                 listingFailures: listingFailures, queueEmpty: pending.isEmpty
             )
+            trace("walk end complete=\(complete) cancelled=\(Task.isCancelled) "
+                + "visited=\(visited) failures=\(listingFailures) "
+                + "pendingEmpty=\(pending.isEmpty) skipped=\(progress.foldersSkipped)")
             if complete {
                 try await IndexStore.shared.sweepFolders(generation: generation)
                 lastIndexedAt = Date().timeIntervalSince1970
@@ -295,8 +321,11 @@ final class Indexer: ObservableObject {
                 resumeWanted = false   // nothing left to pick up
             }
             progress.indexedOverall = (try? await IndexStore.shared.fileCount()) ?? 0
-            state = .running(progress)
+            // Never republish `.running` after a pause: that is what left the app claiming to
+            // work with nobody behind it.
+            if !Task.isCancelled { state = .running(progress) }
         } catch {
+            trace("walk threw: \(error.localizedDescription)")
             failure = error.localizedDescription
         }
     }
@@ -442,7 +471,9 @@ final class Indexer: ObservableObject {
             // returns, iOS suspends the process, and the Task never runs — so the work was
             // never paused and nothing was ever marked resumable.
             MainActor.assumeIsolated {
-                guard let self, self.state.isRunning else { return }
+                guard let self else { return }
+                trace("background: running=\(self.state.isRunning)")
+                guard self.state.isRunning else { return }
                 self.resumeRoot = root
                 self.resumeWanted = true
                 self.halt()
@@ -453,7 +484,10 @@ final class Indexer: ObservableObject {
             forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, self.resumeWanted else { return }
+                guard let self else { return }
+                trace("foreground: wanted=\(self.resumeWanted) state=\(self.state) "
+                    + "stalled=\(self.isStalled)")
+                guard self.resumeWanted else { return }
                 self.start(from: self.resumeRoot, client: client)
             }
         })
