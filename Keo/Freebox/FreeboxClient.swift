@@ -218,6 +218,12 @@ actor FreeboxClient {
         }
     }
 
+    func bytes(_ path: String, range: Range<Int64>) async throws -> Data {
+        try await authorized { token in
+            try await read.bytes(fileURL(path), token: token, range: range)
+        }
+    }
+
     func download(_ path: String,
                   onProgress: (@Sendable (Double) -> Void)? = nil) async throws -> URL {
         try await authorized { token in

@@ -300,10 +300,13 @@ brancher la console d'abord.**
 
 ```sh
 rm -f /tmp/keocheck   # sinon un echec de compilation relance l'ancien binaire
-swiftc -swift-version 6 Keo/Freebox/Item.swift Keo/Freebox/Transport.swift \
+swiftc -swift-version 6 -D DEBUG Keo/Freebox/Item.swift Keo/Freebox/Transport.swift \
   Keo/Freebox/FreeboxClient.swift Keo/Downloads/DownloadJob.swift \
   Keo/Freebox/MediaSection.swift Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift \
-  Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
+  Keo/Media/FolderStamp.swift Keo/Media/WalkOutcome.swift Keo/Media/IndexStore.swift \
+  Keo/Media/VideoDate.swift Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift \
+  Tests/main.swift Tests/store.swift Tests/videodatechecks.swift \
+  -o /tmp/keocheck && /tmp/keocheck
 ```
 
 La géométrie du rail vit dans `RailLayout`, sans SwiftUI, précisément pour être vérifiable.

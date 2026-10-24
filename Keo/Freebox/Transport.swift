@@ -104,8 +104,16 @@ struct ReadOnlyTransport: Sendable {
 
     /// `prefix` caps the download to the first N bytes, for embedded-preview probes.
     func bytes(_ url: URL, token: String, prefix: Int? = nil) async throws -> Data {
+        try await bytes(url, token: token, range: prefix.map { 0 ..< Int64($0) })
+    }
+
+    /// Arbitrary byte window, for the video date scanner — still a plain GET.
+    func bytes(_ url: URL, token: String, range: Range<Int64>?) async throws -> Data {
         var call = request(url, token: token)
-        if let prefix { call.setValue("bytes=0-\(prefix - 1)", forHTTPHeaderField: "Range") }
+        if let range {
+            call.setValue("bytes=\(range.lowerBound)-\(range.upperBound - 1)",
+                          forHTTPHeaderField: "Range")
+        }
 
         let (data, response) = try await session.data(for: call)
         guard let http = response as? HTTPURLResponse else { throw FreeboxError.http(0) }

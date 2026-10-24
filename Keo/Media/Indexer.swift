@@ -296,6 +296,12 @@ final class Indexer: ObservableObject {
                 })
                 progress.foldersVisited += 1
                 progress.mediaFound += contents.media.count
+                if contents.media.count > 50 {
+                    let videos = contents.media.filter { $0.kind == .video }.count
+                    trace("folder \(folder.path): media=\(contents.media.count) "
+                        + "images=\(contents.media.count - videos) videos=\(videos) "
+                        + "docs=\(contents.documents.count)")
+                }
 
                 let completion = FolderStamp.Completion(
                     modified: folder.modified,
@@ -404,6 +410,15 @@ final class Indexer: ObservableObject {
                     next += 1
                     group.addTask {
                         do {
+                            if item.kind == .video {
+                                // Range-driven atom walk; `VideoDate.Undecided` lands in the
+                                // failure branch below, so a truncated read stays retryable
+                                // instead of becoming a permanent "no date".
+                                let date = try await VideoDate.capture(fileSize: item.size) {
+                                    try await client.bytes(item.path, range: $0)
+                                }
+                                return (item, .success(date))
+                            }
                             let head = try await client.bytes(item.path, prefix: Self.prefixBytes)
                             if let date = ImageDecoding.captureDate(prefix: head) {
                                 return (item, .success(date))
@@ -427,7 +442,14 @@ final class Indexer: ObservableObject {
                     switch outcome {
                     case .success(let capture):
                         batch.append((item, capture))
-                        if let capture { discovered[item.id] = capture } else { progress.dateless += 1 }
+                        if let capture {
+                            discovered[item.id] = capture
+                        } else {
+                            progress.dateless += 1
+                            if progress.dateless <= 12 {
+                                trace("dateless \(item.kind) \(item.name) \(item.size) octets")
+                            }
+                        }
                         progress.datesRead += 1
                     case .failure:
                         // Left unknown on purpose: a dropped connection must be retried, never

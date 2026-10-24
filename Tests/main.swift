@@ -3,9 +3,7 @@
 //
 // Run from the repo root:
 //   rm -f /tmp/keocheck
-//   swiftc -swift-version 6 Keo/Freebox/Item.swift Keo/Freebox/Transport.swift \
-//     Keo/Freebox/FreeboxClient.swift Keo/Downloads/DownloadJob.swift \
-//     Keo/Media/DiskCache.swift Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
+//   (la commande complète, tenue à jour, est dans README.md, section « Vérifier »)
 import Foundation
 
 // MARK: - The NAS is read-only
@@ -469,3 +467,4 @@ print("ok — lecture seule, envelope, chemins, classification, aperçus, dates 
 
 try await checkIndexStore()
 try await checkMigration()
+try await checkVideoDate()
