@@ -227,6 +227,11 @@ final class Indexer: ObservableObject {
 
     private func walk(root: String, client: FreeboxClient, scope: Scope?) async {
         var progress = state.progress ?? Progress()
+        // Per-pass counters: carried over, they counted the same folders again at every
+        // resume — 14 618 media became 29 213 then 43 808 without a single new file.
+        progress.foldersVisited = 0
+        progress.foldersSkipped = 0
+        progress.mediaFound = 0
         progress.folder = root
         state = .running(progress)
 
@@ -448,8 +453,11 @@ final class Indexer: ObservableObject {
         await flush(stamping: failures == 0 && !Task.isCancelled)
 
         progress.folderDone = done
-        progress.indexedOverall = (try? await IndexStore.shared.fileCount()) ?? progress.indexedOverall
-        state = .running(progress)
+        progress.indexedOverall = (try? await IndexStore.shared.fileCount())
+            ?? progress.indexedOverall
+        // Same rule as `walk`: never republish `.running` once cancelled, or the app goes back
+        // to claiming it is working with nobody behind it.
+        if !Task.isCancelled { state = .running(progress) }
 
         if !discovered.isEmpty {
             resolution = Resolution(folder: folder, dates: discovered)
