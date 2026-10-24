@@ -276,6 +276,26 @@ Contrepartie assumée : un fichier dont l'aperçu est refusé coûte un téléch
 premier affichage. Si la première descente dans un gros dossier devient trop lente, la suite
 est l'affichage progressif — petit aperçu tout de suite, remplacé par la bonne vignette.
 
+## Lire les traces de l'appareil
+
+Le cycle de vie de l'indexation a coûté trois correctifs plausibles et faux. La quatrième
+tentative est partie de ce que l'appareil raconte, et a trouvé la cause en une fois.
+
+```sh
+xcrun devicectl device install app --device <UDID> <chemin>/Keo.app
+xcrun devicectl device process launch --device <UDID> \
+  --terminate-existing --console fr.yieldstudio.keo > /tmp/keo-console.log 2>&1 &
+grep -a "\[keo\]" /tmp/keo-console.log
+```
+
+`--console` relaie la sortie standard de l'app. `Indexer` trace, en build DEBUG uniquement,
+chaque point de bascule : réception de l'arrière-plan, `halt`, retour au premier plan, relance,
+et le verdict de fin de parcours avec tous ses compteurs.
+
+C'est ce qui a montré, noir sur blanc, qu'une reprise visitait deux dossiers et se déclarait
+terminée. **Ne pas modifier le cycle de vie de l'indexation sur la foi d'un raisonnement :
+brancher la console d'abord.**
+
 ## Vérifier
 
 ```sh
