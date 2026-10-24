@@ -24,7 +24,7 @@ donc tout passe par `fs/ls` et `dl` de l'API Freebox OS.
 | `Keo/Freebox.swift` | API Freebox OS : association, session HMAC-SHA1, `fs/ls`, `dl` |
 | `Keo/Thumbs.swift` | Vignettes : aperçu EXIF via range 256 Ko, image vidéo via `AVAssetImageGenerator`, cache disque + mémoire |
 | `Keo/BrowserView.swift` | Grille `LazyVGrid`, dossiers, documents |
-| `Keo/ViewerView.swift` | Plein écran : zoom `UIScrollView`, `AVPlayer`, QuickLook |
+| `Keo/ViewerView.swift` | Plein écran : zoom `UIScrollView`, `AVPlayer`, QuickLook, fermeture au glissé |
 | `Keo/VideoAsset.swift` | `AVAssetResourceLoaderDelegate` qui porte `X-Fbx-App-Auth` jusqu'à AVFoundation |
 | `Keo/Downloads.swift` | File d'attente, pellicule (`PHAssetCreationRequest`), feuille de partage |
 | `Keo/DownloadJob.swift` | Arithmétique de progression d'un lot (isolée pour être testable) |

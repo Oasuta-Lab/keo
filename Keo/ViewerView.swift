@@ -11,6 +11,10 @@ struct ViewerView: View {
     @EnvironmentObject private var downloader: Downloader
     @Environment(\.dismiss) private var dismiss
 
+    @State private var drag: CGSize = .zero
+    /// Pinched in, the scroll view owns the pan — stay out of its way.
+    @State private var zoomed = false
+
     init(client: FreeboxClient, items: [Item], start: Item) {
         self.client = client
         self.items = items
@@ -18,14 +22,20 @@ struct ViewerView: View {
     }
 
     var body: some View {
-        TabView(selection: $current) {
-            ForEach(items) { item in
-                Page(item: item, client: client).tag(item)
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            TabView(selection: $current) {
+                ForEach(items) { item in
+                    Page(item: item, client: client, zoomed: $zoomed).tag(item)
+                }
             }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .ignoresSafeArea()
+            .offset(y: drag.height)
+            .scaleEffect(shrink)
+            .simultaneousGesture(dismissDrag)
         }
-        .tabViewStyle(.page(indexDisplayMode: .never))
-        .background(.black)
-        .ignoresSafeArea()
         .overlay(alignment: .top) {
             HStack {
                 Button { dismiss() } label: { Glyph("xmark") }
@@ -45,6 +55,7 @@ struct ViewerView: View {
                 .disabled(downloader.isRunning)
             }
             .padding(.horizontal, 16)
+            .opacity(1 - progress)
         }
         .overlay(alignment: .bottom) {
             DownloadBar(downloader: downloader)
@@ -53,6 +64,33 @@ struct ViewerView: View {
             ShareSheet(urls: payload.urls)
         }
         .statusBarHidden()
+    }
+
+    /// How far along the dismiss we are, 0 to 1.
+    private var progress: Double {
+        min(abs(drag.height) / 220, 1)
+    }
+
+    private var shrink: Double {
+        1 - progress * 0.12
+    }
+
+    /// `simultaneousGesture` so the page swipe keeps working; the dominant axis decides which wins.
+    private var dismissDrag: some Gesture {
+        DragGesture(minimumDistance: 12)
+            .onChanged { value in
+                guard !zoomed, abs(value.translation.height) > abs(value.translation.width) else { return }
+                drag = value.translation
+            }
+            .onEnded { value in
+                guard !zoomed, drag != .zero else { return }
+                let flung = value.predictedEndTranslation.height > 400
+                if value.translation.height > 140 || flung {
+                    dismiss()
+                } else {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { drag = .zero }
+                }
+            }
     }
 }
 
@@ -75,12 +113,13 @@ private struct Glyph: View {
 private struct Page: View {
     let item: Item
     let client: FreeboxClient
+    @Binding var zoomed: Bool
 
     var body: some View {
         switch item.kind {
         case .video: VideoPage(item: item, client: client)
         case .other: DocumentPage(item: item, client: client)
-        default: ImagePage(item: item, client: client)
+        default: ImagePage(item: item, client: client, zoomed: $zoomed)
         }
     }
 }
@@ -88,6 +127,7 @@ private struct Page: View {
 private struct ImagePage: View {
     let item: Item
     let client: FreeboxClient
+    @Binding var zoomed: Bool
 
     @State private var image: UIImage?
     @State private var sharp = false
@@ -97,7 +137,7 @@ private struct ImagePage: View {
         ZStack {
             Color.black
             if let image {
-                ZoomableImage(image: image)
+                ZoomableImage(image: image, zoomed: $zoomed)
             } else if failed {
                 ContentUnavailableView("Image illisible", systemImage: "photo.badge.exclamationmark")
             } else {
@@ -209,6 +249,7 @@ private struct DocumentPage: View {
 /// UIScrollView does pinch, pan, momentum and double-tap zoom better than anything hand-rolled.
 private struct ZoomableImage: UIViewRepresentable {
     let image: UIImage
+    @Binding var zoomed: Bool
 
     func makeUIView(context: Context) -> UIScrollView {
         let scrollView = UIScrollView()
@@ -227,6 +268,10 @@ private struct ZoomableImage: UIViewRepresentable {
         imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         scrollView.addSubview(imageView)
         context.coordinator.imageView = imageView
+        context.coordinator.onZoom = { zoomed in
+            // Deferred: UIScrollView reports this mid-layout, SwiftUI dislikes that.
+            DispatchQueue.main.async { self.zoomed = zoomed }
+        }
 
         let doubleTap = UITapGestureRecognizer(target: context.coordinator,
                                                action: #selector(Coordinator.doubleTap(_:)))
@@ -237,6 +282,9 @@ private struct ZoomableImage: UIViewRepresentable {
     }
 
     func updateUIView(_ scrollView: UIScrollView, context: Context) {
+        context.coordinator.onZoom = { zoomed in
+            DispatchQueue.main.async { self.zoomed = zoomed }
+        }
         guard context.coordinator.imageView?.image !== image else { return }
         context.coordinator.imageView?.image = image
         scrollView.setZoomScale(1, animated: false)
@@ -246,8 +294,13 @@ private struct ZoomableImage: UIViewRepresentable {
 
     final class Coordinator: NSObject, UIScrollViewDelegate {
         var imageView: UIImageView?
+        var onZoom: ((Bool) -> Void)?
 
         func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            onZoom?(scrollView.zoomScale > 1.01)
+        }
 
         @objc func doubleTap(_ gesture: UITapGestureRecognizer) {
             guard let scrollView = gesture.view as? UIScrollView else { return }
