@@ -28,11 +28,26 @@ Freebox Server**. Le jeton d'application va dans le trousseau iOS.
 Si la navigation renvoie une erreur de droits : Freebox OS → Paramètres → Gestion des accès →
 Applications → Keo → cocher « Accès aux fichiers ».
 
+## Numéro de build
+
+`Scripts/stamp-build.sh` tamponne l'`Info.plist` **construit** — jamais celui du dépôt — au
+cours d'une phase de build :
+
+- `CFBundleVersion` = nombre de commits, donc il monte à chaque commit, sans saisie manuelle
+- `KeoCommit` = hash court, suffixé d'un `+` si la build portait des modifications non commitées
+
+Affiché en petit en bas de l'écran d'association et de la racine de la galerie, sous la forme
+`v0.1 (13) · a1b2c3d`. Il disparaît dès qu'une barre de sélection ou de téléchargement occupe
+le bas de l'écran, et n'apparaît pas dans les sous-dossiers ni en plein écran.
+
+Sans git (build depuis une archive), le script sort sans rien faire et la valeur du dépôt est
+conservée.
+
 ## Structure
 
 | Dossier | Rôle |
 |---|---|
-| `Keo/App/` | Entrée, `Store` (session, association), trousseau |
+| `Keo/App/` | Entrée, `Store` (session, association), trousseau, tampon de build |
 | `Keo/Freebox/` | `Item` et `FolderContents`, transports, client, asset vidéo authentifié |
 | `Keo/Media/` | Pipeline de vignettes, décodage ImageIO, cache disque évincé en LRU |
 | `Keo/Downloads/` | File d'attente, pellicule, feuille de partage |

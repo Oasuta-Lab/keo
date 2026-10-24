@@ -55,6 +55,7 @@
 				1A00000000000000000000A8 /* Sources */,
 				1A00000000000000000000A3 /* Frameworks */,
 				1A00000000000000000000A9 /* Resources */,
+				1A00000000000000000000C0 /* Stamp build number from git */,
 			);
 			buildRules = (
 			);
@@ -111,6 +112,28 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		1A00000000000000000000C0 /* Stamp build number from git */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Stamp build number from git";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"$SRCROOT/Scripts/stamp-build.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		1A00000000000000000000A8 /* Sources */ = {

@@ -54,6 +54,12 @@ struct BrowserView: View {
             }
         }
         .overlay { status }
+        .overlay(alignment: .bottom) {
+            // Root only, and out of the way whenever an action bar is up.
+            if path == FreeboxClient.rootPath, !selecting, !downloader.isRunning {
+                BuildStampLabel().padding(.bottom, 8)
+            }
+        }
         .navigationTitle(selecting ? selectionTitle : title)
         .navigationBarTitleDisplayMode(selecting || contents.folders.isEmpty ? .inline : .large)
         .navigationDestination(for: Item.self) { folder in

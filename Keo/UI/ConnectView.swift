@@ -60,6 +60,7 @@ struct ConnectView: View {
             }
 
             Spacer()
+            BuildStampLabel().padding(.bottom, 8)
         }
     }
 }
