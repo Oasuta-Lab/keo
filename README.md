@@ -43,6 +43,19 @@ le bas de l'écran, et n'apparaît pas dans les sous-dossiers ni en plein écran
 Sans git (build depuis une archive), le script sort sans rien faire et la valeur du dépôt est
 conservée.
 
+## Identité
+
+Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copié dans
+`Keo/Assets.xcassets` :
+
+- **`AppIcon`** ← `keo-icon.png`, la version à fond plein. Une icône iOS ne peut pas avoir de
+  canal alpha, donc la variante détourée ne convient pas ici.
+- **`Mascot`** ← `keo-icon-transparent.png`, détourée (78 % de pixels transparents), affichée
+  sur l'écran d'association où le fond est noir.
+- **`AccentColor`** ← `#015EB4`, le bleu de marque, éclairci en `#258BE8` en mode sombre où le
+  bleu foncé manquerait de contraste. Il teinte toute l'app : boutons, dossiers, rail de la
+  timeline.
+
 ## Structure
 
 | Dossier | Rôle |

@@ -7,9 +7,11 @@ struct ConnectView: View {
         VStack(spacing: 28) {
             Spacer()
 
-            Image(systemName: "photo.stack")
-                .font(.system(size: 56))
-                .foregroundStyle(.tint)
+            Image("Mascot")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 160, height: 160)
+                .accessibilityLabel("Keo, la loutre qui garde vos photos")
 
             VStack(spacing: 8) {
                 Text("Keo").font(.largeTitle.bold())
