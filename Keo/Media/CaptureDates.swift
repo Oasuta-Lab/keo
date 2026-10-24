@@ -69,7 +69,10 @@ final class DateScan: ObservableObject {
 
     /// Enough for the metadata of every format tested, and cheap enough to do thousands of times.
     private static let prefixBytes = 4 << 10
-    private static let parallel = 6
+    /// Deliberately below the thumbnail pipeline's share: the user is looking at the grid,
+    /// not at the scan. Background work yields, and its results are persisted anyway.
+    private static let parallel = 3
+    private static let progressStride = 50
 
     func cancel() {
         task?.cancel()
@@ -107,7 +110,10 @@ final class DateScan: ObservableObject {
                     await CaptureDateIndex.shared.record(date, for: item)
                     if let date { found[item.id] = date }
                     done += 1
-                    self.progress = Progress(done: done, total: pending.count)
+                    // Publishing every file would invalidate the grid 20 000 times.
+                    if done % Self.progressStride == 0 || done == pending.count {
+                        self.progress = Progress(done: done, total: pending.count)
+                    }
                     feed()
                 }
             }

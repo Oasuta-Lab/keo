@@ -30,19 +30,36 @@ enum MediaGrouping {
                          locale: Locale = .current) -> [MediaSection] {
         guard !media.isEmpty else { return [] }
 
-        let byDay = needsDayGranularity(media, calendar: calendar)
+        // One `dateComponents` per item, reused for both granularities. Asking twice cost
+        // 40 000 calls on a 20 000 photo folder.
+        var stamps: [Stamp] = []
+        stamps.reserveCapacity(media.count)
+        var months = Set<Int>()
+        for item in media {
+            let stamp = Stamp(item.timelineDate, calendar: calendar)
+            if let month = stamp.month { months.insert(month) }
+            stamps.append(stamp)
+        }
+
+        let byDay = months.count == 1 && media.count > 20
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.calendar = calendar
+        formatter.setLocalizedDateFormatFromTemplate(byDay ? "dMMMMyyyy" : "MMMMyyyy")
+
         var sections: [MediaSection] = []
         var currentKey: String?
         var current: [Item] = []
         var start = 0
         var previousYear: String?
 
-        func flush() {
+        func flush(_ stamp: Stamp?) {
             guard let key = currentKey, !current.isEmpty else { return }
             let year = key == undatedID ? nil : String(key.prefix(4))
             sections.append(MediaSection(
                 id: key,
-                title: title(for: current[0], key: key, byDay: byDay, calendar: calendar, locale: locale),
+                title: stamp?.date.map { title($0, formatter: formatter, locale: locale) }
+                    ?? "Sans date",
                 startIndex: start,
                 items: current,
                 year: year == previousYear ? nil : year
@@ -52,43 +69,61 @@ enum MediaGrouping {
             current = []
         }
 
-        for item in media {
-            let key = self.key(for: item, byDay: byDay, calendar: calendar)
-            if key != currentKey {
-                flush()
-                currentKey = key
+        // Bucket comparison is on integers: building 20 000 formatted strings just to detect
+        // boundaries was most of the cost of this pass.
+        var pending: Stamp?
+        var currentBucket: Int?
+        for (item, stamp) in zip(media, stamps) {
+            let bucket = stamp.bucket(byDay: byDay)
+            if bucket != currentBucket {
+                flush(pending)
+                currentBucket = bucket
+                currentKey = stamp.key(byDay: byDay)
+                pending = stamp
             }
             current.append(item)
         }
-        flush()
+        flush(pending)
         return sections
     }
 
-    private static func needsDayGranularity(_ media: [Item], calendar: Calendar) -> Bool {
-        var months = Set<String>()
-        for item in media where item.timelineDate != nil {
-            months.insert(key(for: item, byDay: false, calendar: calendar))
-            if months.count > 1 { return false }
+    /// Year, month and day pulled out once, plus the date itself for the heading.
+    private struct Stamp {
+        let date: Date?
+        private let year: Int
+        private let monthOfYear: Int
+        private let day: Int
+
+        init(_ date: Date?, calendar: Calendar) {
+            self.date = date
+            guard let date else {
+                year = 0; monthOfYear = 0; day = 0
+                return
+            }
+            let parts = calendar.dateComponents([.year, .month, .day], from: date)
+            year = parts.year ?? 0
+            monthOfYear = parts.month ?? 0
+            day = parts.day ?? 0
         }
-        return months.count == 1 && media.count > 20
+
+        /// Distinct value per calendar month, for deciding the granularity.
+        var month: Int? { date == nil ? nil : year * 12 + monthOfYear }
+
+        /// Cheap boundary test; the printable key is only built once per section.
+        func bucket(byDay: Bool) -> Int {
+            guard date != nil else { return -1 }
+            return byDay ? year * 10_000 + monthOfYear * 100 + day : year * 100 + monthOfYear
+        }
+
+        func key(byDay: Bool) -> String {
+            guard date != nil else { return MediaGrouping.undatedID }
+            return byDay
+                ? String(format: "%04d-%02d-%02d", year, monthOfYear, day)
+                : String(format: "%04d-%02d", year, monthOfYear)
+        }
     }
 
-    private static func key(for item: Item, byDay: Bool, calendar: Calendar) -> String {
-        guard let date = item.timelineDate else { return undatedID }
-        let parts = calendar.dateComponents([.year, .month, .day], from: date)
-        let year = parts.year ?? 0
-        let month = parts.month ?? 0
-        guard byDay else { return String(format: "%04d-%02d", year, month) }
-        return String(format: "%04d-%02d-%02d", year, month, parts.day ?? 0)
-    }
-
-    private static func title(for item: Item, key: String, byDay: Bool,
-                              calendar: Calendar, locale: Locale) -> String {
-        guard let date = item.timelineDate else { return "Sans date" }
-        let formatter = DateFormatter()
-        formatter.locale = locale
-        formatter.calendar = calendar
-        formatter.setLocalizedDateFormatFromTemplate(byDay ? "dMMMMyyyy" : "MMMMyyyy")
+    private static func title(_ date: Date, formatter: DateFormatter, locale: Locale) -> String {
         let text = formatter.string(from: date)
         return String(text.prefix(1)).uppercased(with: locale) + text.dropFirst()
     }

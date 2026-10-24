@@ -79,7 +79,9 @@ struct ReadOnlyTransport: Sendable {
 
     static func makeSession() -> URLSession {
         let config = URLSessionConfiguration.default
-        config.httpMaximumConnectionsPerHost = 6
+        // Thumbnails take 6 at most; the extra slots keep the background date scan from
+        // starving the grid.
+        config.httpMaximumConnectionsPerHost = 9
         config.urlCache = URLCache(memoryCapacity: 16 << 20, diskCapacity: 256 << 20)
         config.waitsForConnectivity = true
         return URLSession(configuration: config)
