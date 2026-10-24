@@ -33,7 +33,8 @@ struct IndexingInvitation: View {
                     VStack(alignment: .leading, spacing: 14) {
                         point("photo.badge.checkmark",
                               "La vraie date de prise de vue est dans la photo elle-même. "
-                            + "Keo en lit les 4 premiers kilo-octets pour la récupérer.")
+                            + "Keo n'en lit que les premiers kilo-octets pour la récupérer, "
+                            + "jamais le fichier entier.")
                         point("clock.arrow.circlepath",
                               "C'est long une fois, puis plus jamais : une photo déjà lue n'est "
                             + "jamais relue, et ajouter des photos ne coûte que les nouvelles.")

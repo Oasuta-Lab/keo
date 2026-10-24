@@ -92,13 +92,27 @@ Sur un NAS, la date de modification est souvent le jour où tout a été copié 
 fichiers portent alors la même, et trier ou regrouper par date ne donne rien. Keo lit donc la
 vraie date de prise de vue.
 
-Mesuré avant d'être conçu : **4 Ko de préfixe suffisent** à lire `DateTimeOriginal`, en JPEG
-comme en HEIC. Attention au piège — en HEIC il faut une source `CGImageSourceCreateWithData`,
-car en mode incrémental non finalisé ImageIO refuse de parser les métadonnées HEIF et ne rend
-rien, quel que soit le nombre d'octets fournis.
+**4 Ko suffisent quand l'EXIF est en tête de fichier**, ce qui est le cas courant, en JPEG
+comme en HEIC. Mais pas toujours : un profil ICC volumineux, un paquet XMP ou une grosse
+vignette embarquée repoussent la date plus loin. Mesuré sur des fichiers construits pour ça,
+EXIF placé à 8 Ko puis à 40 Ko :
+
+| EXIF commence à | 4 Ko | 16 Ko | 64 Ko |
+|---|---|---|---|
+| tête de fichier | ✅ | ✅ | ✅ |
+| 8 Ko | ❌ | ✅ | ✅ |
+| 40 Ko | ❌ | ❌ | ✅ |
+
+Keo tente donc 4 Ko, puis **128 Ko** si rien n'a été trouvé. Seuls les fichiers qui échouent
+au premier essai paient le second. Sans cette seconde tentative, ces photos auraient été
+enregistrées « sans date » définitivement.
+
+Attention au piège HEIC : il faut une source `CGImageSourceCreateWithData`, car en mode
+incrémental non finalisé ImageIO refuse de parser les métadonnées HEIF et ne rend rien, quel
+que soit le nombre d'octets fournis.
 
 - À l'ouverture d'un dossier, les dates déjà connues sont appliquées **avant le premier rendu**.
-- Les fichiers jamais vus sont analysés en tâche de fond, 6 en parallèle, 4 Ko chacun. Un
+- Les fichiers jamais vus sont analysés en tâche de fond, 3 en parallèle, 4 Ko chacun. Un
   dossier de 10 000 photos coûte donc environ 40 Mo, **une seule fois**.
 - Le pipeline de vignettes enregistre la date au passage : il télécharge déjà 256 Ko par image,
   la lecture est gratuite.

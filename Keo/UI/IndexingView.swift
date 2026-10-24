@@ -108,6 +108,9 @@ struct IndexingView: View {
             }
         }
         row("Dates connues au total", max(progress.indexedOverall, 0))
+        if progress.dateless > 0 {
+            row("Sans date de prise de vue", progress.dateless)
+        }
         if progress.unreadable > 0 {
             LabeledContent("Illisibles, à réessayer") {
                 Text(progress.unreadable, format: .number)

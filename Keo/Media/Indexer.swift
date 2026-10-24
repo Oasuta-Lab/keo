@@ -17,6 +17,8 @@ final class Indexer: ObservableObject {
         var datesRead = 0
         var adopted = 0
         var unreadable = 0
+        /// Files read but carrying no capture date at all.
+        var dateless = 0
         /// Current folder only. A global bar moves by 0.17 % per batch on a 14 600 photo
         /// folder, which reads as frozen.
         var folderDone = 0
@@ -60,7 +62,12 @@ final class Indexer: ObservableObject {
 
     /// Deliberately below the thumbnail pipeline's share: the user is looking at the grid.
     private static let parallel = 3
-    private static let prefixBytes = 4 << 10
+    /// Enough when the EXIF block sits at the head of the file, which is the common case.
+    nonisolated private static let prefixBytes = 4 << 10
+    /// Second try. A fat ICC profile, an XMP packet or a large embedded thumbnail can push the
+    /// date past the first few kilobytes — measured at 8 KB and 40 KB on crafted files — and
+    /// recording "no date" there would be wrong for good. Only the files that fail pay for it.
+    nonisolated private static let deepPrefixBytes = 128 << 10
     private static let publishEvery = 20
     /// Backstop against a symlink loop turning this into an infinite walk.
     private static let folderLimit = 5_000
@@ -283,8 +290,16 @@ final class Indexer: ObservableObject {
                     next += 1
                     group.addTask {
                         do {
-                            let prefix = try await client.bytes(item.path, prefix: Self.prefixBytes)
-                            return (item, .success(ImageDecoding.captureDate(prefix: prefix)))
+                            let head = try await client.bytes(item.path, prefix: Self.prefixBytes)
+                            if let date = ImageDecoding.captureDate(prefix: head) {
+                                return (item, .success(date))
+                            }
+                            guard item.size > Int64(Self.prefixBytes) else {
+                                return (item, .success(nil))
+                            }
+                            let deeper = try await client.bytes(item.path,
+                                                                prefix: Self.deepPrefixBytes)
+                            return (item, .success(ImageDecoding.captureDate(prefix: deeper)))
                         } catch {
                             return (item, .failure(error))
                         }
@@ -298,7 +313,7 @@ final class Indexer: ObservableObject {
                     switch outcome {
                     case .success(let capture):
                         batch.append((item, capture))
-                        if let capture { discovered[item.id] = capture }
+                        if let capture { discovered[item.id] = capture } else { progress.dateless += 1 }
                         progress.datesRead += 1
                     case .failure:
                         // Left unknown on purpose: a dropped connection must be retried, never
