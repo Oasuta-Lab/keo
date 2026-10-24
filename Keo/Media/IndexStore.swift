@@ -447,7 +447,7 @@ actor IndexStore {
     /// How much of a file the date reader looks at. Bumping this re-queues every file that
     /// came back without a date, because a better reader may now find one — the old 4 KB
     /// probe missed 61 % of them, and those rows would otherwise stay wrong for ever.
-    private static let readerVersion: Int64 = 2
+    private static let readerVersion: Int64 = 3
 
     private func retryDatelessAfterReaderChange() {
         guard let seen = try? value(forKey: "readerVersion") ?? 0,
