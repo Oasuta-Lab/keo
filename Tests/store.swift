@@ -145,6 +145,37 @@ func checkIndexStore() async throws {
     let unseen = try await tree.stats(for: ["/NAS/Jamais vu"])
     assert(unseen.isEmpty, "un dossier jamais indexé n'invente pas de totaux")
 
+    // --- le listing mémorisé, qui peint la grille avant la box ------------------------
+    let cached = try await tree.listing("/NAS/Album")
+    assert(cached.contains { $0.name == "p.jpg" && !$0.isDirectory },
+           "le fichier lu est restitué — \(cached.map(\.name))")
+    assert(cached.contains { $0.name == "Juin" && $0.isDirectory },
+           "les sous-dossiers directs aussi, pour que la navigation marche de mémoire")
+    assert(!cached.contains { $0.name == "q.jpg" },
+           "mais pas le contenu des sous-dossiers : un listing, pas un arbre")
+    assert(cached.first { $0.name == "p.jpg" }?.kind == .image,
+           "le type est conservé, sinon la grille ne saurait pas quoi afficher")
+    assert(cached.first { $0.name == "p.jpg" }?.timelineDate == old,
+           "et la date de prise de vue avec, donc le tri marche dès le premier rendu")
+
+    // Un fichier jamais lu doit quand même figurer au listing, sinon la grille serait
+    // incomplète tant que l'indexation n'est pas passée.
+    let never = photo("z.jpg", in: "/NAS/Album", size: 77)
+    let gen2 = try await tree.beginGeneration()
+    try await tree.commit([], in: "/NAS/Album", generation: gen2,
+                          stamp: FolderStamp.Completion(modified: Date(), childCount: 4,
+                                                        mediaCount: 2, bytes: 501_077),
+                          present: [parentPhoto, never], sweep: true)
+    let withUnread = try await tree.listing("/NAS/Album")
+    assert(withUnread.contains { $0.name == "z.jpg" },
+           "un fichier vu mais jamais lu figure au listing — \(withUnread.map(\.name))")
+    let stillToRead = try await tree.unread([never], in: "/NAS/Album")
+    assert(stillToRead.count == 1,
+           "et il reste à lire : présent au listing n'est pas lu")
+
+    let nothing = try await tree.listing("/NAS/Inconnu")
+    assert(nothing.isEmpty, "un dossier inconnu ne fabrique pas de listing")
+
     print("ok — magasin SQLite : écriture, marquage, balayage, adoption, sous-arbres, totaux")
 }
 

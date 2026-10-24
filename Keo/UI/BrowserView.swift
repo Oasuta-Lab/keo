@@ -30,6 +30,8 @@ struct BrowserView: View {
     @State private var unindexed = 0
     /// Counted during indexing, so a tile can say what is inside without asking the box.
     @State private var folderStats: [String: FolderStats] = [:]
+    /// True while the grid shows what the index remembers rather than a fresh listing.
+    @State private var fromCache = false
 
     private var sectioned: Bool { order != .name && !sections.isEmpty }
 
@@ -353,21 +355,36 @@ struct BrowserView: View {
     }
 
     private func load() async {
+        // Paint what the last pass saw, straight away: the box needs seconds on a folder of
+        // 14 600 files, the index answers in milliseconds.
+        if contents.isEmpty, let remembered = try? await IndexStore.shared.listing(path),
+           !remembered.isEmpty {
+            contents = FolderContents(remembered, order: order)
+            rebuildSections()
+            fromCache = true
+            loaded = true
+        }
+
+        let painted = fromCache
         do {
-            // The first page paints in about 200 ms; the rest lands a couple of seconds later.
-            contents = try await client.list(path, order: order) { firstPage in
+            // The first page paints in about 200 ms; showing it would shrink a grid already
+            // filled from the index, so it is only worth it when there was nothing to show.
+            let live = try await client.list(path, order: order) { firstPage in
                 Task { @MainActor in
-                    guard contents.isEmpty else { return }
+                    guard !painted, contents.isEmpty else { return }
                     contents = firstPage
                     rebuildSections()
                     loaded = true
                 }
             }
+            contents = live
+            fromCache = false
             rebuildSections()
             error = nil
             await resolveDates()
         } catch {
-            self.error = error.localizedDescription
+            // What the index remembers beats an error page; keep showing it.
+            if !painted { self.error = error.localizedDescription }
         }
         loaded = true
     }

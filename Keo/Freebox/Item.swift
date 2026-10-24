@@ -22,7 +22,39 @@ struct Item: Identifiable, Hashable, Sendable {
 
     var id: String { path }
 
-    enum Kind: Sendable { case folder, image, video, other }
+    enum Kind: Sendable {
+        case folder, image, video, other
+
+        /// Stored in the index so a cached listing can be classified without the mime type.
+        var code: Int {
+            switch self {
+            case .folder: return 0
+            case .image: return 1
+            case .video: return 2
+            case .other: return 3
+            }
+        }
+
+        init?(code: Int) {
+            switch code {
+            case 0: self = .folder
+            case 1: self = .image
+            case 2: self = .video
+            case 3: self = .other
+            default: return nil
+            }
+        }
+
+        /// Enough for `classify` to land on the same kind again.
+        var mimeHint: String? {
+            switch self {
+            case .folder: return "inode/directory"
+            case .image: return "image/*"
+            case .video: return "video/*"
+            case .other: return nil
+            }
+        }
+    }
 
     /// Computed once at construction: a listing of 20 000 entries would otherwise re-derive
     /// this on every filter pass and every view update.
@@ -52,6 +84,7 @@ struct Item: Identifiable, Hashable, Sendable {
         if let mimeType {
             if mimeType.hasPrefix("image/") { return .image }
             if mimeType.hasPrefix("video/") { return .video }
+            if mimeType == "inode/directory" { return .folder }
         }
         let ext = (path as NSString).pathExtension.lowercased()
         if imageExtensions.contains(ext) { return .image }

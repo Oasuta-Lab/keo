@@ -119,7 +119,7 @@ Un kill au milieu d'un dossier de 14 600 photos jetait six minutes de travail.
 
 ```sql
 folder(id, path UNIQUE, mtime, child_count, media_count, bytes, gen)
-file(folder_id, name, size, capture, gen)  PRIMARY KEY (folder_id, name, size)
+file(folder_id, name, size, capture, read, kind, gen)  PRIMARY KEY (folder_id, name, size)
 INDEX file_by_identity ON file(name, size)
 meta(k, v)
 ```
@@ -146,6 +146,20 @@ Tant que l'index est vide, Keo explique une fois pourquoi l'indexation compte : 
 NAS ne fournit que la date de copie, donc le tri par date et la timeline restent inertes — et
 l'app a l'air cassée plutôt que non configurée. L'écran propose de lancer ou de remettre à
 plus tard ; dans ce cas la pastille et le menu suffisent, on ne redemande pas.
+
+### Ouverture instantanée
+
+La base reflète le listing complet de chaque dossier déjà indexé — y compris les fichiers
+jamais lus, d'où la colonne `read` qui distingue « vu » de « lu ». Un dossier déjà visité
+s'affiche donc **avant que la box ait répondu**, puis se met à jour quand le vrai listing
+arrive.
+
+Deux conséquences assumées :
+
+- La première page du listing live n'est plus affichée quand la grille vient déjà du cache :
+  elle ferait rétrécir l'affichage avant de le regarnir.
+- Si la box ne répond pas, un dossier déjà connu reste consultable au lieu d'afficher une
+  erreur. Seul un dossier jamais vu montre l'échec.
 
 ### Un seul pipeline de lecture
 

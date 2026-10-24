@@ -57,6 +57,10 @@ actor IndexStore {
         // Older databases predate the per-folder tallies; adding them is harmless if present.
         try? exec("ALTER TABLE folder ADD COLUMN media_count INTEGER")
         try? exec("ALTER TABLE folder ADD COLUMN bytes INTEGER")
+        try? exec("ALTER TABLE file ADD COLUMN read INTEGER NOT NULL DEFAULT 0")
+        try? exec("ALTER TABLE file ADD COLUMN kind INTEGER NOT NULL DEFAULT 0")
+        // Rows written before the column existed were all read ones.
+        try? exec("UPDATE file SET read = 1 WHERE read = 0 AND gen >= 0 AND capture IS NOT NULL")
 
         // Readable while the phone is locked after the first unlock, like the rest of our data.
         try? FileManager.default.setAttributes(
@@ -83,6 +87,10 @@ actor IndexStore {
       name      TEXT    NOT NULL,
       size      INTEGER NOT NULL,
       capture   REAL,
+      -- 0 = seen in a listing but never read. Distinguishes "no EXIF date" from "not read
+      -- yet", which a nullable capture alone cannot express.
+      read      INTEGER NOT NULL DEFAULT 0,
+      kind      INTEGER NOT NULL DEFAULT 0,
       gen       INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (folder_id, name, size)
     ) WITHOUT ROWID;
@@ -142,8 +150,10 @@ actor IndexStore {
 
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
-        try prepare("SELECT capture FROM file WHERE folder_id = ? AND name = ? AND size = ?",
-                    into: &statement)
+        try prepare("""
+            SELECT capture FROM file
+            WHERE folder_id = ? AND name = ? AND size = ? AND read = 1
+            """, into: &statement)
 
         var found: [Item.ID: Date] = [:]
         for item in items {
@@ -166,8 +176,9 @@ actor IndexStore {
 
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
-        try prepare("SELECT 1 FROM file WHERE folder_id = ? AND name = ? AND size = ?",
-                    into: &statement)
+        try prepare("""
+            SELECT 1 FROM file WHERE folder_id = ? AND name = ? AND size = ? AND read = 1
+            """, into: &statement)
 
         return items.filter { item in
             sqlite3_reset(statement)
@@ -229,10 +240,11 @@ actor IndexStore {
                 var statement: OpaquePointer?
                 defer { sqlite3_finalize(statement) }
                 try prepare("""
-                    INSERT INTO file (folder_id, name, size, capture, gen)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO file (folder_id, name, size, capture, read, kind, gen)
+                    VALUES (?, ?, ?, ?, 1, ?, ?)
                     ON CONFLICT(folder_id, name, size)
-                    DO UPDATE SET capture = excluded.capture, gen = excluded.gen
+                    DO UPDATE SET capture = excluded.capture, read = 1,
+                                  kind = excluded.kind, gen = excluded.gen
                     """, into: &statement)
 
                 for (item, capture) in results {
@@ -245,7 +257,8 @@ actor IndexStore {
                     } else {
                         sqlite3_bind_null(statement, 4)
                     }
-                    sqlite3_bind_int64(statement, 5, generation)
+                    sqlite3_bind_int64(statement, 5, Int64(item.kind.code))
+                    sqlite3_bind_int64(statement, 6, generation)
                     guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
                 }
             }
@@ -253,14 +266,20 @@ actor IndexStore {
             if !present.isEmpty {
                 var mark: OpaquePointer?
                 defer { sqlite3_finalize(mark) }
-                try prepare("UPDATE file SET gen = ? WHERE folder_id = ? AND name = ? AND size = ?",
-                            into: &mark)
+                // Insert rather than update: the database then mirrors the whole listing, which
+                // is what lets a folder be painted before the box has answered.
+                try prepare("""
+                    INSERT INTO file (folder_id, name, size, capture, read, kind, gen)
+                    VALUES (?, ?, ?, NULL, 0, ?, ?)
+                    ON CONFLICT(folder_id, name, size) DO UPDATE SET gen = excluded.gen
+                    """, into: &mark)
                 for item in present {
                     sqlite3_reset(mark)
-                    sqlite3_bind_int64(mark, 1, generation)
-                    sqlite3_bind_int64(mark, 2, id)
-                    bind(mark, 3, item.name)
-                    sqlite3_bind_int64(mark, 4, item.size)
+                    sqlite3_bind_int64(mark, 1, id)
+                    bind(mark, 2, item.name)
+                    sqlite3_bind_int64(mark, 3, item.size)
+                    sqlite3_bind_int64(mark, 4, Int64(item.kind.code))
+                    sqlite3_bind_int64(mark, 5, generation)
                     guard sqlite3_step(mark) == SQLITE_DONE else { throw Failure.write(message) }
                 }
             }
@@ -273,6 +292,53 @@ actor IndexStore {
             try? exec("ROLLBACK")
             throw error
         }
+    }
+
+    /// The folder as the last pass saw it. Lets the grid appear immediately, before the box
+    /// has had a chance to answer — and it answers in seconds on a folder of 14 600 files.
+    func listing(_ folder: String) throws -> [Item] {
+        try open()
+        guard let id = try folderID(folder, create: false) else { return [] }
+
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("""
+            SELECT name, size, capture, kind FROM file WHERE folder_id = ?
+            """, into: &statement)
+        sqlite3_bind_int64(statement, 1, id)
+
+        var items: [Item] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let raw = sqlite3_column_text(statement, 0) else { continue }
+            let name = String(cString: raw)
+            let capture = sqlite3_column_type(statement, 2) == SQLITE_NULL
+                ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 2))
+            items.append(Item(
+                path: folder + "/" + name,
+                name: name,
+                isDirectory: false,
+                size: sqlite3_column_int64(statement, 1),
+                modified: nil,
+                mimeType: Item.Kind(code: Int(sqlite3_column_int64(statement, 3)))?.mimeHint,
+                captureDate: capture
+            ))
+        }
+
+        var children: OpaquePointer?
+        defer { sqlite3_finalize(children) }
+        let scope = "substr(path, 1, length(?1) + 1) = ?1 || '/'"
+        try prepare("SELECT path FROM folder WHERE " + scope, into: &children)
+        bind(children, 1, folder)
+        while sqlite3_step(children) == SQLITE_ROW {
+            guard let raw = sqlite3_column_text(children, 0) else { continue }
+            let path = String(cString: raw)
+            // Direct children only.
+            guard (path as NSString).deletingLastPathComponent == folder else { continue }
+            items.append(Item(path: path, name: (path as NSString).lastPathComponent,
+                              isDirectory: true, size: 0, modified: nil,
+                              mimeType: "inode/directory"))
+        }
+        return items
     }
 
     /// A date noticed in passing by the thumbnail pipeline, which already holds the file's
@@ -358,9 +424,10 @@ actor IndexStore {
         do {
             try exec("BEGIN IMMEDIATE")
             var statement: OpaquePointer?
+            // In the old format, having an entry meant "read" — nothing else was stored.
             try prepare("""
-                INSERT OR IGNORE INTO file (folder_id, name, size, capture, gen)
-                VALUES (?, ?, ?, ?, 0)
+                INSERT OR IGNORE INTO file (folder_id, name, size, capture, read, kind, gen)
+                VALUES (?, ?, ?, ?, 1, ?, 0)
                 """, into: &statement)
 
             var ids: [String: Int64] = [:]
@@ -390,6 +457,9 @@ actor IndexStore {
                 } else {
                     sqlite3_bind_null(statement, 4)
                 }
+                let kind = Item(path: path, name: name, isDirectory: false, size: size,
+                                modified: nil, mimeType: nil).kind
+                sqlite3_bind_int64(statement, 5, Int64(kind.code))
                 _ = sqlite3_step(statement)
             }
             sqlite3_finalize(statement)
