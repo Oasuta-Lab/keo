@@ -207,15 +207,21 @@ pause en arrière-plan et reprend au retour.
 
 Quand le tri est par date, la grille se regroupe et un rail apparaît à droite.
 
-- **En-têtes collants** par mois, avec le compte de photos. Un dossier qui tient dans un seul
-  mois se regroupe par jour : sinon le regroupement n'apprendrait rien.
+- **Trois niveaux de regroupement** — années, mois, jours — au pincement comme dans Photos, et
+  dans le menu « … » pour la découvrabilité. Sur quinze ans de photos, la vue mois produit
+  cent-quatre-vingts en-têtes ; la vue années en produit quinze. Les cellules rétrécissent en
+  s'éloignant, pour voir la forme d'une année d'un coup d'œil.
+- **En-têtes collants**, avec le compte de photos. Un dossier qui tient dans un seul mois se
+  regroupe par jour : sinon le regroupement n'apprendrait rien.
 - Les dates viennent de l'EXIF dès que le scan ci-dessus est passé.
 - **Rail de densité.** Chaque période reçoit un plancher de 5 pt avant que le reste soit
   réparti au prorata : en proportions pures, un mois creux devenait un trait d'un pixel,
   invisible et impossible à viser au doigt. Les libellés d'année s'écartent des bords et ne
   s'affichent qu'espacés de 26 pt, sinon ils se chevauchaient. La hauteur de chaque segment est la part de photos de la période, donc
   la forme du rail *est* la distribution — un long segment, c'est un mois où tu as beaucoup
-  photographié. Les changements d'année sont étiquetés. On le glisse pour sauter directement.
+  photographié. Les changements d'année sont étiquetés, avec au moins 64 pt entre deux : sur quinze ans, elles
+s'empilaient par-dessus la grille. Et sans trait de rattachement après le texte — « 2025 – » se
+lisait comme une étiquette privée de sa valeur. On le glisse pour sauter directement.
 - Le segment de la période à l'écran est mis en avant, via la position des en-têtes rendus.
 - Les fichiers **sans date** forment une section en fin de liste plutôt que de disparaître.
 

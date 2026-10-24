@@ -328,6 +328,60 @@ let afterScan = MediaGrouping.sections(from: resolved.media, calendar: utc, loca
 assert(afterScan.count == 3, "après le scan, chaque photo retrouve son mois — \(afterScan.map(\.id))")
 assert(afterScan.map(\.startIndex) == [0, 1, 2])
 
+// MARK: - Niveaux de regroupement
+
+let overYears = [
+    onDay("2024-08-20", "a.jpg"), onDay("2024-02-02", "b.jpg"),
+    onDay("2023-12-25", "c.jpg"), onDay("2023-01-05", "d.jpg"),
+    onDay("2019-07-14", "e.jpg"),
+]
+
+let yearCut = MediaGrouping.sections(from: overYears, granularity: .year,
+                                    calendar: utc, locale: fr)
+assert(yearCut.map(\.id) == ["2024", "2023", "2019"],
+       "en vue années, une section par année — \(yearCut.map(\.id))")
+assert(yearCut[0].items.count == 2 && yearCut[2].items.count == 1)
+assert(yearCut.map(\.year) == ["2024", "2023", "2019"],
+       "chaque section porte son année, puisqu'elles changent toutes")
+assert(yearCut[0].title.contains("2024"), "titre localisé — \(yearCut[0].title)")
+
+let monthCut = MediaGrouping.sections(from: overYears, granularity: .month,
+                                     calendar: utc, locale: fr)
+assert(monthCut.count == 5, "en vue mois, cinq mois distincts — \(monthCut.count)")
+
+let dayCut = MediaGrouping.sections(from: overYears, granularity: .day,
+                                   calendar: utc, locale: fr)
+assert(dayCut.count == 5)
+assert(dayCut[0].id.count == 10, "clé au jour près — \(dayCut[0].id)")
+
+// Les startIndex restent cohérents quel que soit le découpage.
+for cut in [Granularity.year, .month, .day] {
+    let cuts = MediaGrouping.sections(from: overYears, granularity: cut,
+                                      calendar: utc, locale: fr)
+    var expected = 0
+    for section in cuts {
+        assert(section.startIndex == expected,
+               "startIndex suit l'ordre affiché en vue \(cut) — \(section.startIndex)")
+        expected += section.items.count
+    }
+    assert(expected == overYears.count, "aucun élément perdu en vue \(cut)")
+}
+
+// Un dossier tenant dans un seul mois se découpe quand même par jour.
+let holidayWeek = (1...25).map { onDay(String(format: "2024-08-%02d", ($0 % 20) + 1), "h\($0).jpg") }
+let auto = MediaGrouping.sections(from: holidayWeek, granularity: .month,
+                                  calendar: utc, locale: fr)
+assert(auto.count > 1, "un mois unique se recoupe par jour, sinon la vue n'apprend rien")
+let forcedYear = MediaGrouping.sections(from: holidayWeek, granularity: .year,
+                                        calendar: utc, locale: fr)
+assert(forcedYear.count == 1, "mais la vue années reste une vue années")
+
+assert(Granularity.year.finer == .month && Granularity.month.finer == .day)
+assert(Granularity.day.finer == nil, "on ne zoome pas plus loin que le jour")
+assert(Granularity.year.coarser == nil, "ni plus loin que l'année")
+assert(Granularity.year.cellWidth < Granularity.day.cellWidth,
+       "zoomer en arrière réduit les cellules")
+
 // MARK: - Date affichée en plein écran
 
 let shot = Date(timeIntervalSince1970: 1_000_000)
@@ -463,7 +517,7 @@ assert(job.position == 4, "la position ne dépasse pas le total")
 assert(DownloadJob(total: 0, completed: 0, currentName: "", currentFraction: 0).fraction == 0,
        "un lot vide ne divise pas par zéro")
 
-print("ok — lecture seule, envelope, chemins, classification, aperçus, dates EXIF, reprise, parcours, sections, rail, tri, éviction, progression")
+print("ok — lecture seule, envelope, chemins, classification, aperçus, dates EXIF, reprise, parcours, sections, zoom, rail, tri, éviction, progression")
 
 try await checkIndexStore()
 try await checkMigration()

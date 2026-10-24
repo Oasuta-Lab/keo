@@ -4,7 +4,9 @@ import CoreGraphics
 enum RailLayout {
     /// Below this a period is a hairline: invisible, and impossible to hit with a thumb.
     static let minimumSegment: CGFloat = 5
-    static let minimumYearGap: CGFloat = 26
+    /// Fifteen years of photos used to stack fifteen chips over the grid. Labels now need
+    /// real room, and the rail stays a rail rather than a column of text.
+    static let minimumYearGap: CGFloat = 64
     static let edgeInset: CGFloat = 8
     static let labelHeight: CGFloat = 18
 

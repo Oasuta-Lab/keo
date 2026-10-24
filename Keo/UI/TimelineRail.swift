@@ -37,20 +37,16 @@ struct TimelineRail: View {
                 // Outside the rail's own width, otherwise "2024" has 20 pt to render in and
                 // comes out clipped. `fixedSize` keeps it on one line whatever the container.
                 ForEach(yearLabels(bars, height: height), id: \.year) { label in
-                    HStack(spacing: 4) {
-                        Text(label.year)
-                            .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.primary)
-                            .fixedSize()
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.ultraThinMaterial, in: Capsule())
-                        // Ties the label to its place on the rail.
-                        Rectangle()
-                            .fill(.white.opacity(0.35))
-                            .frame(width: 6, height: 1)
-                    }
-                    .offset(x: -Self.touchWidth + 10, y: label.y)
+                    // No tick after the text: a short dash right after "2025" reads as a
+                    // label whose value is missing.
+                    Text(label.year)
+                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                        .fixedSize()
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .offset(x: -Self.touchWidth + 14, y: label.y)
                 }
                 .allowsHitTesting(false)
             }

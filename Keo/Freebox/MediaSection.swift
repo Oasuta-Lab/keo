@@ -17,6 +17,61 @@ struct MediaSection: Identifiable, Sendable, Equatable {
     }
 }
 
+/// How finely the grid is cut in time. Zooming out turns fifteen years of months into
+/// fifteen headings instead of a hundred and eighty.
+enum Granularity: String, CaseIterable, Sendable {
+    case year, month, day
+
+    var label: String {
+        switch self {
+        case .year: return "Années"
+        case .month: return "Mois"
+        case .day: return "Jours"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .year: return "square.grid.4x3.fill"
+        case .month: return "square.grid.3x3.fill"
+        case .day: return "square.grid.2x2.fill"
+        }
+    }
+
+    /// Smaller cells when zoomed out: the point is to see the shape of a year at a glance.
+    var cellWidth: CGFloat {
+        switch self {
+        case .year: return 72
+        case .month: return 110
+        case .day: return 164
+        }
+    }
+
+    var coarser: Granularity? {
+        switch self {
+        case .day: return .month
+        case .month: return .year
+        case .year: return nil
+        }
+    }
+
+    var finer: Granularity? {
+        switch self {
+        case .year: return .month
+        case .month: return .day
+        case .day: return nil
+        }
+    }
+
+    fileprivate var template: String {
+        switch self {
+        case .year: return "yyyy"
+        case .month: return "MMMMyyyy"
+        case .day: return "dMMMMyyyy"
+        }
+    }
+}
+
 enum MediaGrouping {
     static let undatedID = "sans-date"
 
@@ -26,6 +81,7 @@ enum MediaGrouping {
     /// Items without a date land in a trailing section rather than being dropped: they are
     /// still browsable, just not placed in time.
     static func sections(from media: [Item],
+                         granularity: Granularity = .month,
                          calendar: Calendar = .current,
                          locale: Locale = .current) -> [MediaSection] {
         guard !media.isEmpty else { return [] }
@@ -41,11 +97,15 @@ enum MediaGrouping {
             stamps.append(stamp)
         }
 
-        let byDay = months.count == 1 && media.count > 20
+        // A folder that fits in one month gets cut by day on its own: a single heading would
+        // group nothing at all.
+        var cut = granularity
+        if cut == .month, months.count == 1, media.count > 20 { cut = .day }
+
         let formatter = DateFormatter()
         formatter.locale = locale
         formatter.calendar = calendar
-        formatter.setLocalizedDateFormatFromTemplate(byDay ? "dMMMMyyyy" : "MMMMyyyy")
+        formatter.setLocalizedDateFormatFromTemplate(cut.template)
 
         var sections: [MediaSection] = []
         var currentKey: String?
@@ -74,11 +134,11 @@ enum MediaGrouping {
         var pending: Stamp?
         var currentBucket: Int?
         for (item, stamp) in zip(media, stamps) {
-            let bucket = stamp.bucket(byDay: byDay)
+            let bucket = stamp.bucket(cut)
             if bucket != currentBucket {
                 flush(pending)
                 currentBucket = bucket
-                currentKey = stamp.key(byDay: byDay)
+                currentKey = stamp.key(cut)
                 pending = stamp
             }
             current.append(item)
@@ -110,16 +170,22 @@ enum MediaGrouping {
         var month: Int? { date == nil ? nil : year * 12 + monthOfYear }
 
         /// Cheap boundary test; the printable key is only built once per section.
-        func bucket(byDay: Bool) -> Int {
+        func bucket(_ cut: Granularity) -> Int {
             guard date != nil else { return -1 }
-            return byDay ? year * 10_000 + monthOfYear * 100 + day : year * 100 + monthOfYear
+            switch cut {
+            case .year: return year
+            case .month: return year * 100 + monthOfYear
+            case .day: return year * 10_000 + monthOfYear * 100 + day
+            }
         }
 
-        func key(byDay: Bool) -> String {
+        func key(_ cut: Granularity) -> String {
             guard date != nil else { return MediaGrouping.undatedID }
-            return byDay
-                ? String(format: "%04d-%02d-%02d", year, monthOfYear, day)
-                : String(format: "%04d-%02d", year, monthOfYear)
+            switch cut {
+            case .year: return String(format: "%04d", year)
+            case .month: return String(format: "%04d-%02d", year, monthOfYear)
+            case .day: return String(format: "%04d-%02d-%02d", year, monthOfYear, day)
+            }
         }
     }
 

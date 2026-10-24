@@ -17,6 +17,8 @@ struct BrowserView: View {
     @State private var selecting = false
     @State private var selection: Set<Item> = []
     @AppStorage("itemOrder") private var order: ItemOrder = .newest
+    /// How finely the grid is cut in time, and how small the cells get.
+    @AppStorage("granularity") private var granularity: Granularity = .month
 
     /// Only built when sorting by date — grouping a name-sorted grid by month would be noise.
     @State private var sections: [MediaSection] = []
@@ -35,7 +37,9 @@ struct BrowserView: View {
 
     private var sectioned: Bool { order != .name && !sections.isEmpty }
 
-    private let columns = [GridItem(.adaptive(minimum: 110), spacing: 2)]
+    private var columns: [GridItem] {
+        [GridItem(.adaptive(minimum: granularity.cellWidth), spacing: 2)]
+    }
     /// Wider than a photo cell: a folder tile has to carry a readable name.
     private let folderColumns = [GridItem(.adaptive(minimum: 150), spacing: 10)]
     fileprivate static let gridSpace = "keo.grid"
@@ -89,6 +93,20 @@ struct BrowserView: View {
                 }
             }
             .coordinateSpace(name: Self.gridSpace)
+            // Pinch like Photos does. The menu carries the same control, since a gesture
+            // nobody discovers is not a feature.
+            .simultaneousGesture(
+                MagnifyGesture()
+                    .onEnded { value in
+                        guard !selecting else { return }
+                        let next = value.magnification > 1.25 ? granularity.finer
+                                 : value.magnification < 0.8 ? granularity.coarser
+                                 : nil
+                        if let next {
+                            withAnimation(.easeOut(duration: 0.2)) { granularity = next }
+                        }
+                    }
+            )
             .onPreferenceChange(SectionTopKey.self) { tops in
                 activeSection = Self.topmost(of: tops)
             }
@@ -176,6 +194,7 @@ struct BrowserView: View {
             contents = contents.reordered(by: new)
             rebuildSections()
         }
+        .onChange(of: granularity) { _, _ in rebuildSections() }
     }
 
     /// `offset` is the position of the first item inside the flat media array, so each cell
@@ -224,6 +243,15 @@ struct BrowserView: View {
                         Picker("Trier", selection: $order) {
                             ForEach(ItemOrder.allCases, id: \.self) { option in
                                 Label(option.label, systemImage: option.systemImage).tag(option)
+                            }
+                        }
+
+                        if order != .name {
+                            Picker("Regrouper", selection: $granularity) {
+                                ForEach(Granularity.allCases, id: \.self) { option in
+                                    Label(option.label, systemImage: option.systemImage)
+                                        .tag(option)
+                                }
                             }
                         }
                     }
@@ -355,7 +383,9 @@ struct BrowserView: View {
     }
 
     private func rebuildSections() {
-        sections = order == .name ? [] : MediaGrouping.sections(from: contents.media)
+        sections = order == .name
+            ? []
+            : MediaGrouping.sections(from: contents.media, granularity: granularity)
         activeSection = sections.first?.id
     }
 
