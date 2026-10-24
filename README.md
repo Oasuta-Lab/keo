@@ -140,6 +140,13 @@ préfixe de chemin sur le seul gros dossier.
 **Migration** : les anciens `capture-dates.json` et `indexed-folders.json` sont repris au
 premier lancement puis supprimés. Une indexation déjà payée ne se re-paye pas — c'est vérifié.
 
+### La première fois
+
+Tant que l'index est vide, Keo explique une fois pourquoi l'indexation compte : sans elle, le
+NAS ne fournit que la date de copie, donc le tri par date et la timeline restent inertes — et
+l'app a l'air cassée plutôt que non configurée. L'écran propose de lancer ou de remettre à
+plus tard ; dans ce cas la pastille et le menu suffisent, on ne redemande pas.
+
 ### Un seul pipeline de lecture
 
 `DateScan` et `Indexer` étaient deux boucles indépendantes qui pouvaient lire le même dossier

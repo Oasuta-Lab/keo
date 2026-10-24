@@ -23,6 +23,9 @@ struct BrowserView: View {
     @State private var activeSection: MediaSection.ID?
     @EnvironmentObject private var indexer: Indexer
     @State private var showingIndexing = false
+    @State private var showingInvitation = false
+    /// Asked once; afterwards the chip and the menu are enough.
+    @AppStorage("explainedIndexing") private var explainedIndexing = false
     /// How many files here still have no date, when it is too many to read on the fly.
     @State private var unindexed = 0
     /// Counted during indexing, so a tile can say what is inside without asking the box.
@@ -133,6 +136,12 @@ struct BrowserView: View {
         }
         .sheet(isPresented: $showingIndexing) {
             IndexingView(client: client)
+        }
+        .sheet(isPresented: $showingInvitation) {
+            IndexingInvitation(client: client) {
+                indexer.start(client: client)
+            }
+            .onDisappear { explainedIndexing = true }
         }
         // Dates discovered for this folder, whether by the open-folder scan or the full pass.
         .onChange(of: indexer.resolution) { _, found in
@@ -299,6 +308,7 @@ struct BrowserView: View {
     /// indexer, which is the only thing that talks to the box about dates.
     private func resolveDates() async {
         do {
+            await offerIndexing()
             folderStats = (try? await IndexStore.shared.stats(
                 for: contents.folders.map(\.path)
             )) ?? [:]
@@ -329,6 +339,13 @@ struct BrowserView: View {
     }
 
     private static let automaticLimit = 2_000
+
+    /// Nothing indexed yet: say why it matters before the user concludes the app is broken.
+    private func offerIndexing() async {
+        guard path == FreeboxClient.rootPath, !explainedIndexing, !indexer.state.isRunning,
+              let empty = try? await IndexStore.shared.fileCount(), empty == 0 else { return }
+        showingInvitation = true
+    }
 
     private func rebuildSections() {
         sections = order == .name ? [] : MediaGrouping.sections(from: contents.media)
