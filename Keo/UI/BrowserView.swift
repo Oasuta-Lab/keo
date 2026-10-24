@@ -290,7 +290,15 @@ struct BrowserView: View {
 
     private func load() async {
         do {
-            contents = try await client.list(path, order: order)
+            // The first page paints in about 200 ms; the rest lands a couple of seconds later.
+            contents = try await client.list(path, order: order) { firstPage in
+                Task { @MainActor in
+                    guard contents.isEmpty else { return }
+                    contents = firstPage
+                    rebuildSections()
+                    loaded = true
+                }
+            }
             rebuildSections()
             error = nil
             await resolveDates()

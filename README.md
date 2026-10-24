@@ -113,9 +113,10 @@ Affichés en tuiles plutôt qu'en liste, avec le nombre d'éléments que la box 
 le listing (`filecount`). Les documents restent en lignes : ils sont peu nombreux et une liste
 leur convient mieux.
 
-Pas de photo de couverture pour l'instant : il faudrait un `fs/ls` par dossier, soit 4,5 Mo
-pour couvrir un dossier de 20 000 photos. Les couvertures deviendront gratuites quand le cache
-de listing existera.
+Le compteur n'apparaît que si la box renvoie `filecount`, ce qu'elle ne fait pas toujours.
+
+Pas de photo de couverture pour l'instant : il faudrait un `fs/ls` par dossier. Ce sera
+abordable une fois le cache de listing en place.
 
 ## Timeline
 
@@ -202,7 +203,13 @@ la classification des médias, l'éviction LRU et l'arithmétique de progression
 
 ## Pièges de l'API Freebox, vérifiés sur la box
 
-- `fs/ls` renvoie `result = {"entries": [...]}`, **pas** un tableau nu.
+- `fs/ls` renvoie `result = {"entries": [...], "cursor": "..."}`, **pas** un tableau nu.
+- **`fs/ls` doit être paginé.** Mesuré sur un dossier de 14 600 fichiers : en un seul appel la
+  box répond `504 Gateway Time-out` au bout de 15 secondes, systématiquement. Avec
+  `?limit=2000` et le `cursor` renvoyé, le même dossier se liste en 2,9 s, et la première page
+  arrive en ~200 ms. Le curseur est du base64 : `eyJvZmZzZXQiOjQ4Mn0=` = `{"offset":482}`.
+- `filecount` n'est pas renvoyé par toutes les box — le compteur des tuiles de dossier s'efface
+  quand il manque.
 - Les chemins sont du base64 percent-encodé. `URL.appendingPathComponent` ré-encode le `%`
   (`Lw%3D%3D` → `Lw%253D%253D`) et la box répond `invalid_request` : construire l'URL avec
   `URL(string:relativeTo:)`.
