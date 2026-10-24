@@ -188,9 +188,15 @@ final class Indexer: ObservableObject {
                 progress.foldersVisited += 1
                 progress.mediaFound += contents.media.count
 
+                let completion = FolderStamp.Completion(
+                    modified: folder.modified,
+                    childCount: contents.folders.count + contents.media.count
+                              + contents.documents.count,
+                    mediaCount: contents.media.count,
+                    bytes: contents.media.reduce(Int64(0)) { $0 + $1.size }
+                )
                 await index(contents.media, in: folder.path, generation: generation,
-                            stamp: (folder.modified, contents.media.count + contents.documents.count),
-                            client: client, progress: &progress)
+                            stamp: completion, client: client, progress: &progress)
             }
 
             // Only a pass that ran to the end may decide what has disappeared.
@@ -225,7 +231,7 @@ final class Indexer: ObservableObject {
 
     /// Reads whatever is still unknown, in batches, and hands the folder's dates back.
     private func index(_ media: [Item], in folder: String, generation: Int64,
-                       stamp: (modified: Date?, childCount: Int?)?,
+                       stamp: FolderStamp.Completion?,
                        client: FreeboxClient, progress: inout Progress) async {
         guard let store = try? await IndexStore.shared.unread(media, in: folder) else { return }
         var todo = store

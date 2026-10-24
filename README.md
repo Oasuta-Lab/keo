@@ -118,7 +118,7 @@ d'écriture était « tout l'index » et l'unité de perte « tout depuis la der
 Un kill au milieu d'un dossier de 14 600 photos jetait six minutes de travail.
 
 ```sql
-folder(id, path UNIQUE, mtime, child_count, gen)
+folder(id, path UNIQUE, mtime, child_count, media_count, bytes, gen)
 file(folder_id, name, size, capture, gen)  PRIMARY KEY (folder_id, name, size)
 INDEX file_by_identity ON file(name, size)
 meta(k, v)

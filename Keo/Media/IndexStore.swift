@@ -54,6 +54,9 @@ actor IndexStore {
         try exec("PRAGMA foreign_keys = ON")
         try exec("PRAGMA busy_timeout = 3000")
         try exec(Self.schema)
+        // Older databases predate the per-folder tallies; adding them is harmless if present.
+        try? exec("ALTER TABLE folder ADD COLUMN media_count INTEGER")
+        try? exec("ALTER TABLE folder ADD COLUMN bytes INTEGER")
 
         // Readable while the phone is locked after the first unlock, like the rest of our data.
         try? FileManager.default.setAttributes(
@@ -71,6 +74,8 @@ actor IndexStore {
       path        TEXT NOT NULL UNIQUE,
       mtime       REAL,
       child_count INTEGER,
+      media_count INTEGER,
+      bytes       INTEGER,
       gen         INTEGER NOT NULL DEFAULT 0
     );
     CREATE TABLE IF NOT EXISTS file (
@@ -212,7 +217,7 @@ actor IndexStore {
     /// what makes the sweep mean "gone from the NAS" rather than "not re-read this time" — a
     /// date picked up opportunistically by the thumbnail pipeline would otherwise be deleted.
     func commit(_ results: [(item: Item, capture: Date?)], in folder: String,
-                generation: Int64, stamp: (modified: Date?, childCount: Int?)? = nil,
+                generation: Int64, stamp: FolderStamp.Completion? = nil,
                 present: [Item] = [], sweep: Bool = false) throws {
         try open()
         try exec("BEGIN IMMEDIATE")
@@ -262,9 +267,7 @@ actor IndexStore {
             if sweep {
                 try exec("DELETE FROM file WHERE folder_id = \(id) AND gen < \(generation)")
             }
-            if let stamp {
-                try stampFolder(id, modified: stamp.modified, childCount: stamp.childCount)
-            }
+            if let stamp { try stampFolder(id, stamp) }
             try exec("COMMIT")
         } catch {
             try? exec("ROLLBACK")
@@ -393,7 +396,12 @@ actor IndexStore {
 
             for (path, mtime) in folders {
                 guard let id = try folderID(path, create: true) else { continue }
-                try stampFolder(id, modified: Date(timeIntervalSince1970: mtime), childCount: nil)
+                // Migrated folders keep their completion stamp; the tallies are unknown until
+                // the next pass lists them again.
+                try stampFolder(id, FolderStamp.Completion(
+                    modified: Date(timeIntervalSince1970: mtime),
+                    childCount: nil, mediaCount: nil, bytes: nil
+                ))
             }
             try exec("COMMIT")
 
@@ -479,18 +487,69 @@ actor IndexStore {
         return sqlite3_last_insert_rowid(db)
     }
 
-    private func stampFolder(_ id: Int64, modified: Date?, childCount: Int?) throws {
-        guard let stamp = FolderStamp.stamp(for: modified) else { return }
+    private func stampFolder(_ id: Int64, _ completion: FolderStamp.Completion) throws {
+        guard let stamp = FolderStamp.stamp(for: completion.modified) else { return }
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
-        try prepare("UPDATE folder SET mtime = ?, child_count = ? WHERE id = ?", into: &statement)
+        try prepare("""
+            UPDATE folder SET mtime = ?, child_count = ?, media_count = ?, bytes = ?
+            WHERE id = ?
+            """, into: &statement)
         sqlite3_bind_double(statement, 1, stamp)
-        if let childCount {
-            sqlite3_bind_int64(statement, 2, Int64(childCount))
-        } else {
-            sqlite3_bind_null(statement, 2)
-        }
-        sqlite3_bind_int64(statement, 3, id)
+        bindOptional(statement, 2, completion.childCount.map(Int64.init))
+        bindOptional(statement, 3, completion.mediaCount.map(Int64.init))
+        bindOptional(statement, 4, completion.bytes)
+        sqlite3_bind_int64(statement, 5, id)
         guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+    }
+
+    private func bindOptional(_ statement: OpaquePointer?, _ index: Int32, _ value: Int64?) {
+        if let value {
+            sqlite3_bind_int64(statement, index, value)
+        } else {
+            sqlite3_bind_null(statement, index)
+        }
+    }
+
+    /// What a folder tile shows, summed over the folder and everything beneath it — a parent
+    /// full of subfolders would otherwise claim to be empty.
+    func stats(for folders: [String]) throws -> [String: FolderStats] {
+        try open()
+        guard !folders.isEmpty else { return [:] }
+
+        let scope = "path = ?1 OR substr(path, 1, length(?1) + 1) = ?1 || '/'"
+
+        var totals: OpaquePointer?
+        defer { sqlite3_finalize(totals) }
+        try prepare("SELECT sum(media_count), sum(bytes) FROM folder WHERE " + scope, into: &totals)
+
+        var span: OpaquePointer?
+        defer { sqlite3_finalize(span) }
+        let spanSQL = "SELECT min(capture), max(capture) FROM file "
+                    + "WHERE folder_id IN (SELECT id FROM folder WHERE " + scope + ")"
+        try prepare(spanSQL, into: &span)
+
+        var found: [String: FolderStats] = [:]
+        for folder in folders {
+            sqlite3_reset(totals)
+            bind(totals, 1, folder)
+            guard sqlite3_step(totals) == SQLITE_ROW,
+                  sqlite3_column_type(totals, 0) != SQLITE_NULL else { continue }
+            let count = Int(sqlite3_column_int64(totals, 0))
+            let bytes = sqlite3_column_type(totals, 1) == SQLITE_NULL
+                ? nil : sqlite3_column_int64(totals, 1)
+
+            sqlite3_reset(span)
+            bind(span, 1, folder)
+            var earliest: Date?
+            var latest: Date?
+            if sqlite3_step(span) == SQLITE_ROW, sqlite3_column_type(span, 0) != SQLITE_NULL {
+                earliest = Date(timeIntervalSince1970: sqlite3_column_double(span, 0))
+                latest = Date(timeIntervalSince1970: sqlite3_column_double(span, 1))
+            }
+            found[folder] = FolderStats(mediaCount: count, bytes: bytes,
+                                        earliest: earliest, latest: latest)
+        }
+        return found
     }
 }

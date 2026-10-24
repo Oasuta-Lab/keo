@@ -25,6 +25,8 @@ struct BrowserView: View {
     @State private var showingIndexing = false
     /// How many files here still have no date, when it is too many to read on the fly.
     @State private var unindexed = 0
+    /// Counted during indexing, so a tile can say what is inside without asking the box.
+    @State private var folderStats: [String: FolderStats] = [:]
 
     private var sectioned: Bool { order != .name && !sections.isEmpty }
 
@@ -48,7 +50,7 @@ struct BrowserView: View {
                         LazyVGrid(columns: folderColumns, spacing: 10) {
                             ForEach(contents.folders) { folder in
                                 NavigationLink(value: folder) {
-                                    FolderTile(folder: folder)
+                                    FolderTile(folder: folder, stats: folderStats[folder.path])
                                 }
                                 .buttonStyle(.plain)
                                 .disabled(selecting)
@@ -297,6 +299,10 @@ struct BrowserView: View {
     /// indexer, which is the only thing that talks to the box about dates.
     private func resolveDates() async {
         do {
+            folderStats = (try? await IndexStore.shared.stats(
+                for: contents.folders.map(\.path)
+            )) ?? [:]
+
             let known = try await IndexStore.shared.known(contents.media, in: path)
             if !known.isEmpty {
                 contents = contents.applying(known, order: order)
@@ -454,6 +460,8 @@ private struct Thumb: View {
 
 private struct FolderTile: View {
     let folder: Item
+    /// Absent until the folder has been indexed; the tile simply says less.
+    let stats: FolderStats?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -467,8 +475,8 @@ private struct FolderTile: View {
                     .foregroundStyle(.tint)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                if let count = folder.childCount, count > 0 {
-                    Text("\(count)")
+                if let count = stats?.mediaCount ?? folder.childCount, count > 0 {
+                    Text(count, format: .number)
                         .font(.caption2.monospacedDigit().weight(.medium))
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 7)
@@ -485,8 +493,27 @@ private struct FolderTile: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 6)
                 .padding(.horizontal, 2)
+
+            if let detail {
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 2)
+            }
         }
         .contentShape(Rectangle())
+    }
+
+    /// "8,2 Go · 2019 – 2024", trimmed to whatever is actually known.
+    private var detail: String? {
+        guard let stats else { return nil }
+        let parts = [
+            stats.bytes.map { Int64($0).formatted(.byteCount(style: .file)) },
+            stats.span,
+        ].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
 

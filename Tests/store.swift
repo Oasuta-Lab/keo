@@ -41,7 +41,9 @@ func checkIndexStore() async throws {
     var unchanged = try await store.isUnchanged(album, modified: folderTime, childCount: 3)
     assert(!unchanged, "jamais marqué, donc jamais ignoré")
     try await store.commit([(c, shot)], in: album, generation: generation,
-                           stamp: (folderTime, 3), present: [a, b, c], sweep: true)
+                           stamp: FolderStamp.Completion(modified: folderTime, childCount: 3,
+                                                         mediaCount: 3, bytes: 6_144),
+                           present: [a, b, c], sweep: true)
     unchanged = try await store.isUnchanged(album, modified: folderTime, childCount: 3)
     assert(unchanged, "marqué et intact : on peut l'ignorer sans même le lister")
     unchanged = try await store.isUnchanged(album, modified: folderTime.addingTimeInterval(60),
@@ -53,7 +55,9 @@ func checkIndexStore() async throws {
     // --- un fichier disparu est balayé, les autres survivent ---------------------------
     generation = try await store.beginGeneration()
     try await store.commit([], in: album, generation: generation,
-                           stamp: (folderTime, 2), present: [a, c], sweep: true)
+                           stamp: FolderStamp.Completion(modified: folderTime, childCount: 2,
+                                                         mediaCount: 2, bytes: 4_096),
+                           present: [a, c], sweep: true)
     known = try await store.known([a, b, c], in: album)
     assert(known[a.id] == shot && known[c.id] == shot, "les fichiers encore là sont conservés")
     pending = try await store.unread([b], in: album)
@@ -88,7 +92,9 @@ func checkIndexStore() async throws {
     try await store.note(shot, for: opportunistic, in: album)
     generation = try await store.beginGeneration()
     try await store.commit([], in: album, generation: generation,
-                           stamp: (folderTime, 3), present: [a, c, opportunistic], sweep: true)
+                           stamp: FolderStamp.Completion(modified: folderTime, childCount: 3,
+                                                         mediaCount: 3, bytes: 6_144),
+                           present: [a, c, opportunistic], sweep: true)
     let glanced = try await store.known([opportunistic], in: album)
     assert(glanced[opportunistic.id] == shot,
            "une date relevée au passage par le pipeline de vignettes n'est pas balayée")
@@ -103,7 +109,39 @@ func checkIndexStore() async throws {
     let total = try await store.fileCount()
     assert(total > 0, "l'index contient bien des lignes")
 
-    print("ok — magasin SQLite : écriture, relecture, marquage, balayage, adoption, sous-arbres")
+    // --- les totaux affichés sur les tuiles ------------------------------------------
+    let tree = IndexStore(directory: home.appendingPathComponent("tree"))
+    try FileManager.default.createDirectory(at: home.appendingPathComponent("tree"),
+                                            withIntermediateDirectories: true)
+    let gen = try await tree.beginGeneration()
+    let old = Date(timeIntervalSince1970: 1_500_000_000)   // 2017
+    let recent = Date(timeIntervalSince1970: 1_700_000_000) // 2023
+
+    let parentPhoto = photo("p.jpg", in: "/NAS/Album", size: 1_000)
+    let childPhoto = photo("q.jpg", in: "/NAS/Album/Juin", size: 3_000)
+    try await tree.commit([(parentPhoto, old)], in: "/NAS/Album", generation: gen,
+                          stamp: FolderStamp.Completion(modified: Date(), childCount: 2,
+                                                        mediaCount: 1, bytes: 1_000))
+    try await tree.commit([(childPhoto, recent)], in: "/NAS/Album/Juin", generation: gen,
+                          stamp: FolderStamp.Completion(modified: Date(), childCount: 1,
+                                                        mediaCount: 1, bytes: 3_000))
+
+    let stats = try await tree.stats(for: ["/NAS/Album", "/NAS/Album/Juin"])
+    let parent = stats["/NAS/Album"]
+    assert(parent?.mediaCount == 2,
+           "un dossier parent compte aussi ce que contiennent ses sous-dossiers — \(String(describing: parent?.mediaCount))")
+    assert(parent?.bytes == 4_000, "la taille est cumulée sur le sous-arbre")
+    assert(parent?.span == "2017 – 2023",
+           "la période couvre tout le sous-arbre — \(String(describing: parent?.span))")
+
+    let child = stats["/NAS/Album/Juin"]
+    assert(child?.mediaCount == 1 && child?.span == "2023",
+           "un dossier d'une seule année n'affiche qu'une année")
+
+    let unseen = try await tree.stats(for: ["/NAS/Jamais vu"])
+    assert(unseen.isEmpty, "un dossier jamais indexé n'invente pas de totaux")
+
+    print("ok — magasin SQLite : écriture, marquage, balayage, adoption, sous-arbres, totaux")
 }
 
 /// Une indexation déjà payée ne doit pas se re-payer : les anciens fichiers JSON sont repris.
