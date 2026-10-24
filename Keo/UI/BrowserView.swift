@@ -54,6 +54,11 @@ struct BrowserView: View {
                 }
             }
         }
+        // Applied right on the scroll view and deliberately *before* `.fullScreenCover`:
+        // this modifier publishes a RefreshAction into the environment of everything it wraps,
+        // and a cover attached after it inherits that action — the viewer's pager then starts
+        // pulling a refresh spinner when you swipe down to dismiss.
+        .refreshable { await load() }
         .overlay { status }
         .overlay(alignment: .bottom) {
             // Root only, and out of the way whenever an action bar is up.
@@ -87,7 +92,6 @@ struct BrowserView: View {
             }
         }
         .task(id: path) { await load() }
-        .refreshable { await load() }
         // Reordering is a local question: no reason to ask the box again.
         .onChange(of: order) { _, new in contents = contents.reordered(by: new) }
     }
