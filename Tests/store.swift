@@ -176,6 +176,33 @@ func checkIndexStore() async throws {
     let nothing = try await tree.listing("/NAS/Inconnu")
     assert(nothing.isEmpty, "un dossier inconnu ne fabrique pas de listing")
 
+    // --- aucune ligne de fichier ne peut ressortir en dossier --------------------------
+    // Le defaut de la colonne kind valait "dossier" : toutes les photos deja indexees
+    // revenaient du cache comme des dossiers dans lesquels on pouvait entrer.
+    for item in withUnread where !item.isDirectory {
+        assert(item.kind != .folder,
+               "un fichier ne doit jamais ressortir comme dossier — \(item.name)")
+    }
+    assert(Item.Kind.folder.mimeHint == nil,
+           "aucun mimeType ne doit pouvoir transformer un fichier en dossier")
+    assert(Item(path: "/a/x.jpg", name: "x.jpg", isDirectory: false, size: 1,
+                modified: nil, mimeType: "inode/directory").kind != .folder,
+           "seul isDirectory décide : un mimeType de dossier sur un fichier est ignoré")
+
+    // Une base ecrite avant la colonne : les kind valent 0 et doivent etre repares.
+    let legacy = home.appendingPathComponent("legacy")
+    try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+    let before = IndexStore(directory: legacy)
+    let g = try await before.beginGeneration()
+    try await before.commit([(photo("v.mp4", in: "/NAS/Vieux", size: 10), nil)],
+                            in: "/NAS/Vieux", generation: g)
+    try await before.rewriteKindsAsUnknownForChecks()
+
+    let after = IndexStore(directory: legacy)
+    let repaired = try await after.listing("/NAS/Vieux")
+    assert(repaired.first?.kind == .video,
+           "une base d'avant la colonne est réparée d'après le nom — \(String(describing: repaired.first?.kind))")
+
     print("ok — magasin SQLite : écriture, marquage, balayage, adoption, sous-arbres, totaux")
 }
 

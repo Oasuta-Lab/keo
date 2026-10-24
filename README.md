@@ -175,6 +175,20 @@ Deux conséquences assumées :
 - Si la box ne répond pas, un dossier déjà connu reste consultable au lieu d'afficher une
   erreur. Seul un dossier jamais vu montre l'échec.
 
+### Un piège de migration de schéma
+
+`ALTER TABLE ... ADD COLUMN kind INTEGER NOT NULL DEFAULT 0` a donné la valeur 0 à toutes les
+lignes existantes — et 0 voulait dire « dossier ». Les photos déjà indexées revenaient donc du
+cache comme des dossiers dans lesquels on pouvait entrer, et disparaissaient de la grille.
+
+Trois corrections, parce qu'une seule n'aurait pas suffi :
+
+- `isDirectory` décide seul de ce qui est un dossier. Un mimeType ne peut plus le faire, ce qui
+  rend la classe de bug impossible plutôt que corrigée.
+- Le défaut de la colonne devient 3 (« autre ») : **aucune valeur par défaut ne doit affirmer
+  qu'un fichier est un dossier**.
+- Les bases déjà écrites sont réparées à l'ouverture, le type étant redéduit du nom de fichier.
+
 ### Un seul pipeline de lecture
 
 `DateScan` et `Indexer` étaient deux boucles indépendantes qui pouvaient lire le même dossier

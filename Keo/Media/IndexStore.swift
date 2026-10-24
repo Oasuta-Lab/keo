@@ -58,7 +58,7 @@ actor IndexStore {
         try? exec("ALTER TABLE folder ADD COLUMN media_count INTEGER")
         try? exec("ALTER TABLE folder ADD COLUMN bytes INTEGER")
         try? exec("ALTER TABLE file ADD COLUMN read INTEGER NOT NULL DEFAULT 0")
-        try? exec("ALTER TABLE file ADD COLUMN kind INTEGER NOT NULL DEFAULT 0")
+        try? exec("ALTER TABLE file ADD COLUMN kind INTEGER NOT NULL DEFAULT 3")
         // Rows written before the column existed were all read ones.
         try? exec("UPDATE file SET read = 1 WHERE read = 0 AND gen >= 0 AND capture IS NOT NULL")
 
@@ -69,6 +69,7 @@ actor IndexStore {
         )
 
         ready = true
+        repairKinds()
         migrateFromJSON(in: folder)
     }
 
@@ -90,7 +91,8 @@ actor IndexStore {
       -- 0 = seen in a listing but never read. Distinguishes "no EXIF date" from "not read
       -- yet", which a nullable capture alone cannot express.
       read      INTEGER NOT NULL DEFAULT 0,
-      kind      INTEGER NOT NULL DEFAULT 0,
+      -- 3 = "other": a default must never claim a file is a folder.
+      kind      INTEGER NOT NULL DEFAULT 3,
       gen       INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (folder_id, name, size)
     ) WITHOUT ROWID;
@@ -407,6 +409,55 @@ actor IndexStore {
         guard ready else { return }
         sqlite3_wal_checkpoint_v2(db, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil)
     }
+
+    /// Rows written before `kind` existed inherited 0, which means "folder" — so every photo
+    /// already indexed came back from the cache as a folder you could tap into. The name is
+    /// enough to work out what they really are.
+    private func repairKinds() {
+        guard let broken = try? rowsWithUnknownKind(), !broken.isEmpty else { return }
+        do {
+            try exec("BEGIN IMMEDIATE")
+            var statement: OpaquePointer?
+            defer { sqlite3_finalize(statement) }
+            try prepare("UPDATE file SET kind = ? WHERE folder_id = ? AND name = ? AND size = ?",
+                        into: &statement)
+            for row in broken {
+                let kind = Item(path: row.name, name: row.name, isDirectory: false,
+                                size: row.size, modified: nil, mimeType: nil).kind
+                sqlite3_reset(statement)
+                sqlite3_bind_int64(statement, 1, Int64(kind.code))
+                sqlite3_bind_int64(statement, 2, row.folder)
+                bind(statement, 3, row.name)
+                sqlite3_bind_int64(statement, 4, row.size)
+                guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+            }
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+        }
+    }
+
+    private func rowsWithUnknownKind() throws -> [(folder: Int64, name: String, size: Int64)] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT folder_id, name, size FROM file WHERE kind = 0", into: &statement)
+
+        var rows: [(folder: Int64, name: String, size: Int64)] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let raw = sqlite3_column_text(statement, 1) else { continue }
+            rows.append((sqlite3_column_int64(statement, 0), String(cString: raw),
+                         sqlite3_column_int64(statement, 2)))
+        }
+        return rows
+    }
+
+    #if DEBUG
+    /// Recreates the state of a database written before `kind` existed.
+    func rewriteKindsAsUnknownForChecks() throws {
+        try open()
+        try exec("UPDATE file SET kind = 0")
+    }
+    #endif
 
     // MARK: Migration
 

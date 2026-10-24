@@ -45,13 +45,14 @@ struct Item: Identifiable, Hashable, Sendable {
             }
         }
 
-        /// Enough for `classify` to land on the same kind again.
+        /// Enough for `classify` to land on the same kind again. Deliberately `nil` for
+        /// folders: whether something is a directory is decided by `isDirectory`, never by a
+        /// mime type, or a mislabelled row turns a photo into a folder you can tap into.
         var mimeHint: String? {
             switch self {
-            case .folder: return "inode/directory"
+            case .folder, .other: return nil
             case .image: return "image/*"
             case .video: return "video/*"
-            case .other: return nil
             }
         }
     }
@@ -84,7 +85,6 @@ struct Item: Identifiable, Hashable, Sendable {
         if let mimeType {
             if mimeType.hasPrefix("image/") { return .image }
             if mimeType.hasPrefix("video/") { return .video }
-            if mimeType == "inode/directory" { return .folder }
         }
         let ext = (path as NSString).pathExtension.lowercased()
         if imageExtensions.contains(ext) { return .image }
