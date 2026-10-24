@@ -113,6 +113,11 @@ Au-delà de **2 000 fichiers sans date**, un dossier ne se scanne plus tout seul
 cela grinçait à chaque visite d'un gros dossier. Une pastille annonce alors combien de fichiers
 sont sans date et ouvre l'écran d'indexation (menu « … » → *Indexation des dates*).
 
+L'indexation **se met en pause quand l'app passe en arrière-plan** et reprend au retour. iOS
+suspend un processus backgroundé et le termine s'il est encore occupé : sans ça, l'app se
+fermait toute seule au milieu d'une indexation. Le travail déjà fait est sauvegardé avant de
+rendre la main, avec une tâche d'arrière-plan pour que l'écriture ait le temps d'aboutir.
+
 Cet écran lance un parcours complet du NAS depuis la racine, avec le dossier en cours, les
 compteurs et un bouton d'arrêt. Il continue pendant la navigation, cède la priorité aux
 vignettes, et persiste au fur et à mesure : un arrêt ne coûte que les fichiers non encore lus.
@@ -169,7 +174,7 @@ La galerie est supposée très grande. Ce qui a été fait pour ça :
 
 | Point | Choix |
 |---|---|
-| Mémoire des vignettes | Budget en **octets** (80 Mo), pas en nombre d'images |
+| Mémoire des vignettes | Budget en **octets** (80 Mo), pas en nombre d'images, et purge sur alerte mémoire |
 | Qualité des aperçus | Un aperçu embarqué est refusé s'il fait moins de 75 % de la taille demandée, ou si son ratio ne correspond pas à la photo |
 | Concurrence | Deux portes : 4 fetchs visibles, 2 préchargements — un prefetch ne bloque jamais une cellule à l'écran |
 | Doublons | Une tâche par clé, partagée par tous les appelants |

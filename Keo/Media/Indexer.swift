@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 /// Walks the whole NAS once, reading each photo's capture date, so browsing never has to.
 ///
@@ -44,6 +45,9 @@ final class Indexer: ObservableObject {
     @AppStorage("lastIndexedAt") private var lastIndexedAt: Double = 0
 
     private var task: Task<Void, Never>?
+    private var observers: [NSObjectProtocol] = []
+    private var resumeOnReturn: (root: String, client: FreeboxClient)?
+    private var background: UIBackgroundTaskIdentifier = .invalid
 
     /// Same restraint as the per-folder scan: the grid matters more than the index.
     private static let parallel = 3
@@ -54,13 +58,64 @@ final class Indexer: ObservableObject {
     }
 
     func stop() {
+        resumeOnReturn = nil
+        halt()
+    }
+
+    private func halt() {
         task?.cancel()
         task = nil
+        endBackgroundGrace()
         if case .running(let progress) = state { state = .finished(progress) }
+    }
+
+    /// iOS suspends a backgrounded app and will terminate it outright if it is still busy —
+    /// which is what "the app closes by itself during indexing" was. Pause, save, and pick up
+    /// again on return.
+    private func watchAppState(root: String, client: FreeboxClient) {
+        guard observers.isEmpty else { return }
+        let centre = NotificationCenter.default
+
+        observers.append(centre.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.state.isRunning else { return }
+                self.resumeOnReturn = (root, client)
+                self.halt()
+                await CaptureDateIndex.shared.save()
+            }
+        })
+
+        observers.append(centre.addObserver(
+            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let resume = self.resumeOnReturn else { return }
+                self.resumeOnReturn = nil
+                self.start(from: resume.root, client: resume.client)
+            }
+        })
+    }
+
+    /// A little grace so the save finishes even if we are already on the way out.
+    private func beginBackgroundGrace() {
+        guard background == .invalid else { return }
+        background = UIApplication.shared.beginBackgroundTask(withName: "keo.indexing") {
+            Task { @MainActor [weak self] in self?.halt() }
+        }
+    }
+
+    private func endBackgroundGrace() {
+        guard background != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(background)
+        background = .invalid
     }
 
     func start(from root: String = FreeboxClient.rootPath, client: FreeboxClient) {
         guard !state.isRunning else { return }
+        watchAppState(root: root, client: client)
+        beginBackgroundGrace()
         task = Task { [weak self] in
             await self?.run(root: root, client: client)
         }
@@ -91,12 +146,16 @@ final class Indexer: ObservableObject {
             state = .running(progress)
 
             await read(pending, client: client, progress: &progress)
-            await CaptureDateIndex.shared.save()
+
+            // Saving after every folder re-encoded the whole index each time; every tenth is
+            // often enough, since backgrounding and stopping both save explicitly.
+            if progress.foldersVisited % 10 == 0 { await CaptureDateIndex.shared.save() }
         }
 
         await CaptureDateIndex.shared.save()
         if !Task.isCancelled { lastIndexedAt = Date().timeIntervalSince1970 }
         state = .finished(progress)
+        endBackgroundGrace()
         task = nil
     }
 

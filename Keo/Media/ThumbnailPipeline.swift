@@ -149,6 +149,15 @@ private final class MemoryCache: @unchecked Sendable {
 
     init(byteLimit: Int) {
         cache.totalCostLimit = byteLimit
+
+        // NSCache does not react to memory warnings on its own for images we hold costs for.
+        // During a long index this is the one big block we can hand back on demand.
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil, queue: nil
+        ) { [cache] _ in
+            cache.removeAllObjects()
+        }
     }
 
     subscript(key: String) -> UIImage? {
