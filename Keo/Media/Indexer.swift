@@ -193,7 +193,10 @@ final class Indexer: ObservableObject {
                     childCount: contents.folders.count + contents.media.count
                               + contents.documents.count,
                     mediaCount: contents.media.count,
-                    bytes: contents.media.reduce(Int64(0)) { $0 + $1.size }
+                    // Everything the folder holds, documents included: the tile answers
+                    // "how heavy is this folder", not "how heavy are its photos".
+                    bytes: (contents.media + contents.documents)
+                        .reduce(Int64(0)) { $0 + $1.size }
                 )
                 await index(contents.media, in: folder.path, generation: generation,
                             stamp: completion, client: client, progress: &progress)

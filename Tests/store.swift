@@ -117,11 +117,12 @@ func checkIndexStore() async throws {
     let old = Date(timeIntervalSince1970: 1_500_000_000)   // 2017
     let recent = Date(timeIntervalSince1970: 1_700_000_000) // 2023
 
+    // Le dossier parent contient aussi un document, qui doit compter dans le poids.
     let parentPhoto = photo("p.jpg", in: "/NAS/Album", size: 1_000)
     let childPhoto = photo("q.jpg", in: "/NAS/Album/Juin", size: 3_000)
     try await tree.commit([(parentPhoto, old)], in: "/NAS/Album", generation: gen,
-                          stamp: FolderStamp.Completion(modified: Date(), childCount: 2,
-                                                        mediaCount: 1, bytes: 1_000))
+                          stamp: FolderStamp.Completion(modified: Date(), childCount: 3,
+                                                        mediaCount: 1, bytes: 1_000 + 500_000))
     try await tree.commit([(childPhoto, recent)], in: "/NAS/Album/Juin", generation: gen,
                           stamp: FolderStamp.Completion(modified: Date(), childCount: 1,
                                                         mediaCount: 1, bytes: 3_000))
@@ -130,7 +131,10 @@ func checkIndexStore() async throws {
     let parent = stats["/NAS/Album"]
     assert(parent?.mediaCount == 2,
            "un dossier parent compte aussi ce que contiennent ses sous-dossiers — \(String(describing: parent?.mediaCount))")
-    assert(parent?.bytes == 4_000, "la taille est cumulée sur le sous-arbre")
+    assert(parent?.bytes == 504_000,
+           "le poids cumule le sous-arbre et compte les documents, pas seulement les médias — "
+         + "\(String(describing: parent?.bytes))")
+    assert(parent?.mediaCount == 2, "le compteur, lui, ne parle que de photos et vidéos")
     assert(parent?.span == "2017 – 2023",
            "la période couvre tout le sous-arbre — \(String(describing: parent?.span))")
 

@@ -34,6 +34,7 @@ extension FolderStamp {
 /// Summary shown on a folder tile. Counted over the whole subtree.
 struct FolderStats: Equatable, Sendable {
     let mediaCount: Int
+    /// Weight of everything in the subtree, documents included.
     let bytes: Int64?
     let earliest: Date?
     let latest: Date?
