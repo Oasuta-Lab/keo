@@ -37,10 +37,14 @@ struct IndexingView: View {
                     // `isStalled` guards against a state that says "running" with no worker
                     // behind it: that used to hide the only button able to restart.
                     if indexer.state.isRunning, !indexer.isStalled {
-                        Button("Arrêter", systemImage: "stop.fill", role: .destructive) {
+                        Button(role: .destructive) {
                             indexer.stop()
+                        } label: {
+                            // Explicit style: a destructive role colours the text but leaves the
+                            // icon on the accent tint, which reads as a glitch.
+                            Label("Arrêter", systemImage: "stop.fill")
+                                .foregroundStyle(.red)
                         }
-                        .tint(.red)   // sinon l'icône garde la couleur d'accent, le texte est rouge
                     } else {
                         Button(indexer.state.isPaused || indexer.isStalled
                                ? "Reprendre" : "Lancer l'indexation",
@@ -52,11 +56,12 @@ struct IndexingView: View {
                             indexer.start(client: client, scope: .recheck)
                         }
 
-                        Button("Tout relire depuis zéro", systemImage: "trash",
-                               role: .destructive) {
+                        Button(role: .destructive) {
                             confirmingRebuild = true
+                        } label: {
+                            Label("Tout relire depuis zéro", systemImage: "trash")
+                                .foregroundStyle(.red)
                         }
-                        .tint(.red)
                     }
                 } footer: {
                     Text("Keo parcourt le NAS et retient ce qu'il y trouve : la structure des "
@@ -160,17 +165,31 @@ struct IndexingView: View {
             row("Sans date de prise de vue", progress.dateless)
         }
         if progress.unreachable > 0 {
-            LabeledContent("Dossiers injoignables") {
-                Text(progress.unreachable, format: .number)
-                    .monospacedDigit()
-                    .foregroundStyle(.orange)
-            }
+            problemLink("Dossiers injoignables", count: progress.unreachable,
+                        problems: progress.problems.filter { $0.trouble == .folderUnreachable })
         }
         if progress.unreadable > 0 {
-            LabeledContent("Illisibles, à réessayer") {
-                Text(progress.unreadable, format: .number)
-                    .monospacedDigit()
-                    .foregroundStyle(.orange)
+            problemLink("Illisibles, à réessayer", count: progress.unreadable,
+                        problems: progress.problems.filter { $0.trouble == .fileUnreadable })
+        }
+    }
+
+    /// Tappable only when there is something to show: the list is capped, so a very large
+    /// failure keeps its honest count while detailing only the first entries.
+    @ViewBuilder
+    private func problemLink(_ label: String, count: Int,
+                             problems: [Indexer.Problem]) -> some View {
+        if problems.isEmpty {
+            LabeledContent(label) {
+                Text(count, format: .number).monospacedDigit().foregroundStyle(.orange)
+            }
+        } else {
+            NavigationLink {
+                ProblemList(title: label, total: count, problems: problems)
+            } label: {
+                LabeledContent(label) {
+                    Text(count, format: .number).monospacedDigit().foregroundStyle(.orange)
+                }
             }
         }
     }
@@ -224,5 +243,46 @@ struct IndexingChip: View {
             .background(.ultraThinMaterial, in: Capsule())
         }
         .buttonStyle(.plain)
+    }
+}
+
+
+/// The detail behind a failure count.
+private struct ProblemList: View {
+    let title: String
+    let total: Int
+    let problems: [Indexer.Problem]
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(problems) { problem in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(problem.name)
+                            .font(.subheadline.weight(.medium))
+                        Text((problem.path as NSString).deletingLastPathComponent)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                        Text(problem.reason)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                    .padding(.vertical, 2)
+                }
+            } footer: {
+                if total > problems.count {
+                    Text("\(total.formatted()) au total, les \(problems.count) premiers sont "
+                       + "listés ici.\n\nCes entrées ne sont pas perdues : elles restent à lire "
+                       + "et seront réessayées au prochain passage.")
+                } else {
+                    Text("Ces entrées ne sont pas perdues : elles restent à lire et seront "
+                       + "réessayées au prochain passage.")
+                }
+            }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

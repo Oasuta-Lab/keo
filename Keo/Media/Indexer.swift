@@ -17,6 +17,22 @@ func trace(_ message: @autoclosure () -> String) {
 
 @MainActor
 final class Indexer: ObservableObject {
+    /// What went wrong, and where. A bare counter tells you something failed but never what,
+    /// which is no help at all when one folder out of eighty is unreachable.
+    struct Problem: Identifiable, Equatable, Sendable {
+        enum Trouble: Equatable, Sendable {
+            case folderUnreachable   // could not even be listed
+            case fileUnreadable      // listed, but its bytes would not come
+        }
+
+        var id: String { path }
+        let path: String
+        let reason: String
+        let trouble: Trouble
+
+        var name: String { (path as NSString).lastPathComponent }
+    }
+
     struct Progress: Equatable {
         var folder = "/"
         var foldersVisited = 0
@@ -27,6 +43,17 @@ final class Indexer: ObservableObject {
         var unreadable = 0
         /// Folders that could not even be listed. Any of these makes the pass incomplete.
         var unreachable = 0
+        /// The first few in detail. Bounded: a box that is entirely gone would otherwise
+        /// collect thousands of identical entries.
+        var problems: [Problem] = []
+
+        mutating func note(_ problem: Problem) {
+            guard problems.count < Progress.problemLimit,
+                  !problems.contains(where: { $0.path == problem.path }) else { return }
+            problems.append(problem)
+        }
+
+        static let problemLimit = 60
         /// Files read but carrying no capture date at all.
         var dateless = 0
         /// Current folder only. A global bar moves by 0.17 % per batch on a 14 600 photo
@@ -232,6 +259,8 @@ final class Indexer: ObservableObject {
         progress.foldersVisited = 0
         progress.foldersSkipped = 0
         progress.mediaFound = 0
+        progress.unreachable = 0
+        progress.problems.removeAll()
         progress.folder = root
         state = .running(progress)
 
@@ -284,6 +313,9 @@ final class Indexer: ObservableObject {
                     listingFailures += 1
                     consecutiveFailures += 1
                     progress.unreachable += 1
+                    progress.note(Problem(path: folder.path,
+                                          reason: error.localizedDescription,
+                                          trouble: .folderUnreachable))
                     state = .running(progress)
 
                     // The box is gone, or we are being suspended: stop rather than grind the
@@ -451,11 +483,14 @@ final class Indexer: ObservableObject {
                             }
                         }
                         progress.datesRead += 1
-                    case .failure:
+                    case .failure(let error):
                         // Left unknown on purpose: a dropped connection must be retried, never
                         // recorded as "this photo has no date".
                         failures += 1
                         progress.unreadable += 1
+                        progress.note(Problem(path: item.path,
+                                              reason: error.localizedDescription,
+                                              trouble: .fileUnreadable))
                     }
 
                     done += 1
