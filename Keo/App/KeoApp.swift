@@ -32,10 +32,11 @@ private struct Shelf: View {
     let client: FreeboxClient
     let boxName: String
 
-    enum Tab: Hashable { case browse, favourites, collections }
+    enum Tab: Hashable { case browse, shortcuts, favourites, collections }
 
     @State private var tab: Tab = .browse
     @State private var browsePath = NavigationPath()
+    @State private var shortcutsPath = NavigationPath()
     @State private var favouritesPath = NavigationPath()
     @State private var collectionsPath = NavigationPath()
 
@@ -47,6 +48,12 @@ private struct Shelf: View {
             }
             .tabItem { Label("Parcourir", systemImage: "folder") }
             .tag(Tab.browse)
+
+            NavigationStack(path: $shortcutsPath) {
+                ShortcutsView(client: client)
+            }
+            .tabItem { Label("Raccourcis", systemImage: "star") }
+            .tag(Tab.shortcuts)
 
             NavigationStack(path: $favouritesPath) {
                 BrowserView(client: client, source: .favourites)
@@ -75,6 +82,7 @@ private struct Shelf: View {
     private func popToRoot(_ tab: Tab) {
         switch tab {
         case .browse: browsePath = NavigationPath()
+        case .shortcuts: shortcutsPath = NavigationPath()
         case .favourites: favouritesPath = NavigationPath()
         case .collections: collectionsPath = NavigationPath()
         }

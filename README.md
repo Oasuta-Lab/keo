@@ -211,10 +211,10 @@ Deux niveaux, parce qu'ils répondent à deux gestes différents :
   faire quand on veut juste marquer une belle photo.
 - **Collections** — un choix délibéré, en deux temps. Une photo peut être en favori **et**
   dans plusieurs collections.
-- **Raccourcis** — des dossiers épinglés, par appui long sur leur tuile.
+- **Raccourcis** — des dossiers épinglés par appui long sur leur tuile, avec leur chemin
+  parent et les totaux que l'index a déjà comptés.
 
-**Favoris** et **Collections** sont des onglets ; les **raccourcis** restent en haut de la
-racine de l'onglet Parcourir.
+Quatre onglets : **Parcourir · Raccourcis · Favoris · Collections**.
 
 Un tiroir latéral aurait été la forme évidente, et c'est précisément ce que les guidelines
 d'Apple écartent : une navigation cachée derrière une icône est une navigation que personne ne

@@ -39,7 +39,6 @@ struct BrowserView: View {
     @State private var fromCache = false
 
     @State private var collections: [IndexStore.Collection] = []
-    @State private var shortcuts: [Item] = []
     @State private var choosingCollection = false
     /// Paths of folders already pinned, so a tile's menu can say the right thing.
     @State private var pinned: Set<String> = []
@@ -66,8 +65,6 @@ struct BrowserView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                    library
-
                     if !contents.folders.isEmpty {
                         LazyVGrid(columns: folderColumns, spacing: 10) {
                             ForEach(contents.folders) { folder in
@@ -239,43 +236,9 @@ struct BrowserView: View {
         .padding(.vertical, 2)
     }
 
-    /// Pinned folders, at the root only. Favourites and collections have their own tabs now,
-    /// so repeating them here would be two doors to the same room.
-    @ViewBuilder
-    private var library: some View {
-        if source.isRoot, !selecting, !shortcuts.isEmpty {
-            VStack(spacing: 0) {
-                Text("Raccourcis")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 10)
-                    .padding(.bottom, 4)
-
-                ForEach(shortcuts) { folder in
-                    NavigationLink(value: BrowserSource.folder(folder)) {
-                        LibraryRow(symbol: "folder.fill", title: folder.name, detail: nil)
-                    }
-                    .buttonStyle(.plain)
-                    .contextMenu {
-                        Button("Retirer des raccourcis", systemImage: "star.slash",
-                               role: .destructive) {
-                            togglePin(folder)
-                        }
-                    }
-                }
-
-                Divider().padding(.top, 10)
-            }
-            .padding(.bottom, 4)
-        }
-    }
-
     private func refreshLibrary() async {
         collections = (try? await IndexStore.shared.collections()) ?? []
-        shortcuts = (try? await IndexStore.shared.shortcuts()) ?? []
-        pinned = Set(shortcuts.map(\.path))
+        pinned = Set((try? await IndexStore.shared.shortcuts())?.map(\.path) ?? [])
     }
 
     private func togglePin(_ folder: Item) {
@@ -760,32 +723,6 @@ private struct Row: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 11)
-        .contentShape(Rectangle())
-    }
-}
-
-/// One line in the library header: an icon, a name, and a count when there is one.
-private struct LibraryRow: View {
-    let symbol: String
-    let title: String
-    let detail: String?
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: symbol)
-                .font(.body)
-                .foregroundStyle(.tint)
-                .frame(width: 26)
-            Text(title)
-            Spacer()
-            if let detail {
-                Text(detail)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
         .contentShape(Rectangle())
     }
 }
