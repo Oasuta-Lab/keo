@@ -40,7 +40,12 @@ struct ViewerView: View {
                 .simultaneousGesture(dismissDrag)
         }
         .overlay(alignment: .top) { chrome.opacity(1 - progress) }
-        .overlay(alignment: .bottom) { DownloadBar(downloader: downloader) }
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 10) {
+                if !downloader.isRunning { actions.opacity(1 - progress) }
+                DownloadBar(downloader: downloader)
+            }
+        }
         .sheet(item: $downloader.share) { payload in
             ShareSheet(urls: payload.urls)
         }
@@ -99,14 +104,10 @@ struct ViewerView: View {
                          modification: current.modified)
     }
 
+    /// Top: only what must not be thumb-reachable — closing, and knowing what you are looking at.
     private var chrome: some View {
         HStack(spacing: 12) {
             Button { dismiss() } label: { Glyph("xmark") }
-
-            Button { toggleFavourite() } label: {
-                Glyph(favourite ? "heart.fill" : "heart")
-            }
-            .disabled(current == nil)
 
             Spacer(minLength: 0)
 
@@ -129,6 +130,23 @@ struct ViewerView: View {
             }
 
             Spacer(minLength: 0)
+
+            // Balances the close button so the caption stays centred.
+            Glyph("xmark").opacity(0).allowsHitTesting(false)
+        }
+        .padding(.horizontal, 16)
+    }
+
+    /// Bottom: everything you actually do, within thumb reach.
+    private var actions: some View {
+        HStack(spacing: 28) {
+            Button { toggleFavourite() } label: {
+                Glyph(favourite ? "heart.fill" : "heart")
+                    .foregroundStyle(favourite ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
+            }
+
+            Button { choosingCollection = true } label: { Glyph("square.stack") }
+
             Menu {
                 if let current {
                     if current.isMedia {
@@ -139,17 +157,14 @@ struct ViewerView: View {
                     Button("Partager", systemImage: "square.and.arrow.up") {
                         downloader.save([current], from: client, to: .share)
                     }
-                    Divider()
-                    Button("Ajouter à une collection…", systemImage: "square.stack") {
-                        choosingCollection = true
-                    }
                 }
             } label: {
                 Glyph("square.and.arrow.down")
             }
-            .disabled(downloader.isRunning || current == nil)
+            .disabled(downloader.isRunning)
         }
-        .padding(.horizontal, 16)
+        .disabled(current == nil)
+        .padding(.bottom, 6)
     }
 
     // MARK: Swipe to dismiss
