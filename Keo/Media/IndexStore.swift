@@ -99,6 +99,38 @@ actor IndexStore {
     ) WITHOUT ROWID;
     CREATE INDEX IF NOT EXISTS file_by_identity ON file(name, size);
     CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v);
+
+    -- Favourites, shortcuts and collections are keyed on the path itself rather than on a
+    -- folder row. They must outlive the index: a sweep, a rebuild, or a folder that vanishes
+    -- for an evening must never take someone's favourites with it.
+    CREATE TABLE IF NOT EXISTS favourite (
+      path  TEXT    NOT NULL,
+      name  TEXT    NOT NULL,
+      size  INTEGER NOT NULL,
+      added REAL    NOT NULL,
+      PRIMARY KEY (path, size)
+    ) WITHOUT ROWID;
+
+    CREATE TABLE IF NOT EXISTS shortcut (
+      path  TEXT PRIMARY KEY,
+      name  TEXT NOT NULL,
+      added REAL NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS collection (
+      id      INTEGER PRIMARY KEY,
+      name    TEXT NOT NULL UNIQUE,
+      created REAL NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS collection_item (
+      collection_id INTEGER NOT NULL REFERENCES collection(id) ON DELETE CASCADE,
+      path  TEXT    NOT NULL,
+      name  TEXT    NOT NULL,
+      size  INTEGER NOT NULL,
+      added REAL    NOT NULL,
+      PRIMARY KEY (collection_id, path, size)
+    ) WITHOUT ROWID;
     """
 
     // MARK: Generations
@@ -522,6 +554,255 @@ actor IndexStore {
         try exec("UPDATE file SET kind = 0")
     }
     #endif
+
+    // MARK: Favourites, shortcuts, collections
+
+    struct Collection: Identifiable, Equatable, Sendable {
+        let id: Int64
+        let name: String
+        let count: Int
+    }
+
+    func isFavourite(_ item: Item) throws -> Bool {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT 1 FROM favourite WHERE path = ? AND size = ?", into: &statement)
+        bind(statement, 1, item.path)
+        sqlite3_bind_int64(statement, 2, item.size)
+        return sqlite3_step(statement) == SQLITE_ROW
+    }
+
+    func setFavourite(_ items: [Item], _ on: Bool) throws {
+        try open()
+        try exec("BEGIN IMMEDIATE")
+        do {
+            var statement: OpaquePointer?
+            defer { sqlite3_finalize(statement) }
+            try prepare(on
+                ? "INSERT OR IGNORE INTO favourite (path, name, size, added) VALUES (?, ?, ?, ?)"
+                : "DELETE FROM favourite WHERE path = ? AND size = ?", into: &statement)
+
+            let now = Date().timeIntervalSince1970
+            for item in items {
+                sqlite3_reset(statement)
+                bind(statement, 1, item.path)
+                if on {
+                    bind(statement, 2, item.name)
+                    sqlite3_bind_int64(statement, 3, item.size)
+                    sqlite3_bind_double(statement, 4, now)
+                } else {
+                    sqlite3_bind_int64(statement, 2, item.size)
+                }
+                guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+            }
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    func favourites() throws -> [Item] {
+        try open()
+        return try collect("SELECT path, name, size FROM favourite ORDER BY added DESC")
+    }
+
+    func favouriteCount() throws -> Int {
+        try open()
+        return Int(try scalar("SELECT count(*) FROM favourite") ?? 0)
+    }
+
+    func isShortcut(_ folder: Item) throws -> Bool {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT 1 FROM shortcut WHERE path = ?", into: &statement)
+        bind(statement, 1, folder.path)
+        return sqlite3_step(statement) == SQLITE_ROW
+    }
+
+    func setShortcut(_ folder: Item, _ on: Bool) throws {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        if on {
+            try prepare("INSERT OR IGNORE INTO shortcut (path, name, added) VALUES (?, ?, ?)",
+                        into: &statement)
+            bind(statement, 1, folder.path)
+            bind(statement, 2, folder.name)
+            sqlite3_bind_double(statement, 3, Date().timeIntervalSince1970)
+        } else {
+            try prepare("DELETE FROM shortcut WHERE path = ?", into: &statement)
+            bind(statement, 1, folder.path)
+        }
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+    }
+
+    func shortcuts() throws -> [Item] {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT path, name FROM shortcut ORDER BY added DESC", into: &statement)
+
+        var folders: [Item] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let path = sqlite3_column_text(statement, 0),
+                  let name = sqlite3_column_text(statement, 1) else { continue }
+            folders.append(Item(path: String(cString: path), name: String(cString: name),
+                                isDirectory: true, size: 0, modified: nil, mimeType: nil))
+        }
+        return folders
+    }
+
+    func collections() throws -> [Collection] {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        let sql = "SELECT c.id, c.name, (SELECT count(*) FROM collection_item i "
+                + "WHERE i.collection_id = c.id) FROM collection c "
+                + "ORDER BY c.name COLLATE NOCASE"
+        try prepare(sql, into: &statement)
+
+        var found: [Collection] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let name = sqlite3_column_text(statement, 1) else { continue }
+            found.append(Collection(id: sqlite3_column_int64(statement, 0),
+                                    name: String(cString: name),
+                                    count: Int(sqlite3_column_int64(statement, 2))))
+        }
+        return found
+    }
+
+    /// Returns the existing collection when the name is taken rather than failing: two
+    /// collections with the same name would be impossible to tell apart.
+    @discardableResult
+    func createCollection(named name: String) throws -> Int64 {
+        try open()
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw Failure.write("nom vide") }
+
+        var insert: OpaquePointer?
+        defer { sqlite3_finalize(insert) }
+        try prepare("INSERT OR IGNORE INTO collection (name, created) VALUES (?, ?)", into: &insert)
+        bind(insert, 1, trimmed)
+        sqlite3_bind_double(insert, 2, Date().timeIntervalSince1970)
+        guard sqlite3_step(insert) == SQLITE_DONE else { throw Failure.write(message) }
+
+        var lookup: OpaquePointer?
+        defer { sqlite3_finalize(lookup) }
+        try prepare("SELECT id FROM collection WHERE name = ?", into: &lookup)
+        bind(lookup, 1, trimmed)
+        guard sqlite3_step(lookup) == SQLITE_ROW else { throw Failure.write(message) }
+        return sqlite3_column_int64(lookup, 0)
+    }
+
+    func renameCollection(_ id: Int64, to name: String) throws {
+        try open()
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("UPDATE collection SET name = ? WHERE id = ?", into: &statement)
+        bind(statement, 1, trimmed)
+        sqlite3_bind_int64(statement, 2, id)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+    }
+
+    func deleteCollection(_ id: Int64) throws {
+        try open()
+        try exec("DELETE FROM collection WHERE id = \(id)")
+    }
+
+    func setMembership(_ items: [Item], in collectionID: Int64, _ on: Bool) throws {
+        try open()
+        try exec("BEGIN IMMEDIATE")
+        do {
+            var statement: OpaquePointer?
+            defer { sqlite3_finalize(statement) }
+            let insert = "INSERT OR IGNORE INTO collection_item "
+                       + "(collection_id, path, name, size, added) VALUES (?, ?, ?, ?, ?)"
+            let remove = "DELETE FROM collection_item "
+                       + "WHERE collection_id = ? AND path = ? AND size = ?"
+            try prepare(on ? insert : remove, into: &statement)
+
+            let now = Date().timeIntervalSince1970
+            for item in items {
+                sqlite3_reset(statement)
+                sqlite3_bind_int64(statement, 1, collectionID)
+                bind(statement, 2, item.path)
+                if on {
+                    bind(statement, 3, item.name)
+                    sqlite3_bind_int64(statement, 4, item.size)
+                    sqlite3_bind_double(statement, 5, now)
+                } else {
+                    sqlite3_bind_int64(statement, 3, item.size)
+                }
+                guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+            }
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+    }
+
+    func items(in collectionID: Int64) throws -> [Item] {
+        try open()
+        return try collect("SELECT path, name, size FROM collection_item "
+                         + "WHERE collection_id = \(collectionID) ORDER BY added DESC")
+    }
+
+    func collectionsContaining(_ item: Item) throws -> Set<Int64> {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT collection_id FROM collection_item WHERE path = ? AND size = ?",
+                    into: &statement)
+        bind(statement, 1, item.path)
+        sqlite3_bind_int64(statement, 2, item.size)
+
+        var found: Set<Int64> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            found.insert(sqlite3_column_int64(statement, 0))
+        }
+        return found
+    }
+
+    /// Rebuilds items from a saved list, pulling in the capture date the index already knows
+    /// so a collection sorts and groups like any other folder.
+    private func collect(_ sql: String) throws -> [Item] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare(sql, into: &statement)
+
+        var rows: [(path: String, name: String, size: Int64)] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let path = sqlite3_column_text(statement, 0),
+                  let name = sqlite3_column_text(statement, 1) else { continue }
+            rows.append((String(cString: path), String(cString: name),
+                         sqlite3_column_int64(statement, 2)))
+        }
+
+        var dates: OpaquePointer?
+        defer { sqlite3_finalize(dates) }
+        let lookup = "SELECT fi.capture FROM file fi JOIN folder d ON d.id = fi.folder_id "
+                   + "WHERE d.path = ? AND fi.name = ? AND fi.size = ?"
+        try prepare(lookup, into: &dates)
+
+        return rows.map { row in
+            var capture: Date?
+            sqlite3_reset(dates)
+            bind(dates, 1, (row.path as NSString).deletingLastPathComponent)
+            bind(dates, 2, row.name)
+            sqlite3_bind_int64(dates, 3, row.size)
+            if sqlite3_step(dates) == SQLITE_ROW, sqlite3_column_type(dates, 0) != SQLITE_NULL {
+                capture = Date(timeIntervalSince1970: sqlite3_column_double(dates, 0))
+            }
+            return Item(path: row.path, name: row.name, isDirectory: false, size: row.size,
+                        modified: nil, mimeType: nil, captureDate: capture)
+        }
+    }
 
     // MARK: Migration
 

@@ -14,6 +14,9 @@ struct ViewerView: View {
     @State private var drag: CGSize = .zero
     /// Pinched in, the scroll view owns the pan — stay out of its way.
     @State private var zoomed = false
+    @State private var favourite = false
+    @State private var collections: [IndexStore.Collection] = []
+    @State private var choosingCollection = false
     /// Capture dates discovered while opening a file, keyed by path.
     @State private var captured: [Item.ID: Date] = [:]
 
@@ -41,7 +44,32 @@ struct ViewerView: View {
         .sheet(item: $downloader.share) { payload in
             ShareSheet(urls: payload.urls)
         }
+        .confirmationDialog("Ajouter à une collection", isPresented: $choosingCollection,
+                            titleVisibility: .visible) {
+            ForEach(collections) { collection in
+                Button(collection.name) { add(to: collection) }
+            }
+            Button("Annuler", role: .cancel) {}
+        }
+        .task { collections = (try? await IndexStore.shared.collections()) ?? [] }
+        // The heart reflects the photo on screen, so it has to follow the paging.
+        .task(id: currentID) {
+            guard let current else { return }
+            favourite = (try? await IndexStore.shared.isFavourite(current)) ?? false
+        }
         .statusBarHidden()
+    }
+
+    private func toggleFavourite() {
+        guard let current else { return }
+        let next = !favourite
+        favourite = next
+        Task { try? await IndexStore.shared.setFavourite([current], next) }
+    }
+
+    private func add(to collection: IndexStore.Collection) {
+        guard let current else { return }
+        Task { try? await IndexStore.shared.setMembership([current], in: collection.id, true) }
     }
 
     /// A paging `ScrollView` rather than `TabView`: a page-style TabView keeps structural
@@ -75,6 +103,11 @@ struct ViewerView: View {
         HStack(spacing: 12) {
             Button { dismiss() } label: { Glyph("xmark") }
 
+            Button { toggleFavourite() } label: {
+                Glyph(favourite ? "heart.fill" : "heart")
+            }
+            .disabled(current == nil)
+
             Spacer(minLength: 0)
 
             if let current {
@@ -105,6 +138,10 @@ struct ViewerView: View {
                     }
                     Button("Partager", systemImage: "square.and.arrow.up") {
                         downloader.save([current], from: client, to: .share)
+                    }
+                    Divider()
+                    Button("Ajouter à une collection…", systemImage: "square.stack") {
+                        choosingCollection = true
                     }
                 }
             } label: {

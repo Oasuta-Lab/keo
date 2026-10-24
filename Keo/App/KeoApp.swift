@@ -11,8 +11,9 @@ struct KeoApp: App {
             Group {
                 if let client = store.client {
                     NavigationStack {
-                        BrowserView(client: client, path: FreeboxClient.rootPath,
-                                    title: store.boxName)
+                        BrowserView(client: client,
+                                    source: .folder(path: FreeboxClient.rootPath,
+                                                    title: store.boxName))
                     }
                 } else {
                     ConnectView()

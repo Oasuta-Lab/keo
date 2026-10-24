@@ -203,6 +203,35 @@ Au-delà de **2 000 fichiers sans date**, un dossier ne se lit plus à l'ouvertu
 renvoie vers l'écran d'indexation (menu « … » → *Indexation de la bibliothèque*). L'indexation se met en
 pause en arrière-plan et reprend au retour.
 
+## Favoris, collections, raccourcis
+
+Deux niveaux, parce qu'ils répondent à deux gestes différents :
+
+- **Favoris** — un cœur, un tap, depuis le plein écran ou le mode sélection. Pas de choix à
+  faire quand on veut juste marquer une belle photo.
+- **Collections** — un choix délibéré, en deux temps. Une photo peut être en favori **et**
+  dans plusieurs collections.
+- **Raccourcis** — des dossiers épinglés, par appui long sur leur tuile.
+
+Les trois apparaissent en haut de la racine uniquement, et disparaissent dès qu'on entre dans
+un dossier.
+
+Le mot « collection » est délibéré : **rien n'est créé sur le NAS**. « Album » laisserait croire
+qu'un dossier a été écrit sur la box, ce que Keo ne fait jamais.
+
+### Elles survivent à l'index, pas l'inverse
+
+`favourite`, `shortcut`, `collection` et `collection_item` sont **clés sur le chemin**, pas sur
+une ligne de l'index. Un balayage, un « Tout relire depuis zéro », ou un dossier injoignable un
+soir ne doivent jamais emporter les favoris de quelqu'un. C'est vérifié : les checks effacent
+tout l'index et exigent que favoris, collections et membres soient toujours là.
+
+Conséquence assumée : tout est **local à l'appareil**. Supprimer l'app les emporte. Une
+synchronisation iCloud serait un autre chantier.
+
+Une collection emprunte à l'index la date de prise de vue qu'il connaît déjà, donc elle se
+trie et se regroupe exactement comme un dossier.
+
 ## Timeline
 
 Quand le tri est par date, la grille se regroupe et un rail apparaît à droite.

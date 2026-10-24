@@ -2,8 +2,11 @@ import SwiftUI
 
 struct BrowserView: View {
     let client: FreeboxClient
-    let path: String
-    let title: String
+    let source: BrowserSource
+
+    /// Convenience: most of the view still thinks in folder paths.
+    private var path: String { source.folderPath ?? source.id }
+    private var title: String { source.title }
 
     @EnvironmentObject private var store: Store
     @EnvironmentObject private var downloader: Downloader
@@ -35,6 +38,18 @@ struct BrowserView: View {
     /// True while the grid shows what the index remembers rather than a fresh listing.
     @State private var fromCache = false
 
+    @State private var favouriteCount = 0
+    @State private var collections: [IndexStore.Collection] = []
+    @State private var shortcuts: [Item] = []
+    @State private var namingCollection = false
+    @State private var collectionName = ""
+    @State private var renaming: IndexStore.Collection?
+    @State private var choosingCollection = false
+    /// Paths of folders already pinned, so a tile's menu can say the right thing.
+    @State private var pinned: Set<String> = []
+    /// True when every selected item is already a favourite — the action then unfavourites.
+    @State private var selectionIsFavourite = false
+
     private var sectioned: Bool { order != .name && !sections.isEmpty }
 
     private var columns: [GridItem] {
@@ -55,6 +70,8 @@ struct BrowserView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+                    library
+
                     if !contents.folders.isEmpty {
                         LazyVGrid(columns: folderColumns, spacing: 10) {
                             ForEach(contents.folders) { folder in
@@ -63,6 +80,14 @@ struct BrowserView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .disabled(selecting)
+                                .contextMenu {
+                                    Button(pinned.contains(folder.path)
+                                           ? "Retirer des raccourcis" : "Ajouter aux raccourcis",
+                                           systemImage: pinned.contains(folder.path)
+                                           ? "star.slash" : "star") {
+                                        togglePin(folder)
+                                    }
+                                }
                             }
                         }
                         .padding(.horizontal, 12)
@@ -124,14 +149,17 @@ struct BrowserView: View {
             } else if unindexed > 0, !selecting, !downloader.isRunning {
                 UnindexedChip(count: unindexed) { showingIndexing = true }
                     .padding(.bottom, 8)
-            } else if path == FreeboxClient.rootPath, !selecting, !downloader.isRunning {
+            } else if source.isRoot, !selecting, !downloader.isRunning {
                 BuildStampLabel().padding(.bottom, 8)
             }
         }
         .navigationTitle(selecting ? selectionTitle : title)
         .navigationBarTitleDisplayMode(selecting || contents.folders.isEmpty ? .inline : .large)
+        .navigationDestination(for: BrowserSource.self) { destination in
+            BrowserView(client: client, source: destination)
+        }
         .navigationDestination(for: Item.self) { folder in
-            BrowserView(client: client, path: folder.path, title: folder.name)
+            BrowserView(client: client, source: .folder(folder))
         }
         .fullScreenCover(item: $viewing) { item in
             ViewerView(client: client,
@@ -169,10 +197,44 @@ struct BrowserView: View {
                 if selecting { selectionBar }
             }
         }
-        .task(id: path) { await load() }
+        .task(id: source.id) { await load() }
+        .task(id: favouriteCount) { await refreshLibrary() }
+        .onChange(of: selection) { _, _ in Task { await refreshSelectionState() } }
+        .confirmationDialog("Ajouter à une collection", isPresented: $choosingCollection,
+                            titleVisibility: .visible) {
+            ForEach(collections) { collection in
+                Button(collection.name) { addSelection(to: collection) }
+            }
+            Button("Nouvelle collection…") {
+                renaming = nil
+                collectionName = ""
+                namingCollection = true
+            }
+            Button("Annuler", role: .cancel) {}
+        }
+        .alert(renaming == nil ? "Nouvelle collection" : "Renommer",
+               isPresented: Binding(get: { namingCollection || renaming != nil },
+                                    set: { if !$0 { namingCollection = false; renaming = nil } })) {
+            TextField("Nom", text: $collectionName)
+            Button("Annuler", role: .cancel) { namingCollection = false; renaming = nil }
+            Button("Valider") {
+                let name = collectionName
+                let target = renaming
+                namingCollection = false
+                renaming = nil
+                Task {
+                    if let target {
+                        try? await IndexStore.shared.renameCollection(target.id, to: name)
+                    } else {
+                        try? await IndexStore.shared.createCollection(named: name)
+                    }
+                    await refreshLibrary()
+                }
+            }
+        }
         .task {
             // A relaunch after iOS killed the app mid-index still has somewhere to pick up.
-            if path == FreeboxClient.rootPath { indexer.resumeIfInterrupted(client: client) }
+            if source.isRoot { indexer.resumeIfInterrupted(client: client) }
         }
 
         // Reordering is a local question: no reason to ask the box again.
@@ -197,6 +259,134 @@ struct BrowserView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// Favourites, collections and shortcuts, shown above the folders at the root only.
+    @ViewBuilder
+    private var library: some View {
+        if source.isRoot, !selecting {
+            VStack(spacing: 0) {
+                NavigationLink(value: BrowserSource.favourites) {
+                    LibraryRow(symbol: "heart.fill", title: "Favoris",
+                               detail: favouriteCount > 0 ? favouriteCount.formatted() : nil,
+                               dimmed: favouriteCount == 0)
+                }
+                .buttonStyle(.plain)
+
+                ForEach(collections) { collection in
+                    NavigationLink(value: BrowserSource.collection(id: collection.id,
+                                                                   name: collection.name)) {
+                        LibraryRow(symbol: "square.stack", title: collection.name,
+                                   detail: collection.count.formatted(), dimmed: false)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button("Renommer…", systemImage: "pencil") {
+                            renaming = collection
+                            collectionName = collection.name
+                        }
+                        Button("Supprimer", systemImage: "trash", role: .destructive) {
+                            Task {
+                                try? await IndexStore.shared.deleteCollection(collection.id)
+                                await refreshLibrary()
+                            }
+                        }
+                    }
+                }
+
+                Button {
+                    renaming = nil
+                    collectionName = ""
+                    namingCollection = true
+                } label: {
+                    LibraryRow(symbol: "plus", title: "Nouvelle collection",
+                               detail: nil, dimmed: true)
+                }
+                .buttonStyle(.plain)
+
+                if !shortcuts.isEmpty {
+                    Text("Raccourcis")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.top, 14)
+                        .padding(.bottom, 4)
+
+                    ForEach(shortcuts) { folder in
+                        NavigationLink(value: BrowserSource.folder(folder)) {
+                            LibraryRow(symbol: "folder.fill", title: folder.name,
+                                       detail: nil, dimmed: false)
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("Retirer des raccourcis", systemImage: "star.slash",
+                                   role: .destructive) {
+                                Task {
+                                    try? await IndexStore.shared.setShortcut(folder, false)
+                                    await refreshLibrary()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Divider().padding(.top, 10)
+            }
+            .padding(.bottom, 4)
+        }
+    }
+
+    private func refreshLibrary() async {
+        collections = (try? await IndexStore.shared.collections()) ?? []
+        guard source.isRoot else { return }
+        favouriteCount = (try? await IndexStore.shared.favouriteCount()) ?? 0
+        shortcuts = (try? await IndexStore.shared.shortcuts()) ?? []
+        pinned = Set(shortcuts.map(\.path))
+    }
+
+    private func togglePin(_ folder: Item) {
+        Task {
+            let on = !pinned.contains(folder.path)
+            try? await IndexStore.shared.setShortcut(folder, on)
+            await refreshLibrary()
+        }
+    }
+
+    /// The action mirrors the selection: all favourites already, so remove; otherwise add.
+    private func toggleFavourite() {
+        let items = contents.selectable.filter { selection.contains($0) }
+        guard !items.isEmpty else { return }
+        Task {
+            try? await IndexStore.shared.setFavourite(items, !selectionIsFavourite)
+            await refreshSelectionState()
+            await refreshLibrary()
+            if source == .favourites { await loadLocal() }
+        }
+    }
+
+    private func refreshSelectionState() async {
+        let items = contents.selectable.filter { selection.contains($0) }
+        guard !items.isEmpty else {
+            selectionIsFavourite = false
+            return
+        }
+        var allStarred = true
+        for item in items where allStarred {
+            allStarred = (try? await IndexStore.shared.isFavourite(item)) ?? false
+        }
+        selectionIsFavourite = allStarred
+    }
+
+    private func addSelection(to collection: IndexStore.Collection) {
+        let items = contents.selectable.filter { selection.contains($0) }
+        guard !items.isEmpty else { return }
+        Task {
+            try? await IndexStore.shared.setMembership(items, in: collection.id, true)
+            await refreshLibrary()
+            selecting = false
+            selection = []
+        }
     }
 
     // MARK: Pieces
@@ -246,7 +436,7 @@ struct BrowserView: View {
                         showingIndexing = true
                     }
 
-                    if path == FreeboxClient.rootPath {
+                    if source.isRoot {
                         Divider()
                         Button("Déconnexion", systemImage: "rectangle.portrait.and.arrow.right",
                                role: .destructive) { store.signOut() }
@@ -268,6 +458,16 @@ struct BrowserView: View {
             .font(.footnote)
 
             Spacer()
+
+            Button { toggleFavourite() } label: {
+                Label("Favori", systemImage: selectionIsFavourite ? "heart.fill" : "heart")
+            }
+            .disabled(selection.isEmpty)
+
+            Button { choosingCollection = true } label: {
+                Label("Collection", systemImage: "square.stack")
+            }
+            .disabled(selection.isEmpty)
 
             Button { start(.photos) } label: {
                 Label("Photos", systemImage: "photo.badge.arrow.down")
@@ -363,9 +563,26 @@ struct BrowserView: View {
 
     /// Nothing indexed yet: say why it matters before the user concludes the app is broken.
     private func offerIndexing() async {
-        guard path == FreeboxClient.rootPath, !explainedIndexing, !indexer.state.isRunning,
+        guard source.isRoot, !explainedIndexing, !indexer.state.isRunning,
               let empty = try? await IndexStore.shared.fileCount(), empty == 0 else { return }
         showingInvitation = true
+    }
+
+    private func loadLocal() async {
+        do {
+            let items: [Item]
+            switch source {
+            case .favourites: items = try await IndexStore.shared.favourites()
+            case .collection(let id, _): items = try await IndexStore.shared.items(in: id)
+            case .folder: items = []
+            }
+            contents = FolderContents(items, order: order)
+            rebuildSections()
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+        loaded = true
     }
 
     private func rebuildSections() {
@@ -376,6 +593,12 @@ struct BrowserView: View {
     }
 
     private func load() async {
+        // Local collections come straight from the index; there is nothing to ask the box.
+        guard source.isOnNAS else {
+            await loadLocal()
+            return
+        }
+
         // Paint what the last pass saw, straight away: the box needs seconds on a folder of
         // 14 600 files, the index answers in milliseconds.
         if contents.isEmpty, let remembered = try? await IndexStore.shared.listing(path),
@@ -604,6 +827,34 @@ private struct Row: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 11)
+        .contentShape(Rectangle())
+    }
+}
+
+/// One line in the library header: an icon, a name, and a count when there is one.
+private struct LibraryRow: View {
+    let symbol: String
+    let title: String
+    let detail: String?
+    let dimmed: Bool
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.body)
+                .foregroundStyle(dimmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
+                .frame(width: 26)
+            Text(title)
+                .foregroundStyle(dimmed ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+            Spacer()
+            if let detail {
+                Text(detail)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
         .contentShape(Rectangle())
     }
 }
