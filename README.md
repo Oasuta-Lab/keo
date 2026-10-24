@@ -118,8 +118,13 @@ suspend un processus backgroundé et le termine s'il est encore occupé : sans �
 fermait toute seule au milieu d'une indexation. Le travail déjà fait est sauvegardé avant de
 rendre la main, avec une tâche d'arrière-plan pour que l'écriture ait le temps d'aboutir.
 
-Cet écran lance un parcours complet du NAS depuis la racine, avec le dossier en cours, les
-compteurs et un bouton d'arrêt. Il continue pendant la navigation, cède la priorité aux
+Cet écran lance un parcours complet du NAS depuis la racine. La barre affichée est celle du
+**dossier en cours**, pas une globale : sur 14 600 photos, une barre globale avance de 0,17 %
+par lot et se lit comme figée.
+
+Les dossiers entièrement lus sont mémorisés (`indexed-folders.json`) et ignorés au passage
+suivant, donc reprendre ne refait pas le parcours depuis la racine. « Tout réindexer » oublie
+cette mémoire, et c'est un choix explicite. Il continue pendant la navigation, cède la priorité aux
 vignettes, et persiste au fur et à mesure : un arrêt ne coûte que les fichiers non encore lus.
 Le scan local est suspendu tant qu'il tourne, pour ne pas se disputer la box.
 

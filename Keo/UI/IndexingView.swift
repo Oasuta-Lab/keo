@@ -31,17 +31,23 @@ struct IndexingView: View {
                         Button("Arrêter", systemImage: "stop.fill", role: .destructive) {
                             indexer.stop()
                         }
+                        .tint(.red)   // sinon l'icône garde la couleur d'accent, le texte est rouge
                     } else {
                         Button("Lancer l'indexation", systemImage: "play.fill") {
                             indexer.start(client: client)
+                        }
+                        Button("Tout réindexer", systemImage: "arrow.clockwise") {
+                            indexer.start(client: client, restart: true)
                         }
                     }
                 } footer: {
                     Text("Keo lit les 4 premiers kilo-octets de chaque photo pour en extraire la "
                        + "date de prise de vue. Une photo déjà lue n'est jamais relue, même après "
                        + "un arrêt : relancer reprend là où ça s'était arrêté.\n\n"
-                       + "L'indexation continue pendant que tu navigues, et laisse volontairement "
-                       + "la priorité à l'affichage des vignettes.")
+                       + "Les dossiers entièrement indexés sont ignorés au passage suivant : "
+                       + "reprendre ne recommence pas le parcours depuis le début.\n\n"
+                       + "L'indexation se met en pause quand tu quittes l'app et reprend au retour. "
+                       + "Elle continue pendant que tu navigues, en laissant la priorité aux vignettes.")
                 }
             }
             .navigationTitle("Indexation des dates")
@@ -56,14 +62,25 @@ struct IndexingView: View {
 
     @ViewBuilder
     private func report(_ progress: Indexer.Progress) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             if indexer.state.isRunning {
-                ProgressView(value: progress.fraction)
-                Text(progress.folder)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Text((progress.folder as NSString).lastPathComponent)
+                    .font(.subheadline.weight(.medium))
                     .lineLimit(1)
-                    .truncationMode(.head)
+                    .truncationMode(.middle)
+
+                // The folder's own bar: a global one barely twitches on a 14 600 photo folder.
+                if progress.folderTotal > 0 {
+                    ProgressView(value: progress.folderFraction)
+                    Text("\(progress.folderDone.formatted()) / \(progress.folderTotal.formatted()) dans ce dossier")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                } else {
+                    ProgressView()
+                    Text("Lecture du dossier…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             } else {
                 Label("Terminée", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
@@ -72,10 +89,10 @@ struct IndexingView: View {
         .padding(.vertical, 4)
 
         row("Dossiers parcourus", progress.foldersVisited)
-        row("Photos et vidéos vues", progress.mediaFound)
+        row("Déjà indexés, ignorés", progress.foldersSkipped)
         row("Dates lues cette fois", progress.datesRead)
-        row("Déjà connues", progress.alreadyKnown)
-        row("Restantes", progress.pending)
+        row("Restantes ici", max(progress.folderTotal - progress.folderDone, 0))
+        row("Dates connues au total", max(progress.indexedOverall, 0))
     }
 
     private func row(_ label: String, _ value: Int) -> some View {

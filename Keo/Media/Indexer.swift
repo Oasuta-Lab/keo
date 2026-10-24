@@ -12,14 +12,20 @@ final class Indexer: ObservableObject {
     struct Progress: Equatable {
         var folder: String = "/"
         var foldersVisited = 0
+        var foldersSkipped = 0
         var mediaFound = 0
         var datesRead = 0
         var alreadyKnown = 0
+        /// Current folder only. A global bar crawls by 0.17 % per batch on a 14 600 photo
+        /// folder, which reads as frozen; this is the one that actually moves.
+        var folderDone = 0
+        var folderTotal = 0
+        var indexedOverall = 0
 
         var pending: Int { max(mediaFound - datesRead - alreadyKnown, 0) }
-        var fraction: Double {
-            let handled = Double(datesRead + alreadyKnown)
-            return mediaFound == 0 ? 0 : min(handled / Double(mediaFound), 1)
+
+        var folderFraction: Double {
+            folderTotal == 0 ? 0 : min(Double(folderDone) / Double(folderTotal), 1)
         }
     }
 
@@ -44,6 +50,11 @@ final class Indexer: ObservableObject {
     @Published private(set) var state: State = .idle
     @AppStorage("lastIndexedAt") private var lastIndexedAt: Double = 0
 
+    #if DEBUG
+    /// Lets a harness render the running state without a box to talk to.
+    func seed(_ progress: Progress) { state = .running(progress) }
+    #endif
+
     private var task: Task<Void, Never>?
     private var observers: [NSObjectProtocol] = []
     private var resumeOnReturn: (root: String, client: FreeboxClient)?
@@ -52,6 +63,7 @@ final class Indexer: ObservableObject {
     /// Same restraint as the per-folder scan: the grid matters more than the index.
     private static let parallel = 3
     private static let prefixBytes = 4 << 10
+    private static let publishEvery = 20
 
     var lastRun: Date? {
         lastIndexedAt > 0 ? Date(timeIntervalSince1970: lastIndexedAt) : nil
@@ -112,8 +124,13 @@ final class Indexer: ObservableObject {
         background = .invalid
     }
 
-    func start(from root: String = FreeboxClient.rootPath, client: FreeboxClient) {
+    /// `restart` forgets which folders were already walked and reads the whole NAS again.
+    func start(from root: String = FreeboxClient.rootPath, client: FreeboxClient,
+               restart: Bool = false) {
         guard !state.isRunning else { return }
+        if restart {
+            Task { await CaptureDateIndex.shared.forgetWalk() }
+        }
         watchAppState(root: root, client: client)
         beginBackgroundGrace()
         task = Task { [weak self] in
@@ -133,19 +150,36 @@ final class Indexer: ObservableObject {
             guardCount += 1
 
             progress.folder = path
-            progress.foldersVisited += 1
+            progress.folderDone = 0
+            progress.folderTotal = 0
             state = .running(progress)
 
             guard let contents = try? await client.list(path, order: .name) else { continue }
             queue.append(contentsOf: contents.folders.map(\.path))
+            progress.foldersVisited += 1
+
+            // Already walked and fully read: nothing to re-read, and no reason to say so twice.
+            if await CaptureDateIndex.shared.isCompleted(path) {
+                progress.foldersSkipped += 1
+                progress.mediaFound += contents.media.count
+                progress.alreadyKnown += contents.media.count
+                state = .running(progress)
+                continue
+            }
 
             progress.mediaFound += contents.media.count
             let known = await CaptureDateIndex.shared.known(contents.media)
             let pending = await CaptureDateIndex.shared.needsScan(contents.media)
             progress.alreadyKnown += known.count
+            progress.folderTotal = pending.count
             state = .running(progress)
 
             await read(pending, client: client, progress: &progress)
+
+            if !Task.isCancelled {
+                await CaptureDateIndex.shared.markCompleted(path)
+            }
+            progress.indexedOverall = await CaptureDateIndex.shared.count
 
             // Saving after every folder re-encoded the whole index each time; every tenth is
             // often enough, since backgrounding and stopping both save explicitly.
@@ -177,19 +211,23 @@ final class Indexer: ObservableObject {
             }
             for _ in 0..<min(Self.parallel, items.count) { feed() }
 
+            var published = 0
             while let (item, date) = await group.next() {
                 if Task.isCancelled { group.cancelAll(); break }
                 await CaptureDateIndex.shared.record(date, for: item)
                 done += 1
-                if done % 25 == 0 {
-                    progress.datesRead += 25
+                if done - published >= Self.publishEvery {
+                    progress.datesRead += done - published
+                    progress.folderDone = done
+                    published = done
                     state = .running(progress)
                 }
                 feed()
             }
+            progress.datesRead += done - published
         }
 
-        progress.datesRead += done % 25
+        progress.folderDone = done
         state = .running(progress)
     }
 

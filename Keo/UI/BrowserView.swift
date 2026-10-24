@@ -107,7 +107,8 @@ struct BrowserView: View {
             if let progress = scan.progress {
                 DateScanChip(progress: progress).padding(.bottom, 8)
             } else if indexer.state.isRunning, let progress = indexer.state.progress {
-                IndexingChip(fraction: progress.fraction, pending: progress.pending) {
+                IndexingChip(fraction: progress.folderFraction,
+                             pending: max(progress.folderTotal - progress.folderDone, 0)) {
                     showingIndexing = true
                 }
                 .padding(.bottom, 8)

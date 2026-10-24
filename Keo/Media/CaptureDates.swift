@@ -10,19 +10,44 @@ actor CaptureDateIndex {
     static let shared = CaptureDateIndex()
 
     private var records: [String: Double?] = [:]
+    /// Folders whose media have all been read, so a resumed walk skips them instead of
+    /// re-listing the whole NAS from the root every time.
+    private var completed: Set<String> = []
     private var dirty = false
     private let file: URL
+    private let walkFile: URL
 
     init() {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Keo", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         file = base.appendingPathComponent("capture-dates.json")
+        walkFile = base.appendingPathComponent("indexed-folders.json")
 
         if let data = try? Data(contentsOf: file),
            let stored = try? JSONDecoder().decode([String: Double?].self, from: data) {
             records = stored
         }
+        if let data = try? Data(contentsOf: walkFile),
+           let stored = try? JSONDecoder().decode(Set<String>.self, from: data) {
+            completed = stored
+        }
+    }
+
+    /// How many files the index knows about, read or confirmed dateless.
+    var count: Int { records.count }
+
+    func isCompleted(_ folder: String) -> Bool { completed.contains(folder) }
+
+    func markCompleted(_ folder: String) {
+        completed.insert(folder)
+        dirty = true
+    }
+
+    /// Starting over means re-reading everything, so it is an explicit choice.
+    func forgetWalk() {
+        completed.removeAll()
+        dirty = true
     }
 
     /// Keyed on size too: a file replaced at the same path is a different photo.
@@ -48,8 +73,13 @@ actor CaptureDateIndex {
     }
 
     func save() {
-        guard dirty, let data = try? JSONEncoder().encode(records) else { return }
-        try? data.write(to: file, options: .atomic)
+        guard dirty else { return }
+        if let data = try? JSONEncoder().encode(records) {
+            try? data.write(to: file, options: .atomic)
+        }
+        if let data = try? JSONEncoder().encode(completed) {
+            try? data.write(to: walkFile, options: .atomic)
+        }
         dirty = false
     }
 }
