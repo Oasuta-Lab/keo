@@ -32,7 +32,9 @@ donc tout passe par `fs/ls` et `dl` de l'API Freebox OS.
 ## Vérif
 
 ```sh
-swiftc -swift-version 5 Keo/Freebox.swift Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
+rm -f /tmp/keocheck   # sinon un echec de compilation relance l'ancien binaire
+swiftc -swift-version 5 Keo/Freebox.swift Keo/DownloadJob.swift Keo/VideoAsset.swift \
+  Tests/main.swift -o /tmp/keocheck && /tmp/keocheck
 ```
 
 ## Télécharger
