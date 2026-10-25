@@ -21,6 +21,16 @@ enum LivePhotos {
     /// usually case-insensitive anyway.
     static func key(_ name: String) -> String { stem(name).lowercased() }
 
+    /// How far apart the two halves' stored capture dates may sit and still be one moment.
+    ///
+    /// The halves themselves are written within seconds of each other. The slack is for the
+    /// index, not for the files: the still's EXIF date is naive local time, reduced to an
+    /// epoch through *this* device's timezone, while the video's `creationdate` carries the
+    /// capture timezone — so a genuine pair shot abroad lands up to ~13 hours apart once both
+    /// are epochs. No false pair the date can catch sits that close: two iPhones recycling the
+    /// same counter do so months apart.
+    static let captureTolerance: TimeInterval = 16 * 3600
+
     /// Whether these two can be the halves of one moment.
     ///
     /// Apple writes a shared UUID into both halves — MakerNote 17 on the still,
@@ -28,15 +38,21 @@ enum LivePhotos {
     /// two to be equal. The filename is only a convention laid on top, which is why two
     /// unrelated `IMG_0988` files were being folded into one.
     ///
-    /// Only an **explicit contradiction** unpairs: both sides read, both carrying an
-    /// identifier, and the identifiers differ. Measured on 60 real pairs, 57 agreed, none
-    /// contradicted, and 3 had an identifier on one side only — and a one-sided read cannot
-    /// be told apart from a failed one. Unpairing on silence would have cost correct pairs to
-    /// buy nothing: the case actually reported has an identifier on both sides.
+    /// Three verdicts, from strongest evidence to weakest:
+    /// - both halves read and both carrying (`""` means read and absent, `nil` never read):
+    ///   the identifiers decide, equal or not.
+    /// - one half read and carrying, the other read and carrying none: suspect. A Live half
+    ///   never travels without its identifier *unless* a re-encode stripped it — and then the
+    ///   two capture dates still agree. When both dates are known they decide; a missing date
+    ///   keeps the pair, because wrongly hiding a video loses it while wrongly showing a
+    ///   duplicate is cosmetic — and the index converges as the dates get read.
+    /// - anything less read than that: the name rule stays in charge, exactly as before.
     static func compatible(still: Item, video: Item) -> Bool {
-        guard let photo = still.contentID, let clip = video.contentID,
-              !photo.isEmpty, !clip.isEmpty else { return true }
-        return photo == clip
+        guard let photo = still.contentID, let clip = video.contentID else { return true }
+        if !photo.isEmpty && !clip.isEmpty { return photo == clip }
+        guard photo.isEmpty != clip.isEmpty,
+              let a = still.captureDate, let b = video.captureDate else { return true }
+        return abs(a.timeIntervalSince(b)) <= captureTolerance
     }
 
     /// Splits a folder's media into what the grid shows and what hides behind it.

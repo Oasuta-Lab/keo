@@ -179,14 +179,35 @@ enum ReadBench {
                 unreadable += 1
                 continue
             }
+            var window = head
             var photoID = ImageDecoding.contentIdentifier(prefix: head)
             if photoID == nil, still.size > Int64(prefix),
                let deeper = try? await client.bytes(still.path, prefix: deepPrefix) {
+                window = deeper
                 photoID = ImageDecoding.contentIdentifier(prefix: deeper)
             }
 
-            let clipID = try? await VideoDate.contentIdentifier(fileSize: video.size) { range in
-                try await client.bytes(video.path, range: range)
+            // One set of windows for both scans, so the date costs no requests of its own —
+            // the same economy the indexer's probe makes.
+            var windows: [Range<Int64>: Data] = [:]
+            func fetched(_ range: Range<Int64>) async throws -> Data {
+                if let hit = windows[range] { return hit }
+                let data = try await client.bytes(video.path, range: range)
+                windows[range] = data
+                return data
+            }
+            let clipID = try? await VideoDate.contentIdentifier(fileSize: video.size,
+                                                                fetch: fetched)
+
+            // On a one-sided pair the capture dates are what the rule now arbitrates with,
+            // so the probe reports the gap the rule would see.
+            func gap() async -> String {
+                guard let a = ImageDecoding.captureDate(prefix: window),
+                      let b = (try? await VideoDate.capture(fileSize: video.size,
+                                                            fetch: fetched)) ?? nil else {
+                    return "écart inconnu, une date manque"
+                }
+                return String(format: "écart %.0f s", abs(a.timeIntervalSince(b)))
             }
 
             switch (photoID, clipID ?? nil) {
@@ -196,8 +217,14 @@ enum ReadBench {
                 // Named, because this is the case the owner reported and the one worth
                 // seeing with your own eyes before trusting a rule built on it.
                 trace("paires: désaccord \(still.name) / \(video.name)")
-            case (_?, nil): stillOnly += 1
-            case (nil, _?): videoOnly += 1
+            case (_?, nil):
+                stillOnly += 1
+                let verdict = await gap()
+                trace("paires: photo seule \(still.name) / \(video.name) — \(verdict)")
+            case (nil, _?):
+                videoOnly += 1
+                let verdict = await gap()
+                trace("paires: vidéo seule \(still.name) / \(video.name) — \(verdict)")
             case (nil, nil): neither += 1
             }
         }
@@ -208,6 +235,144 @@ enum ReadBench {
 
     /// The indexer's second window, so the measurement matches what it would really do.
     static let deepPrefix = 128 << 10
+
+    /// Why 1 584 media were read end to end and still carry no date — 6,9 % of the library,
+    /// where the 120-photo sample had promised 1 %. One verdict per sampled file, tallied by
+    /// extension, so the fix (a wider window, a labelled filename date, or an honest « sans
+    /// date ») is chosen on what the files actually say rather than on a hypothesis.
+    ///
+    /// Samples the index's own dateless list — the same population the Stats screen counts —
+    /// and reads nothing beyond a few windows per file. Writes nothing anywhere.
+    static func dateless(client: FreeboxClient, sample: Int = 120) async {
+        let pool = (try? await IndexStore.shared.datelessFiles(limit: 100_000)) ?? []
+        guard !pool.isEmpty else {
+            trace("sansdate: aucun média lu sans date dans l'index")
+            return
+        }
+        let picks = Array(pool.shuffled().prefix(sample))
+        trace("sansdate: \(picks.count) tirés au sort parmi \(pool.count) médias lus sans date")
+
+        var table: [String: [String: Int]] = [:]
+        var totals: [String: Int] = [:]
+        var named = 0
+        var photos = 0, videos = 0
+        for item in picks {
+            let ext = (item.name as NSString).pathExtension.lowercased()
+            let verdict: String
+            if item.kind == .video {
+                videos += 1
+                verdict = await videoVerdict(item, client: client)
+            } else {
+                photos += 1
+                verdict = await imageVerdict(item, client: client)
+            }
+            if FilenameDate.capture(from: item.name) != nil { named += 1 }
+            table[ext.isEmpty ? "(sans extension)" : "." + ext, default: [:]][verdict, default: 0] += 1
+            totals[verdict, default: 0] += 1
+        }
+
+        trace("sansdate: \(photos) photos, \(videos) vidéos")
+        for (ext, verdicts) in table.sorted(by: { $0.key < $1.key }) {
+            let detail = verdicts.sorted { $0.value > $1.value }
+                .map { "\($0.key) ×\($0.value)" }.joined(separator: ", ")
+            trace("sansdate: \(ext) — \(detail)")
+        }
+        for (verdict, count) in totals.sorted(by: { $0.value > $1.value }) {
+            trace("sansdate: total — \(verdict) ×\(count)")
+        }
+        trace("sansdate: une date dans le nom de fichier pour \(named)/\(picks.count) — "
+            + "une vérité d'étiquette, jamais à confondre avec une date de prise de vue")
+    }
+
+    /// Climbs the exact ladder the indexer climbed, then two rungs it does not have. A date
+    /// found on the first two rungs is flagged: the index should have had it, so something —
+    /// code or network — lied at indexing time.
+    private static func imageVerdict(_ item: Item, client: FreeboxClient) async -> String {
+        guard let head = try? await client.bytes(item.path, prefix: prefix) else {
+            return "illisible"
+        }
+        if ImageDecoding.captureDate(prefix: head) != nil {
+            trace("sansdate: \(item.name) — date à 24 Ko, l'index aurait dû l'avoir")
+            return "date à 24 Ko (!)"
+        }
+        guard item.size > Int64(prefix) else { return "fichier entier lu, aucune date" }
+        guard let deep = try? await client.bytes(item.path, prefix: deepPrefix) else {
+            return "illisible"
+        }
+        if ImageDecoding.captureDate(prefix: deep) != nil {
+            trace("sansdate: \(item.name) — date à 128 Ko, l'index aurait dû l'avoir")
+            return "date à 128 Ko (!)"
+        }
+        guard item.size > Int64(deepPrefix) else { return "fichier entier lu, aucune date" }
+        let wide = 512 << 10
+        if let wider = try? await client.bytes(item.path, prefix: wide),
+           ImageDecoding.captureDate(prefix: wider) != nil {
+            return "date entre 128 et 512 Ko"
+        }
+        guard item.size <= fullCap else { return "rien à 512 Ko, trop gros pour tout lire" }
+        guard let whole = try? await client.bytes(item.path) else { return "illisible" }
+        return ImageDecoding.captureDate(prefix: whole) != nil
+            ? "date au-delà de 512 Ko" : "fichier entier lu, aucune date"
+    }
+
+    private static func videoVerdict(_ item: Item, client: FreeboxClient) async -> String {
+        do {
+            if let date = try await VideoDate.capture(fileSize: item.size,
+                                                      fetch: { try await client.bytes(item.path, range: $0) }) {
+                trace("sansdate: \(item.name) — le parseur vidéo trouve \(date) aujourd'hui")
+                return "date lisible aujourd'hui (!)"
+            }
+            return "aucune date dans les atomes"
+        } catch {
+            return "vidéo indécise (réseau ou fichier hostile)"
+        }
+    }
+
+    /// Reading a whole file is for the measurement only, and only for files small enough
+    /// that « le fichier entier » stays a few range requests, not a download campaign.
+    private static let fullCap: Int64 = 8 << 20
+
+    /// The 227 — pairs where exactly one half carries an identifier — judged by the capture
+    /// dates the new rule arbitrates with, on the whole library rather than on one folder.
+    /// The index already holds the still's date; the video's is fetched here exactly as the
+    /// requeued indexing pass will fetch it, so this *predicts* the `UPDATE`'s outcome.
+    static func oneSided(client: FreeboxClient) async {
+        let pairs = (try? await IndexStore.shared.oneSidedPairs()) ?? []
+        guard !pairs.isEmpty else {
+            trace("uneface: aucune paire à une seule face dans l'index")
+            return
+        }
+        trace("uneface: \(pairs.count) paires dont une seule moitié porte un identifiant")
+
+        var kept = 0, tight = 0, split = 0, undated = 0
+        for (folder, still, video) in pairs {
+            var videoDate = video.captureDate
+            if videoDate == nil {
+                videoDate = (try? await VideoDate.capture(fileSize: video.size) { range in
+                    try await client.bytes(video.path, range: range)
+                }) ?? nil
+            }
+            guard let a = still.captureDate, let b = videoDate else {
+                undated += 1
+                trace("uneface: \(folder)/\(still.name) — date manquante "
+                    + "(photo \(still.captureDate == nil ? "non" : "oui"), "
+                    + "vidéo \(videoDate == nil ? "non" : "oui")), la paire tient")
+                continue
+            }
+            let gap = abs(a.timeIntervalSince(b))
+            if gap <= LivePhotos.captureTolerance {
+                kept += 1
+                if gap <= 120 { tight += 1 }
+            } else {
+                split += 1
+                trace(String(format: "uneface: %@ / %@ — écart %.1f j, dé-appariée",
+                             folder + "/" + still.name, video.name, gap / 86_400))
+            }
+        }
+        trace("uneface: gardées \(kept) (écart sous \(Int(LivePhotos.captureTolerance) / 3600) h, "
+            + "dont \(tight) à moins de deux minutes), dé-appariées \(split), "
+            + "sans date comparable \(undated)")
+    }
 
     private static func measure(_ items: [Item], parallel: Int,
                                 client: FreeboxClient) async -> Run {

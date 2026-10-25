@@ -482,6 +482,41 @@ actor IndexStore {
         return items
     }
 
+    /// Copies onto a fresh listing what the index already knows — capture dates and Live
+    /// identifiers. A listing straight from the box carries neither, so without this the
+    /// pairing inside `FolderContents` fell back to the name rule on every refresh: a video
+    /// the identifiers had freed was visible from the cache and hidden again seconds later.
+    /// The rule can only hold in its three places if all three see the same evidence.
+    func enrich(_ items: [Item], in folder: String) throws -> [Item] {
+        try open()
+        guard let id = try folderID(folder, create: false) else { return items }
+
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT name, size, capture, cid FROM file WHERE folder_id = ?",
+                    into: &statement)
+        sqlite3_bind_int64(statement, 1, id)
+
+        var known: [String: (capture: Date?, cid: String?)] = [:]
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let raw = sqlite3_column_text(statement, 0) else { continue }
+            let capture = sqlite3_column_type(statement, 2) == SQLITE_NULL
+                ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 2))
+            let cid = sqlite3_column_text(statement, 3).map { String(cString: $0) }
+            known["\(sqlite3_column_int64(statement, 1))|\(String(cString: raw))"] =
+                (capture, cid)
+        }
+        guard !known.isEmpty else { return items }
+
+        return items.map { item in
+            guard let hit = known["\(item.size)|\(item.name)"] else { return item }
+            var copy = item
+            if copy.captureDate == nil { copy.captureDate = hit.capture }
+            if copy.contentID == nil { copy.contentID = hit.cid }
+            return copy
+        }
+    }
+
     /// A date noticed in passing by the thumbnail pipeline, which already holds the file's
     /// first bytes. Written with the folder's current generation so the next sweep keeps it.
     func note(_ capture: Date?, for item: Item, in folder: String) throws {
@@ -1821,9 +1856,11 @@ actor IndexStore {
 
     /// The one spelling of the rule on the SQL side, so it cannot drift from `LivePhotos`.
     ///
-    /// The last clause is the whole change: a name match still proposes the pair, and only an
-    /// explicit contradiction — both halves read, both carrying an identifier, and the two
-    /// differing — refuses it.
+    /// Two refusals, mirroring `LivePhotos.compatible`. A contradiction — both halves read,
+    /// both carrying an identifier, and the two differing. And a one-sided carrier whose
+    /// capture dates disagree: an identifier on one half only means either a re-encode
+    /// stripped the other half's (genuine pair, dates agree) or the true partner is elsewhere
+    /// (dates disagree). A missing date keeps the pair, same as in Swift.
     private static let pairingSQL = """
         UPDATE file SET live = CASE WHEN kind = \(Item.Kind.video.code) AND EXISTS (
             SELECT 1 FROM file still WHERE still.folder_id = file.folder_id
@@ -1832,6 +1869,12 @@ actor IndexStore {
               AND NOT (still.cid IS NOT NULL AND still.cid <> ''
                        AND file.cid IS NOT NULL AND file.cid <> ''
                        AND still.cid <> file.cid)
+              AND NOT (still.cid IS NOT NULL AND file.cid IS NOT NULL
+                       AND ((still.cid = '' AND file.cid <> '')
+                            OR (still.cid <> '' AND file.cid = ''))
+                       AND still.capture IS NOT NULL AND file.capture IS NOT NULL
+                       AND abs(still.capture - file.capture)
+                           > \(Int(LivePhotos.captureTolerance)))
         ) THEN 1 ELSE 0 END
         """
 
@@ -1840,21 +1883,38 @@ actor IndexStore {
     /// Follows `readerVersion` and not `liveVersion`: that one promises no network, and this
     /// costs reads. But only candidates — the still at its 24 KB prefix, the video at two or
     /// three ranged reads. A folder of 14 595 photos pays for its pairs, not its photos.
-    private static let identityVersion: Int64 = 1
+    ///
+    /// Version 2: the one-sided pairs — exactly one half carrying an identifier — are now
+    /// decided by their capture dates, and the video half was recorded blind before its date
+    /// mattered. Re-read just those; the date comes from the same `moov` as the identifier.
+    private static let identityVersion: Int64 = 2
 
     private func readIdentitiesAfterRuleChange() {
         guard let seen = try? value(forKey: "identityVersion") ?? 0,
               seen < Self.identityVersion else { return }
         do {
             try exec("BEGIN IMMEDIATE")
+            if seen < 1 {
+                try exec("""
+                    UPDATE file SET read = 0 WHERE cid IS NULL AND (
+                        live = 1
+                        OR (kind = \(Item.Kind.image.code) AND EXISTS (
+                            SELECT 1 FROM file v WHERE v.folder_id = file.folder_id
+                              AND v.kind = \(Item.Kind.video.code)
+                              AND stem(v.name) = stem(file.name)))
+                    )
+                    """)
+            }
             try exec("""
-                UPDATE file SET read = 0 WHERE cid IS NULL AND (
-                    live = 1
-                    OR (kind = \(Item.Kind.image.code) AND EXISTS (
-                        SELECT 1 FROM file v WHERE v.folder_id = file.folder_id
-                          AND v.kind = \(Item.Kind.video.code)
-                          AND stem(v.name) = stem(file.name)))
-                )
+                UPDATE file SET read = 0
+                WHERE kind = \(Item.Kind.video.code) AND capture IS NULL
+                  AND cid IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM file still WHERE still.folder_id = file.folder_id
+                      AND still.kind = \(Item.Kind.image.code)
+                      AND stem(still.name) = stem(file.name)
+                      AND still.cid IS NOT NULL
+                      AND ((still.cid = '' AND file.cid <> '')
+                           OR (still.cid <> '' AND file.cid = '')))
                 """)
             // Same move as the reader version: a folder holding something unread can no
             // longer claim to be complete, or the walk would skip it.
@@ -1892,11 +1952,11 @@ actor IndexStore {
     /// personalisation join below and a typo in one of them is a silently empty filter.
     private static let filePath = "d.path || '/' || fi.name"
 
-    /// The five columns `items(from:)` expects, spelled once: every query that returns files
+    /// The six columns `items(from:)` expects, spelled once: every query that returns files
     /// reads them positionally, so a reordered `SELECT` elsewhere would silently swap a size
     /// for a date.
     private static let fileColumns =
-        "SELECT d.path, fi.name, fi.size, fi.capture, fi.kind "
+        "SELECT d.path, fi.name, fi.size, fi.capture, fi.kind, fi.cid "
         + "FROM file fi JOIN folder d ON d.id = fi.folder_id"
 
     private func items(from statement: OpaquePointer?) -> [Item] {
@@ -1906,12 +1966,16 @@ actor IndexStore {
                   let name = sqlite3_column_text(statement, 1) else { continue }
             let capture = sqlite3_column_type(statement, 3) == SQLITE_NULL
                 ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))
-            found.append(Item(path: String(cString: folder) + "/" + String(cString: name),
-                              name: String(cString: name), isDirectory: false,
-                              size: sqlite3_column_int64(statement, 2), modified: nil,
-                              mimeType: Item.Kind(code: Int(sqlite3_column_int64(statement, 4)))?
-                                  .mimeHint,
-                              captureDate: capture))
+            var item = Item(path: String(cString: folder) + "/" + String(cString: name),
+                            name: String(cString: name), isDirectory: false,
+                            size: sqlite3_column_int64(statement, 2), modified: nil,
+                            mimeType: Item.Kind(code: Int(sqlite3_column_int64(statement, 4)))?
+                                .mimeHint,
+                            captureDate: capture)
+            // The identifier travels with every index-sourced item, so the pairing rule sees
+            // the same evidence whether the items came from a listing, a search or a probe.
+            if let raw = sqlite3_column_text(statement, 5) { item.contentID = String(cString: raw) }
+            found.append(item)
         }
         return found
     }
@@ -2011,7 +2075,8 @@ actor IndexStore {
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
         try prepare("SELECT DISTINCT CAST(strftime('%Y', capture, 'unixepoch') AS INTEGER) "
-                  + "FROM file WHERE capture IS NOT NULL ORDER BY 1 DESC", into: &statement)
+                  + "FROM file WHERE capture IS NOT NULL AND live = 0 ORDER BY 1 DESC",
+                into: &statement)
 
         var years: [Int] = []
         while sqlite3_step(statement) == SQLITE_ROW {
@@ -2032,6 +2097,50 @@ actor IndexStore {
         guard sqlite3_step(statement) == SQLITE_ROW,
               let raw = sqlite3_column_text(statement, 0) else { return nil }
         return (String(cString: raw), Int(sqlite3_column_int64(statement, 1)))
+    }
+
+    /// Every pair the name rule keeps where exactly one half carries an identifier — the
+    /// population the date rule arbitrates. For `ReadBench.oneSided`, which predicts the
+    /// verdicts on the real library before the requeued reads make them permanent.
+    func oneSidedPairs() throws -> [(folder: String, still: Item, video: Item)] {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("""
+            SELECT d.path, s.name, s.size, s.capture, s.cid, v.name, v.size, v.capture, v.cid
+            FROM file v
+            JOIN folder d ON d.id = v.folder_id
+            JOIN file s ON s.folder_id = v.folder_id AND s.kind = \(Item.Kind.image.code)
+                       AND stem(s.name) = stem(v.name)
+            WHERE v.kind = \(Item.Kind.video.code)
+              AND v.cid IS NOT NULL AND s.cid IS NOT NULL
+              AND ((s.cid = '' AND v.cid <> '') OR (s.cid <> '' AND v.cid = ''))
+            ORDER BY d.path, v.name
+            """, into: &statement)
+
+        var pairs: [(String, Item, Item)] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let rawFolder = sqlite3_column_text(statement, 0),
+                  let rawStill = sqlite3_column_text(statement, 1),
+                  let rawVideo = sqlite3_column_text(statement, 5) else { continue }
+            let folder = String(cString: rawFolder)
+            func capture(_ column: Int32) -> Date? {
+                sqlite3_column_type(statement, column) == SQLITE_NULL
+                    ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, column))
+            }
+            var still = Item(path: folder + "/" + String(cString: rawStill),
+                             name: String(cString: rawStill), isDirectory: false,
+                             size: sqlite3_column_int64(statement, 2), modified: nil,
+                             mimeType: Item.Kind.image.mimeHint, captureDate: capture(3))
+            still.contentID = sqlite3_column_text(statement, 4).map { String(cString: $0) }
+            var video = Item(path: folder + "/" + String(cString: rawVideo),
+                             name: String(cString: rawVideo), isDirectory: false,
+                             size: sqlite3_column_int64(statement, 6), modified: nil,
+                             mimeType: Item.Kind.video.mimeHint, captureDate: capture(7))
+            video.contentID = sqlite3_column_text(statement, 8).map { String(cString: $0) }
+            pairs.append((folder, still, video))
+        }
+        return pairs
     }
     #endif
 
@@ -2328,7 +2437,8 @@ actor IndexStore {
         // Same population as `datelessFiles()` lists, so the number on the Lock Screen and
         // the rows behind the tap cannot disagree.
         coverage.datelessFiles = Int(try scalar(
-            "SELECT count(*) FROM file WHERE kind IN (1, 2) AND capture IS NULL AND read = 1")
+            "SELECT count(*) FROM file WHERE kind IN (1, 2) AND capture IS NULL "
+          + "AND read = 1 AND live = 0")
             ?? 0)
         coverage.fileCount = Int(try scalar("SELECT count(*) FROM file") ?? 0)
         return coverage
@@ -2470,7 +2580,7 @@ actor IndexStore {
         summary.memories = try memories(today, limit: 120)
         summary.years = try years()
         if let first = try scalar("SELECT CAST(min(capture) AS INTEGER) FROM file "
-                                + "WHERE kind IN (1, 2) AND capture IS NOT NULL") {
+                                + "WHERE kind IN (1, 2) AND capture IS NOT NULL AND live = 0") {
             summary.firstCapture = Date(timeIntervalSince1970: Double(first))
         }
         summary.knownFolders = Int(try scalar("SELECT count(*) FROM folder") ?? 0)
@@ -2521,7 +2631,7 @@ actor IndexStore {
         try prepare("""
             SELECT CAST(strftime('%Y', capture, 'unixepoch', 'localtime') AS INTEGER) AS annee,
                    sum(kind = 1), sum(kind = 2)
-            FROM file WHERE kind IN (1, 2) AND capture IS NOT NULL
+            FROM file WHERE kind IN (1, 2) AND capture IS NOT NULL AND live = 0
             GROUP BY annee ORDER BY annee
             """, into: &statement)
 
@@ -2536,11 +2646,15 @@ actor IndexStore {
 
     /// The two halves of "no date", which must never be added together: one says the file
     /// carries no date, the other says nobody has looked yet.
+    ///
+    /// `live = 0` here and in every capture aggregate below: a Live Photo's hidden video now
+    /// carries its own date (the pairing rule needs it), but the moment is already counted
+    /// through its still — and when the video has none, the *moment* is not dateless.
     private func datelessSplit() throws -> (read: Int, unread: Int) {
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
         try prepare("SELECT sum(read = 1), sum(read = 0) FROM file "
-                  + "WHERE kind IN (1, 2) AND capture IS NULL", into: &statement)
+                  + "WHERE kind IN (1, 2) AND capture IS NULL AND live = 0", into: &statement)
         guard sqlite3_step(statement) == SQLITE_ROW else { return (0, 0) }
         return (Int(sqlite3_column_int64(statement, 0)), Int(sqlite3_column_int64(statement, 1)))
     }
@@ -2552,7 +2666,7 @@ actor IndexStore {
         try prepare("""
             SELECT DISTINCT CAST(strftime('%Y', capture, 'unixepoch', 'localtime') AS INTEGER) * 12
                           + CAST(strftime('%m', capture, 'unixepoch', 'localtime') AS INTEGER) - 1
-            FROM file WHERE kind IN (1, 2) AND capture IS NOT NULL ORDER BY 1
+            FROM file WHERE kind IN (1, 2) AND capture IS NOT NULL AND live = 0 ORDER BY 1
             """, into: &statement)
 
         var months: [Int] = []
@@ -2679,7 +2793,7 @@ actor IndexStore {
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
         try prepare(Self.fileColumns + """
-             WHERE fi.kind IN (1, 2) AND fi.capture IS NULL AND fi.read = 1
+             WHERE fi.kind IN (1, 2) AND fi.capture IS NULL AND fi.read = 1 AND fi.live = 0
              ORDER BY d.path, fi.name LIMIT ?1
             """, into: &statement)
         sqlite3_bind_int64(statement, 1, Int64(limit))
@@ -2702,7 +2816,7 @@ actor IndexStore {
         defer { sqlite3_finalize(statement) }
         try prepare("""
             SELECT date(capture, 'unixepoch', 'localtime') AS jour, count(*) FROM file
-            WHERE kind IN (1, 2) AND capture IS NOT NULL
+            WHERE kind IN (1, 2) AND capture IS NOT NULL AND live = 0
             GROUP BY jour ORDER BY 2 DESC, jour DESC LIMIT ?1
             """, into: &statement)
         sqlite3_bind_int64(statement, 1, Int64(limit))
@@ -2730,7 +2844,8 @@ actor IndexStore {
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
         try prepare(Self.fileColumns + """
-             WHERE fi.kind IN (1, 2) AND fi.capture IS NOT NULL AND fi.capture < ?2
+             WHERE fi.kind IN (1, 2) AND fi.capture IS NOT NULL AND fi.live = 0
+               AND fi.capture < ?2
                AND strftime('%m-%d', fi.capture, 'unixepoch', 'localtime') = ?1
              ORDER BY fi.capture DESC, d.path, fi.name LIMIT ?3
             """, into: &statement)

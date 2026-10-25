@@ -98,15 +98,16 @@ func checkLivePhotos() async throws {
 /// L'identité d'Apple contre la coïncidence de nom. C'est le cas signalé par l'usage : deux
 /// IMG_0988 sans aucun rapport, fondus en un seul moment parce qu'ils portaient le même nom.
 func checkLiveIdentity() async throws {
-    func photo(_ name: String, cid: String?) -> Item {
+    func photo(_ name: String, cid: String?, date: Date? = nil) -> Item {
         var item = Item(path: "/NAS/Photos/\(name)", name: name, isDirectory: false,
-                        size: 3_000, modified: nil, mimeType: "image/heic")
+                        size: 3_000, modified: nil, mimeType: "image/heic", captureDate: date)
         item.contentID = cid
         return item
     }
-    func clip(_ name: String, cid: String?) -> Item {
+    func clip(_ name: String, cid: String?, date: Date? = nil) -> Item {
         var item = Item(path: "/NAS/Photos/\(name)", name: name, isDirectory: false,
-                        size: 2_000, modified: nil, mimeType: "video/quicktime")
+                        size: 2_000, modified: nil, mimeType: "video/quicktime",
+                        captureDate: date)
         item.contentID = cid
         return item
     }
@@ -129,11 +130,48 @@ func checkLiveIdentity() async throws {
            "vidéo jamais lue : idem")
     assert(LivePhotos.compatible(still: photo("a.heic", cid: uuid),
                                  video: clip("a.mov", cid: "")),
-           "vidéo lue sans identifiant : on n'a pas su distinguer absence et échec de lecture, "
-           + "donc on ne dé-apparie pas sur un silence")
+           "vidéo lue sans identifiant et sans dates comparables : on ne dé-apparie pas "
+           + "sur un silence")
     assert(LivePhotos.compatible(still: photo("a.heic", cid: ""),
                                  video: clip("a.mov", cid: "")),
            "aucun des deux : deux fichiers ordinaires, la règle du nom décide")
+
+    // --- une seule face porteuse : les dates départagent ------------------------------------
+    // Le cas réel : IMG_0985.JPEG lue sans identifiant, IMG_0985.MOV qui en porte un. Soit la
+    // photo a été ré-encodée et la paire est vraie (les deux moitiés sont écrites à quelques
+    // secondes près), soit la vraie moitié est ailleurs et la vidéo est un film à part.
+    let shot = Date(timeIntervalSince1970: 1_600_000_000)
+    assert(LivePhotos.compatible(still: photo("b.jpeg", cid: "", date: shot),
+                                 video: clip("b.mov", cid: uuid, date: shot.addingTimeInterval(2))),
+           "dates à deux secondes : une photo ré-encodée, la paire est vraie")
+    assert(LivePhotos.compatible(still: photo("b.jpeg", cid: "", date: shot),
+                                 video: clip("b.mov", cid: uuid,
+                                             date: shot.addingTimeInterval(-9 * 3600))),
+           "neuf heures d'écart : l'EXIF est naïf, la vidéo porte son fuseau — une paire "
+           + "prise à l'étranger a le droit à cet écart")
+    assert(!LivePhotos.compatible(still: photo("b.jpeg", cid: "", date: shot),
+                                  video: clip("b.mov", cid: uuid,
+                                              date: shot.addingTimeInterval(-86_400 * 400))),
+           "plus d'un an d'écart : la vraie moitié est ailleurs, la vidéo redevient visible")
+    assert(!LivePhotos.compatible(still: photo("b.jpeg", cid: uuid, date: shot),
+                                  video: clip("b.mov", cid: "",
+                                              date: shot.addingTimeInterval(86_400 * 400))),
+           "le cas symétrique — vidéo lue sans identifiant — se juge pareil")
+    assert(LivePhotos.compatible(still: photo("b.jpeg", cid: "", date: shot),
+                                 video: clip("b.mov", cid: uuid, date: nil)),
+           "date vidéo encore inconnue : masquer à tort perd une vidéo, la paire tient "
+           + "jusqu'à la lecture")
+    assert(LivePhotos.compatible(still: photo("b.jpeg", cid: "", date: nil),
+                                 video: clip("b.mov", cid: uuid, date: shot)),
+           "date photo inconnue : même prudence")
+    assert(LivePhotos.compatible(still: photo("b.jpeg", cid: uuid, date: shot),
+                                 video: clip("b.mov", cid: uuid,
+                                             date: shot.addingTimeInterval(-86_400 * 400))),
+           "deux identifiants égaux : l'identité l'emporte, les dates n'ont rien à redire")
+    assert(LivePhotos.compatible(still: photo("b.jpeg", cid: "", date: shot),
+                                 video: clip("b.mov", cid: "",
+                                             date: shot.addingTimeInterval(-86_400 * 400))),
+           "aucun identifiant nulle part : la règle du nom reste seule en charge")
 
     // --- deux moments, un seul nom ------------------------------------------------------------
     let mine = photo("IMG_0988.HEIC", cid: uuid)
@@ -177,6 +215,50 @@ func checkLiveIdentity() async throws {
     assert(paired.media.map(\.name) == ["IMG_0988.HEIC"],
            "une vraie paire reste un seul moment — \(paired.media.map(\.name))")
 
-    print("ok — identité des photos live : accord, contradiction, silence, et le même "
-        + "verdict en SQL qu'en Swift")
+    // --- la règle des dates, côté SQLite ------------------------------------------------------
+    // Le cas réel d'IMG_0985 : la photo lue sans identifiant, la vidéo porteuse. Les dates
+    // tranchent, et le même verdict doit sortir du SQL, du cache rejoué et du Swift pur.
+    let faces = "/NAS/Une face"
+    func committed(_ name: String, cid: String?, date: Date?, video: Bool = false) -> Item {
+        var item = Item(path: faces + "/" + name, name: name, isDirectory: false,
+                        size: video ? 2_000 : 3_000, modified: nil,
+                        mimeType: video ? "video/quicktime" : "image/jpeg", captureDate: date)
+        item.contentID = cid
+        return item
+    }
+    let far = committed("IMG_0985.JPEG", cid: "", date: shot)
+    let farClip = committed("IMG_0985.MOV", cid: uuid,
+                            date: shot.addingTimeInterval(-86_400 * 400), video: true)
+    let near = committed("IMG_0986.JPEG", cid: "", date: shot)
+    let nearClip = committed("IMG_0986.MOV", cid: uuid,
+                             date: shot.addingTimeInterval(2), video: true)
+    let blind = committed("IMG_0987.JPEG", cid: "", date: shot)
+    let blindClip = committed("IMG_0987.MOV", cid: uuid, date: nil, video: true)
+
+    let gen3 = try await store.beginGeneration()
+    try await store.commit([(far, far.captureDate), (farClip, farClip.captureDate),
+                            (near, near.captureDate), (nearClip, nearClip.captureDate),
+                            (blind, blind.captureDate), (blindClip, nil)],
+                           in: faces, generation: gen3)
+    try await store.markLivePairs(in: faces)
+
+    let judged = FolderContents(try await store.listing(faces))
+    assert(judged.media.map(\.name).sorted() == ["IMG_0985.JPEG", "IMG_0985.MOV",
+                                                 "IMG_0986.JPEG", "IMG_0987.JPEG"],
+           "un an d'écart dé-apparie, deux secondes gardent, une date absente garde — "
+           + "\(judged.media.map(\.name).sorted())")
+    let farCompanion = try await store.companion(of: far, in: faces)
+    assert(farCompanion == nil, "la vidéo dé-appariée n'est plus proposée à la visionneuse")
+    let nearCompanion = try await store.companion(of: near, in: faces)
+    assert(nearCompanion?.name == "IMG_0986.MOV", "la paire ré-encodée joue toujours sa vidéo")
+
+    // La population que le banc « uneface » juge : les paires à une seule face porteuse.
+    let oneSided = try await store.oneSidedPairs()
+    assert(oneSided.filter { $0.folder == faces }.map(\.video.name).sorted()
+           == ["IMG_0985.MOV", "IMG_0986.MOV", "IMG_0987.MOV"],
+           "le banc voit les trois, verdicts compris — "
+           + "\(oneSided.filter { $0.folder == faces }.map(\.video.name))")
+
+    print("ok — identité des photos live : accord, contradiction, silence, les dates qui "
+        + "départagent les faces uniques, et le même verdict en SQL qu'en Swift")
 }
