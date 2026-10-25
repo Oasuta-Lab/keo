@@ -14,6 +14,13 @@ struct Item: Identifiable, Hashable, Sendable {
     /// often the day everything was copied, which makes it useless for a timeline.
     var captureDate: Date?
 
+    /// Apple's Live Photo identifier, shared by the two halves of one moment.
+    ///
+    /// Three states, and they are not the same question. `nil` — nobody has looked yet.
+    /// `""` — looked, and the file carries none, which is simply what an ordinary photo or a
+    /// real video looks like. A UUID — this file belongs to the moment it names.
+    var contentID: String?
+
     /// Number of entries inside, when the box reports it. Free: it is already in the listing.
     let childCount: Int?
 

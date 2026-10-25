@@ -94,3 +94,89 @@ func checkLivePhotos() async throws {
 
     print("ok — photos live : appariement, .MOV isolé, cache, recherche, et retour en arrière")
 }
+
+/// L'identité d'Apple contre la coïncidence de nom. C'est le cas signalé par l'usage : deux
+/// IMG_0988 sans aucun rapport, fondus en un seul moment parce qu'ils portaient le même nom.
+func checkLiveIdentity() async throws {
+    func photo(_ name: String, cid: String?) -> Item {
+        var item = Item(path: "/NAS/Photos/\(name)", name: name, isDirectory: false,
+                        size: 3_000, modified: nil, mimeType: "image/heic")
+        item.contentID = cid
+        return item
+    }
+    func clip(_ name: String, cid: String?) -> Item {
+        var item = Item(path: "/NAS/Photos/\(name)", name: name, isDirectory: false,
+                        size: 2_000, modified: nil, mimeType: "video/quicktime")
+        item.contentID = cid
+        return item
+    }
+
+    let uuid = "B0C8F762-32B9-4024-AA39-B1B94E631148"
+    let other = "11111111-2222-3333-4444-555555555555"
+
+    // --- la matrice, en pur -----------------------------------------------------------------
+    assert(LivePhotos.compatible(still: photo("a.heic", cid: uuid),
+                                 video: clip("a.mov", cid: uuid)),
+           "mêmes identifiants : c'est une paire")
+    assert(!LivePhotos.compatible(still: photo("a.heic", cid: uuid),
+                                  video: clip("a.mov", cid: other)),
+           "identifiants différents : le cas IMG_0988, ce n'est pas une paire")
+    assert(LivePhotos.compatible(still: photo("a.heic", cid: nil),
+                                 video: clip("a.mov", cid: uuid)),
+           "photo jamais lue : la règle du nom reste en charge, rien ne régresse")
+    assert(LivePhotos.compatible(still: photo("a.heic", cid: uuid),
+                                 video: clip("a.mov", cid: nil)),
+           "vidéo jamais lue : idem")
+    assert(LivePhotos.compatible(still: photo("a.heic", cid: uuid),
+                                 video: clip("a.mov", cid: "")),
+           "vidéo lue sans identifiant : on n'a pas su distinguer absence et échec de lecture, "
+           + "donc on ne dé-apparie pas sur un silence")
+    assert(LivePhotos.compatible(still: photo("a.heic", cid: ""),
+                                 video: clip("a.mov", cid: "")),
+           "aucun des deux : deux fichiers ordinaires, la règle du nom décide")
+
+    // --- deux moments, un seul nom ------------------------------------------------------------
+    let mine = photo("IMG_0988.HEIC", cid: uuid)
+    let stranger = clip("IMG_0988.MOV", cid: other)
+    let (visible, companions) = LivePhotos.pair([mine, stranger])
+    assert(visible.map(\.name).sorted() == ["IMG_0988.HEIC", "IMG_0988.MOV"],
+           "la vidéo étrangère reste visible — \(visible.map(\.name))")
+    assert(companions.isEmpty, "et rien n'est apparié")
+
+    // La bonne vidéo trouve sa photo même quand une homonyme s'intercale.
+    let real = clip("IMG_0988.MOV", cid: uuid)
+    let both = LivePhotos.pair([mine, photo("IMG_0988.HEIC", cid: other), real])
+    assert(both.companions[mine.id]?.contentID == uuid,
+           "la vidéo rejoint la photo qui porte son identifiant, pas la première venue")
+
+    // --- la même règle, côté SQLite -------------------------------------------------------------
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("keo-identite-\(ProcessInfo.processInfo.processIdentifier)")
+    try? FileManager.default.removeItem(at: home)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    let store = IndexStore(directory: home)
+    let folder = "/NAS/Photos"
+    let generation = try await store.beginGeneration()
+    try await store.commit([(mine, nil), (stranger, nil)], in: folder, generation: generation)
+    try await store.markLivePairs(in: folder)
+
+    let listed = FolderContents(try await store.listing(folder))
+    assert(listed.media.map(\.name).sorted() == ["IMG_0988.HEIC", "IMG_0988.MOV"],
+           "le SQL dit la même chose que Swift — \(listed.media.map(\.name))")
+    let found = try await store.companion(of: mine, in: folder)
+    assert(found == nil, "et la visionneuse n'a pas de vidéo à jouer")
+
+    // La vraie paire, elle, reste appariée.
+    let gen2 = try await store.beginGeneration()
+    try await store.commit([(mine, nil), (real, nil)], in: folder, generation: gen2,
+                           present: [mine, real], sweep: true)
+    try await store.markLivePairs(in: folder)
+    let paired = FolderContents(try await store.listing(folder))
+    assert(paired.media.map(\.name) == ["IMG_0988.HEIC"],
+           "une vraie paire reste un seul moment — \(paired.media.map(\.name))")
+
+    print("ok — identité des photos live : accord, contradiction, silence, et le même "
+        + "verdict en SQL qu'en Swift")
+}

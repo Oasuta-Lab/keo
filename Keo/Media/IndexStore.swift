@@ -63,6 +63,9 @@ actor IndexStore {
         try? exec("ALTER TABLE file ADD COLUMN kind INTEGER NOT NULL DEFAULT 3")
         // 0 until proven otherwise: a file wrongly hidden is a file lost.
         try? exec("ALTER TABLE file ADD COLUMN live INTEGER NOT NULL DEFAULT 0")
+        // NULL on purpose, and nullable: "nobody has looked" is a third state, and the `kind`
+        // migration already taught this file what a wrong default costs.
+        try? exec("ALTER TABLE file ADD COLUMN cid TEXT")
         // Rows written before the column existed were all read ones.
         try? exec("UPDATE file SET read = 1 WHERE read = 0 AND gen >= 0 AND capture IS NOT NULL")
 
@@ -76,6 +79,7 @@ actor IndexStore {
         retryDatelessAfterReaderChange()
         relistAfterListingChange()
         markLivePairsEverywhere()
+        readIdentitiesAfterRuleChange()
         repairKinds()
         migrateFromJSON(in: folder)
         // Last, deliberately: the JSON migration above re-inserts paths recorded by a build
@@ -310,11 +314,13 @@ actor IndexStore {
                 var statement: OpaquePointer?
                 defer { sqlite3_finalize(statement) }
                 try prepare("""
-                    INSERT INTO file (folder_id, name, size, capture, read, kind, gen)
-                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                    INSERT INTO file (folder_id, name, size, capture, read, kind, gen, cid)
+                    VALUES (?, ?, ?, ?, 1, ?, ?, ?)
                     ON CONFLICT(folder_id, name, size)
                     DO UPDATE SET capture = excluded.capture, read = 1,
-                                  kind = excluded.kind, gen = excluded.gen
+                                  kind = excluded.kind, gen = excluded.gen,
+                                  -- An unread pass must not erase what a read one learned.
+                                  cid = coalesce(excluded.cid, file.cid)
                     """, into: &statement)
 
                 for (item, capture) in results {
@@ -329,6 +335,11 @@ actor IndexStore {
                     }
                     sqlite3_bind_int64(statement, 5, Int64(item.kind.code))
                     sqlite3_bind_int64(statement, 6, generation)
+                    if let cid = item.contentID {
+                        bind(statement, 7, cid)
+                    } else {
+                        sqlite3_bind_null(statement, 7)
+                    }
                     guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
                 }
             }
@@ -432,7 +443,7 @@ actor IndexStore {
         // badges and playable videos and all. The `live` column is for the queries that have
         // no `FolderContents` to lean on: search, covers, counts.
         try prepare("""
-            SELECT name, size, capture, kind FROM file WHERE folder_id = ?
+            SELECT name, size, capture, kind, cid FROM file WHERE folder_id = ?
             """, into: &statement)
         sqlite3_bind_int64(statement, 1, id)
 
@@ -442,7 +453,7 @@ actor IndexStore {
             let name = String(cString: raw)
             let capture = sqlite3_column_type(statement, 2) == SQLITE_NULL
                 ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 2))
-            items.append(Item(
+            var item = Item(
                 path: folder + "/" + name,
                 name: name,
                 isDirectory: false,
@@ -450,7 +461,9 @@ actor IndexStore {
                 modified: nil,
                 mimeType: Item.Kind(code: Int(sqlite3_column_int64(statement, 3)))?.mimeHint,
                 captureDate: capture
-            ))
+            )
+            if let raw = sqlite3_column_text(statement, 4) { item.contentID = String(cString: raw) }
+            items.append(item)
         }
 
         var children: OpaquePointer?
@@ -1780,14 +1793,7 @@ actor IndexStore {
     func markLivePairs(in folder: String) throws {
         try open()
         guard let id = try folderID(folder, create: false) else { return }
-        try exec("""
-            UPDATE file SET live = CASE WHEN kind = \(Item.Kind.video.code) AND EXISTS (
-                SELECT 1 FROM file still WHERE still.folder_id = file.folder_id
-                  AND still.kind = \(Item.Kind.image.code)
-                  AND stem(still.name) = stem(file.name)
-            ) THEN 1 ELSE 0 END
-            WHERE folder_id = \(id)
-            """)
+        try exec(Self.pairingSQL + " WHERE folder_id = \(id)")
     }
 
     /// The video that belongs to this still, when the index knows of one.
@@ -1813,6 +1819,56 @@ actor IndexStore {
                     mimeType: Item.Kind.video.mimeHint, captureDate: capture)
     }
 
+    /// The one spelling of the rule on the SQL side, so it cannot drift from `LivePhotos`.
+    ///
+    /// The last clause is the whole change: a name match still proposes the pair, and only an
+    /// explicit contradiction — both halves read, both carrying an identifier, and the two
+    /// differing — refuses it.
+    private static let pairingSQL = """
+        UPDATE file SET live = CASE WHEN kind = \(Item.Kind.video.code) AND EXISTS (
+            SELECT 1 FROM file still WHERE still.folder_id = file.folder_id
+              AND still.kind = \(Item.Kind.image.code)
+              AND stem(still.name) = stem(file.name)
+              AND NOT (still.cid IS NOT NULL AND still.cid <> ''
+                       AND file.cid IS NOT NULL AND file.cid <> ''
+                       AND still.cid <> file.cid)
+        ) THEN 1 ELSE 0 END
+        """
+
+    /// Re-queues the two halves of every name-paired moment whose verdict is still name-only.
+    ///
+    /// Follows `readerVersion` and not `liveVersion`: that one promises no network, and this
+    /// costs reads. But only candidates — the still at its 24 KB prefix, the video at two or
+    /// three ranged reads. A folder of 14 595 photos pays for its pairs, not its photos.
+    private static let identityVersion: Int64 = 1
+
+    private func readIdentitiesAfterRuleChange() {
+        guard let seen = try? value(forKey: "identityVersion") ?? 0,
+              seen < Self.identityVersion else { return }
+        do {
+            try exec("BEGIN IMMEDIATE")
+            try exec("""
+                UPDATE file SET read = 0 WHERE cid IS NULL AND (
+                    live = 1
+                    OR (kind = \(Item.Kind.image.code) AND EXISTS (
+                        SELECT 1 FROM file v WHERE v.folder_id = file.folder_id
+                          AND v.kind = \(Item.Kind.video.code)
+                          AND stem(v.name) = stem(file.name)))
+                )
+                """)
+            // Same move as the reader version: a folder holding something unread can no
+            // longer claim to be complete, or the walk would skip it.
+            try exec("""
+                UPDATE folder SET mtime = NULL WHERE id IN
+                (SELECT DISTINCT folder_id FROM file WHERE read = 0)
+                """)
+            try setValue(Self.identityVersion, forKey: "identityVersion")
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+        }
+    }
+
     /// Bumped when the pairing rule changes. Marks every folder already indexed in one pass —
     /// no listing, no network, nothing re-read from the NAS.
     private static let liveVersion: Int64 = 1
@@ -1822,13 +1878,7 @@ actor IndexStore {
               seen < Self.liveVersion else { return }
         do {
             try exec("BEGIN IMMEDIATE")
-            try exec("""
-                UPDATE file SET live = CASE WHEN kind = \(Item.Kind.video.code) AND EXISTS (
-                    SELECT 1 FROM file still WHERE still.folder_id = file.folder_id
-                      AND still.kind = \(Item.Kind.image.code)
-                      AND stem(still.name) = stem(file.name)
-                ) THEN 1 ELSE 0 END
-                """)
+            try exec(Self.pairingSQL)
             try setValue(Self.liveVersion, forKey: "liveVersion")
             try exec("COMMIT")
         } catch {

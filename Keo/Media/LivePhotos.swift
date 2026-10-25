@@ -21,6 +21,24 @@ enum LivePhotos {
     /// usually case-insensitive anyway.
     static func key(_ name: String) -> String { stem(name).lowercased() }
 
+    /// Whether these two can be the halves of one moment.
+    ///
+    /// Apple writes a shared UUID into both halves — MakerNote 17 on the still,
+    /// `com.apple.quicktime.content.identifier` on the video — and Photos itself requires the
+    /// two to be equal. The filename is only a convention laid on top, which is why two
+    /// unrelated `IMG_0988` files were being folded into one.
+    ///
+    /// Only an **explicit contradiction** unpairs: both sides read, both carrying an
+    /// identifier, and the identifiers differ. Measured on 60 real pairs, 57 agreed, none
+    /// contradicted, and 3 had an identifier on one side only — and a one-sided read cannot
+    /// be told apart from a failed one. Unpairing on silence would have cost correct pairs to
+    /// buy nothing: the case actually reported has an identifier on both sides.
+    static func compatible(still: Item, video: Item) -> Bool {
+        guard let photo = still.contentID, let clip = video.contentID,
+              !photo.isEmpty, !clip.isEmpty else { return true }
+        return photo == clip
+    }
+
     /// Splits a folder's media into what the grid shows and what hides behind it.
     ///
     /// A video is a companion only when a *still* of the same stem sits in the same folder.
@@ -30,21 +48,29 @@ enum LivePhotos {
         let stills = media.filter { $0.kind == .image }
         guard !stills.isEmpty else { return (media, [:]) }
 
-        var stillByKey: [String: Item] = [:]
-        for still in stills {
-            // First wins, so the pairing does not depend on the sort order of the listing.
-            stillByKey[key(still.name)] = stillByKey[key(still.name)] ?? still
-        }
+        // All the stills of a stem, not just the first: one name can be worn by several
+        // moments, and the video belongs to whichever of them claims it.
+        var stillsByKey: [String: [Item]] = [:]
+        for still in stills { stillsByKey[key(still.name), default: []].append(still) }
 
         var companions: [Item.ID: Item] = [:]
         var visible: [Item] = []
         visible.reserveCapacity(media.count)
         for item in media {
-            guard item.kind == .video, let still = stillByKey[key(item.name)] else {
+            guard item.kind == .video,
+                  let candidates = stillsByKey[key(item.name)],
+                  let still = candidates.first(where: { compatible(still: $0, video: item) })
+            else {
                 visible.append(item)
                 continue
             }
-            companions[still.id] = item
+            // One still keeps one companion: a second video of the same stem stays visible
+            // rather than quietly replacing the first.
+            if companions[still.id] == nil {
+                companions[still.id] = item
+            } else {
+                visible.append(item)
+            }
         }
         return (visible, companions)
     }

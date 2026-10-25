@@ -539,6 +539,39 @@ La barre passe donc à **cinq emplacements de largeur égale** au lieu d'un espa
 le cinquième reste vide sur une photo sans vidéo. Ne le poser que lorsqu'il existe ferait
 glisser le cœur hors du pouce en passant d'une photo live à une photo ordinaire.
 
+### Le nom ne suffit pas : l'identité d'Apple
+
+Un cas réel l'a montré : un `IMG_0988.HEIC` et un `IMG_0988.MOV` sans aucun rapport, fondus en
+un seul moment parce que les compteurs de l'iPhone repassent par les mêmes numéros. Une vraie
+vidéo disparaissait en silence.
+
+Apple écrit un **UUID partagé** dans les deux moitiés d'une photo live — MakerNote 17 côté
+image, `com.apple.quicktime.content.identifier` côté vidéo — et Photos lui-même exige leur
+égalité. Le nom de fichier n'est qu'une convention posée par-dessus. L'appariement devient
+donc une identité, et le nom ne sert plus qu'à désigner les candidats.
+
+**Mesuré avant d'être écrit**, deux fois :
+
+- Sur 120 photos tirées au hasard : identifiant présent dans **80,8 %**, et le chiffre est
+  *identique* à 24 Ko et à 128 Ko. Ce n'est donc pas une troncature — une photo ordinaire n'a
+  simplement pas d'identifiant. (La date, elle, est à 95,0 % puis 96,7 %.)
+- Sur 60 **vraies paires** : 57 identiques, **0 contradiction**, 3 avec un identifiant d'un
+  seul côté.
+
+### Pourquoi le silence ne dé-apparie pas
+
+La recommandation disait qu'un seul côté porteur suffit à refuser la paire, une vidéo de photo
+live en portant toujours un. La mesure impose la prudence : le sondage ne sait pas distinguer
+« lu, pas d'identifiant » d'« échec de lecture ». Dé-apparier sur un silence aurait coûté des
+paires correctes pour n'acheter rien — le cas signalé porte un identifiant **des deux côtés**.
+
+La règle est donc : **seule une contradiction explicite refuse la paire**. Les deux moitiés
+lues, les deux porteuses, et les deux différentes. Tant qu'un côté n'a pas été lu, la règle du
+nom s'applique exactement comme avant : pas de jour J, l'index converge au fil des lectures.
+
+Le coût est borné par construction — seule une vidéo dont le nom correspond à une photo du
+même dossier est candidate. Côté photo, l'identifiant arrive dans le préfixe déjà lu : gratuit.
+
 **Un `.MOV` isolé reste une vidéo visible.** C'est tout ce qui n'a pas été pris à l'iPhone, et
 le masquer le perdrait.
 
