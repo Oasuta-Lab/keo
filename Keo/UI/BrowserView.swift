@@ -183,7 +183,10 @@ struct BrowserView: View {
             }
         }
         .navigationTitle(selecting ? selectionTitle : title)
-        .navigationBarTitleDisplayMode(selecting || contents.folders.isEmpty ? .inline : .large)
+        // Sibling folders used to disagree about their own title size, so navigating made
+        // the grid jump. A NAS folder is a place and keeps a large title — it collapses on
+        // scroll anyway; results and local collections are lists and stay inline.
+        .navigationBarTitleDisplayMode(selecting || !source.isOnNAS ? .inline : .large)
         .navigationDestination(for: BrowserSource.self) { destination in
             BrowserView(client: client, source: destination)
         }
@@ -744,7 +747,8 @@ private struct SectionHeader: View {
             Text(section.title)
                 .font(.headline)
             Text("\(section.items.count)")
-                .font(.caption.monospacedDigit())
+                .font(.caption)
+                .fontDesign(.rounded)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }
@@ -875,7 +879,8 @@ private struct FolderTile: View {
 
                 if let count = stats?.mediaCount ?? folder.childCount, count > 0 {
                     Text(count, format: .number)
-                        .font(.caption2.monospacedDigit().weight(.medium))
+                        .font(.caption2.weight(.medium))
+                        .fontDesign(.rounded)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 3)
@@ -947,11 +952,6 @@ private struct Row: View {
                 }
             }
             Spacer()
-            if item.isDirectory {
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.tertiary)
-            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 11)

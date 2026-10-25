@@ -36,8 +36,14 @@ struct IndexingView: View {
                               systemImage: "checkmark.circle")
                             .foregroundStyle(.secondary)
                     } else {
-                        Label("Pas encore commencée", systemImage: "clock.badge.questionmark")
-                            .foregroundStyle(.secondary)
+                        VStack(spacing: 10) {
+                            Mascot(height: 72, opacity: 0.8)
+                            Text("Pas encore commencée")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
                     }
                 } header: {
                     Text("État")
@@ -78,22 +84,37 @@ struct IndexingView: View {
                         }
                     }
                 } footer: {
-                    Text("Keo parcourt le NAS et retient ce qu'il y trouve : la structure des "
-                       + "dossiers, les fichiers, leurs tailles, et la date de prise de vue de "
-                       + "chaque photo et vidéo — lue dans les premiers kilo-octets du fichier, "
-                       + "jamais en le téléchargeant.\n\n"
-                       + "C'est cet index qui permet le tri chronologique, la timeline, les "
-                       + "totaux sur les dossiers, et leur ouverture instantanée.\n\n"
-                       + "Un fichier déjà lu n'est jamais relu, même après un arrêt : relancer "
-                       + "reprend là où ça s'était arrêté.\n\n"
-                       + "« Revérifier » reliste tous les dossiers sans relire un seul fichier. "
-                       + "« Tout relire depuis zéro » efface l'index et recommence vraiment.\n\n"
-                       + "Un dossier déjà indexé n'est réexaminé que s'il a changé : Keo compare "
-                       + "sa date de modification, qui bouge dès qu'une photo y est ajoutée. "
-                       + "Ajouter des photos ne demande donc jamais de tout réindexer — seules "
-                       + "les nouvelles sont lues.\n\n"
-                       + "L'indexation se met en pause quand tu quittes l'app et reprend au retour. "
-                       + "Elle continue pendant que tu navigues, en laissant la priorité aux vignettes.")
+                    // One paragraph here, the rest folded away. Eight paragraphs under the
+                    // buttons made the screen look like documentation someone had to read
+                    // before being allowed to press anything.
+                    Text("Keo parcourt le NAS et retient ce qu'il y trouve : les dossiers, les "
+                       + "fichiers, leurs tailles, et la date de prise de vue de chaque photo "
+                       + "et vidéo — lue dans les premiers kilo-octets, jamais en téléchargeant "
+                       + "le fichier.")
+                }
+
+                Section {
+                    DisclosureGroup("Comment ça marche") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("C'est cet index qui permet le tri chronologique, la timeline, "
+                               + "les totaux sur les dossiers, et leur ouverture instantanée.")
+                            Text("Un fichier déjà lu n'est jamais relu, même après un arrêt : "
+                               + "relancer reprend là où ça s'était arrêté.")
+                            Text("« Revérifier » reliste tous les dossiers sans relire un seul "
+                               + "fichier. « Tout relire depuis zéro » efface l'index et "
+                               + "recommence vraiment.")
+                            Text("Un dossier déjà indexé n'est réexaminé que s'il a changé : Keo "
+                               + "compare sa date de modification, qui bouge dès qu'une photo y "
+                               + "est ajoutée. Ajouter des photos ne demande donc jamais de tout "
+                               + "réindexer — seules les nouvelles sont lues.")
+                            Text("L'indexation se met en pause quand tu quittes l'app et reprend "
+                               + "au retour. Elle continue pendant que tu navigues, en laissant "
+                               + "la priorité aux vignettes.")
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 4)
+                    }
                 }
 
                 #if DEBUG
@@ -278,7 +299,8 @@ struct UnindexedChip: View {
         Button(action: open) {
             HStack(spacing: 8) {
                 Image(systemName: "calendar.badge.exclamationmark")
-                Text("\(count) photos sans date · Indexer")
+                Text("\(count.formatted()) photos pas encore lues")
+                    .fontDesign(.rounded)
                     .font(.caption.weight(.medium))
             }
             .padding(.horizontal, 12)

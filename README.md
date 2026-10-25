@@ -184,6 +184,23 @@ d'administration. Elles sont dans la carte Bibliothèque, où l'état de l'index
 **visible en permanence** plutôt qu'à redécouvrir. Les surfaces contextuelles restent, parce
 qu'elles sont justifiées par le contexte : les pastilles, et le bouton de la recherche.
 
+### L'apparence suit le système
+
+L'app forçait le mode sombre. Défendable pour une galerie — Lightroom fait pareil — mais
+l'argument de Lightroom est un argument d'**étalonnage** : un entourage neutre pour juger des
+couleurs qu'on corrige. Regarder des photos de famille n'est pas ça, et une surface noire à
+midi dans la cuisine est une salle de cinéma, pas une maison. La marque avait d'ailleurs déjà
+voté : `AccentColor` embarque une variante claire qui n'avait jamais été rendue une seule fois.
+
+**La visionneuse reste noire**, épinglée sur elle-même et non à la racine de l'app : une photo
+se regarde sur du noir quelle que soit la lumière de la pièce, et c'est ce que fait Photos.
+
+Ce qui a dû changer : le rail de timeline peignait en `.white` sur un fond supposé noir, il
+peint en `.primary` ; la mascotte, crème sur blanc, serait invisible — elle est devenue une
+image *template* qui reçoit sa couleur au lieu de la porter, crème sur sombre et bleu de
+marque sur clair. Les blancs restants sont tous posés **sur des photos**, où ils sont justes
+dans les deux modes.
+
 ### La mascotte
 
 La loutre en rendu 3D n'entre jamais dans l'app : de la fourrure photoréaliste à côté de SF

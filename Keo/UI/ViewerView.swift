@@ -103,6 +103,10 @@ struct ViewerView: View {
         .task(id: currentID) { await readMarks() }
         // An undo while the photo is open must move the heart back too.
         .onChange(of: undoer.revision) { _, _ in Task { await readMarks() } }
+        // The app follows the system now, but a photo belongs on black whatever the room's
+        // light — Photos does the same. Pinned here rather than at the app's root, where it
+        // was making the whole gallery a home cinema at noon.
+        .preferredColorScheme(.dark)
         .statusBarHidden()
     }
 

@@ -402,10 +402,7 @@ private struct WelcomeCard: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            Image("Mascot")
-                .resizable()
-                .scaledToFit()
-                .frame(height: 96)
+            Mascot(height: 96)
             Text("Bienvenue dans Keo").font(.title3.bold())
             Text("Keo n'a encore rien vu de ta bibliothèque. Une première lecture construit "
                + "son index : les vraies dates de prise de vue, la timeline, la recherche — "

@@ -25,7 +25,6 @@ struct KeoApp: App {
             .environmentObject(indexer)
             .environmentObject(sync)
             .environmentObject(undoer)
-            .preferredColorScheme(.dark)
             // Independent of the Freebox pairing: favourites can come back from iCloud
             // before the box has ever answered.
             .task { await sync.start() }

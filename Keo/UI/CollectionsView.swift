@@ -34,9 +34,11 @@ struct CollectionsView: View {
             ForEach(collections) { collection in
                 NavigationLink(value: BrowserSource.collection(id: collection.id,
                                                                name: collection.name)) {
+                    // Worded, because this is a row of text and not a badge on an image:
+                    // a bare number beside a name leaves the reader to guess what it counts.
                     LabeledContent(collection.name) {
-                        Text(collection.count, format: .number)
-                            .monospacedDigit()
+                        Text(Undoer.count(collection.count, "élément", "éléments"))
+                            .fontDesign(.rounded)
                             .foregroundStyle(.secondary)
                     }
                 }

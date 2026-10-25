@@ -30,7 +30,9 @@ struct TimelineRail: View {
                 // A continuous track so the rail reads as one object even where a period is
                 // a hairline; without it the sparse months looked like rendering glitches.
                 Capsule()
-                    .fill(.white.opacity(0.10))
+                    // `.primary`, not white: the rail sits on the grid's own background, which is
+                    // no longer guaranteed to be black.
+                    .fill(.primary.opacity(0.10))
                     .frame(width: Self.railWidth)
 
                 ForEach(bars, id: \.id) { bar in
@@ -80,7 +82,7 @@ struct TimelineRail: View {
     private func segment(_ bar: Bar, height: CGFloat) -> some View {
         let highlighted = bar.id == (dragging ?? cursor.id)
         return Capsule()
-            .fill(highlighted ? AnyShapeStyle(.tint) : AnyShapeStyle(.white.opacity(0.42)))
+            .fill(highlighted ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary.opacity(0.42)))
             .frame(width: highlighted ? Self.activeWidth : Self.railWidth,
                    height: max(bar.height * height - 2, 2))
             .offset(y: bar.start * height)

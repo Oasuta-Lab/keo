@@ -27,8 +27,12 @@ struct SearchView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            filters
-            Divider()
+            // Hidden until there is something to filter. At full weight above an empty
+            // screen they read as a form to fill in before being allowed to search.
+            if !query.isEmpty || !results.isEmpty {
+                filters
+                Divider()
+            }
             content
         }
         .navigationTitle("Recherche")

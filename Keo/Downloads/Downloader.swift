@@ -111,7 +111,10 @@ struct DownloadBar: View {
                     Text("\(job.position) / \(job.total)")
                         .font(.footnote.monospacedDigit())
                         .foregroundStyle(.secondary)
-                    Button("Annuler") { downloader.cancel() }
+                    // "Arrêter" and not "Annuler": the undo banner can be on screen at the same
+                    // time, and two buttons reading "Annuler" with opposite meanings is
+                    // a trap. Stopping a download is also what this actually does.
+                    Button("Arrêter") { downloader.cancel() }
                         .font(.footnote)
                 }
                 ProgressView(value: job.fraction)

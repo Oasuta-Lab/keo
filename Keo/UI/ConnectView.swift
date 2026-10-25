@@ -13,11 +13,7 @@ struct ConnectView: View {
         VStack(spacing: 28) {
             Spacer()
 
-            Image("Mascot")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 160, height: 160)
-                .accessibilityLabel("Keo, la loutre qui garde vos photos")
+            Mascot(height: 160)
 
             VStack(spacing: 8) {
                 Text("Keo").font(.largeTitle.bold())
