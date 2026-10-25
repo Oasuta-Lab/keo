@@ -60,6 +60,11 @@ private enum TraceFile {
 
 @MainActor
 final class Indexer: ObservableObject {
+    /// One instance, reachable from outside the view hierarchy — a background task handler
+    /// has no `@EnvironmentObject` to read. Same object, same lifecycle, no new semantics:
+    /// `start()` still guards on `state.isRunning`, so two entry points cannot run two walks.
+    static let shared = Indexer()
+
     /// What went wrong, and where. A bare counter tells you something failed but never what,
     /// which is no help at all when one folder out of eighty is unreachable.
     struct Problem: Identifiable, Equatable, Sendable {
@@ -189,7 +194,7 @@ final class Indexer: ObservableObject {
     private var observers: [NSObjectProtocol] = []
     /// Survives a relaunch: iOS may terminate a suspended app outright, and an interrupted
     /// index must still know it has somewhere to pick up.
-    @AppStorage("resumeIndexing") private var resumeWanted = false
+    @AppStorage("resumeIndexing") private(set) var resumeWanted = false
     @AppStorage("resumeIndexingRoot") private var resumeRoot = FreeboxClient.rootPath
     private var background: UIBackgroundTaskIdentifier = .invalid
 
@@ -226,6 +231,28 @@ final class Indexer: ObservableObject {
         guard !items.isEmpty else { return }
         queue.insert(.folder(path: folder, items: items, client: client), at: 0)
         pump()
+    }
+
+    /// The existing pause path, named so an expiration handler can call *the* pause rather
+    /// than inventing a second way to stop — a new way to stop is a new way to conclude.
+    func pauseKeepingResume() {
+        guard state.isRunning else { return }
+        resumeWanted = true
+        halt()
+    }
+
+    /// True only between `BGContinuedProcessingTask` actually beginning and its end.
+    @Published private(set) var continuedTaskRunning = false
+
+    func continuedTaskBegan() {
+        continuedTaskRunning = true
+        trace("bgcontinued began")
+    }
+
+    func continuedTaskEnded(expired: Bool) {
+        continuedTaskRunning = false
+        trace("bgcontinued ended expired=\(expired) running=\(state.isRunning)")
+        if expired { pauseKeepingResume() }
     }
 
     func stop() {
@@ -694,11 +721,20 @@ final class Indexer: ObservableObject {
             // never paused and nothing was ever marked resumable.
             MainActor.assumeIsolated {
                 guard let self else { return }
-                trace("background: running=\(self.state.isRunning)")
+                trace("background: running=\(self.state.isRunning) "
+                    + "continued=\(self.continuedTaskRunning)")
                 guard self.state.isRunning else { return }
+                // The one change to a lifecycle that cost three wrong fixes, and it is
+                // deliberately narrow: only skip the halt once iOS has actually *started* a
+                // continued task. Set on submission instead, a request iOS silently refused
+                // would leave the walk running into suspension — which is the shape of the
+                // original bug.
+                guard !self.continuedTaskRunning else {
+                    trace("background: tâche continue active, pas de halt")
+                    return
+                }
                 self.resumeRoot = root
-                self.resumeWanted = true
-                self.halt()
+                self.pauseKeepingResume()
             }
         })
 

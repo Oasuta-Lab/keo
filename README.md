@@ -1250,6 +1250,49 @@ Deux choix à connaître :
 
 Les fichiers sans date vont à la fin, pas au 1ᵉʳ janvier 1970.
 
+## Indexer sans être interrompu
+
+La demande était « que l'indexation continue en arrière-plan ou en veille ». La recherche a
+renversé la prémisse : **un passage complet dure un quart d'heure**, pas une nuit — 41 000
+fichiers à 50-60 par seconde, plus les listings. Le problème n'a jamais été de tenir des
+heures, mais de ne pas être coupé pendant quinze minutes.
+
+Deux réponses, de la plus sûre à la plus récente :
+
+- **L'écran reste éveillé** tant que l'écran Indexation est ouvert et qu'un passage tourne.
+  Aucun entitlement, aucun mode d'arrière-plan, aucune ligne du cycle de vie touchée : l'app
+  reste au premier plan, donc toutes les garanties existantes s'appliquent telles quelles.
+  « Branche-le et laisse-le sur cet écran » est une réponse produit légitime.
+- **`BGContinuedProcessingTask`** (iOS 26) : un passage lancé *au doigt* survit au passage en
+  arrière-plan et au verrouillage, avec une jauge du système et un bouton d'annulation. C'est
+  la réponse littérale à la demande, et elle n'existait pas avant iOS 26.
+
+### La seule ligne touchée dans le cycle d'indexation
+
+L'observateur d'arrière-plan saute son `halt()` **uniquement si une tâche continue a réellement
+commencé** — pas si elle a été soumise. La nuance est tout : une requête qu'iOS aurait refusée
+laisserait sinon le parcours courir vers la suspension, c'est-à-dire exactement la forme du bug
+qui avait un jour fait balayer l'index.
+
+Et rien n'ajoute un chemin de complétion. C'est le critère de relecture : un diff qui crée un
+nouvel endroit où `walkCompleted` peut devenir vrai est faux. Une expiration passe par la même
+pause que l'arrière-plan (`pauseKeepingResume`), donc `WalkOutcome.isComplete(cancelled: true)`
+reste faux, aucun balayage n'a lieu et la reprise au prochain lancement fonctionne comme avant.
+
+### Ce qui a été écarté
+
+- **`URLSession` en configuration background** : conçue pour peu de gros transferts, pas pour
+  41 000 lectures de 24 Ko. Les transferts hors processus sont différables et iOS pénalise les
+  réveils fréquents — le débit effectif se compterait en jours. Et il faudrait réécrire le
+  cycle de vie que `CLAUDE.md` interdit de toucher sur raisonnement, pour un gain (survivre au
+  kill) que `resumeWanted` couvre déjà.
+- **L'entitlement multicast** : inutile. Keo fait de l'HTTP unicast vers un nom d'hôte qui
+  résout en IP publique — le trafic n'est même pas classé « réseau local » par iOS.
+- **Une tâche nocturne `BGProcessingTask`** : possible plus tard, mais c'est un confort et non
+  une promesse, iOS décidant seul s'il l'exécute. Son risque principal est nommé d'avance : un
+  réveil à 3 h du matin ne doit **jamais** passer par `Store.reconnectIfPossible`, dont le
+  chemin d'échec supprime le jeton du trousseau et dé-apparierait l'app en silence.
+
 ## Banc d'essai des lectures
 
 `Indexer.parallel` a longtemps valu 3 par prudence, sans jamais avoir été vérifié. Le bon

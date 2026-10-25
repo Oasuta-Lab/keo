@@ -12,6 +12,7 @@ struct IndexingView: View {
 
     @State private var confirmingRebuild = false
     @State private var knownCount = 0
+    @State private var knownFolders = 0
     #if DEBUG
     @State private var bench: (path: String, count: Int)?
     @State private var benching = false
@@ -70,6 +71,9 @@ struct IndexingView: View {
                                ? "Reprendre" : "Lancer l'indexation",
                                systemImage: "play.fill") {
                             indexer.start(client: client)
+                            // Submitted on the tap and nowhere else: iOS only grants a
+                            // continued task to work someone asked for.
+                            ContinuedIndexing.submit(folders: knownFolders)
                         }
                         Button("Revérifier tous les dossiers",
                                systemImage: "arrow.clockwise") {
@@ -107,7 +111,11 @@ struct IndexingView: View {
                                + "compare sa date de modification, qui bouge dès qu'une photo y "
                                + "est ajoutée. Ajouter des photos ne demande donc jamais de tout "
                                + "réindexer — seules les nouvelles sont lues.")
-                            Text("L'indexation se met en pause quand tu quittes l'app et reprend "
+                            Text("Sur iOS 26, un passage lancé ici continue même si tu "
+                               + "verrouilles le téléphone : une jauge du système l'affiche, "
+                               + "avec un bouton pour l'arrêter. Et tant que cet écran est "
+                               + "ouvert, l'écran ne s'éteint pas.")
+                            Text("Ailleurs, l'indexation se met en pause quand tu quittes l'app et reprend "
                                + "au retour. Elle continue pendant que tu navigues, en laissant "
                                + "la priorité aux vignettes.")
                         }
@@ -129,7 +137,17 @@ struct IndexingView: View {
             } message: {
                 Text(indexer.failure ?? "")
             }
+            // A quarter of an hour is a long time to hold a phone. The screen staying awake
+            // while this screen is open and a pass is running is the plainest form of
+            // "do not interrupt" there is — no entitlement, no new lifecycle, and the app
+            // stays in the foreground where every existing guarantee already holds.
+            .onChange(of: indexer.state.isRunning) { _, running in
+                UIApplication.shared.isIdleTimerDisabled = running
+            }
+            .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
             .task {
+                UIApplication.shared.isIdleTimerDisabled = indexer.state.isRunning
+                knownFolders = (try? await IndexStore.shared.indexedFolderCount()) ?? 0
                 knownCount = (try? await IndexStore.shared.fileCount()) ?? 0
                 #if DEBUG
                 bench = try? await IndexStore.shared.largestFolder()

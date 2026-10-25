@@ -4,7 +4,8 @@ import SwiftUI
 struct KeoApp: App {
     @StateObject private var store = Store()
     @StateObject private var downloader = Downloader()
-    @StateObject private var indexer = Indexer()
+    // The shared instance, so a background task handler and the UI drive the same walk.
+    @StateObject private var indexer = Indexer.shared
     @StateObject private var sync = CloudSync()
     @StateObject private var undoer = Undoer()
     /// Held here rather than in `Shelf`: a `keo://` URL can land before the box
