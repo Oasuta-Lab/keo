@@ -811,8 +811,16 @@ struct BrowserView: View {
                     loaded = true
                 }
             }
+            // A fresh listing carries no identifiers and no dates, and the Live Photo rule
+            // runs on both: without the index's knowledge the pairing fell back to names on
+            // every refresh, re-hiding videos the identifiers had freed. Re-pairing needs the
+            // full rebuild, not `applying`, which only folds dates into existing tiles.
             trace("contents: live n=\(live.media.count) was=\(contents.media.count)")
-            contents = live
+            if let informed = try? await IndexStore.shared.enrich(live.filed, in: path) {
+                contents = FolderContents(live.folders + informed, order: order)
+            } else {
+                contents = live
+            }
             fromCache = false
             rebuildSections()
             error = nil

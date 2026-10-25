@@ -466,8 +466,9 @@ final class Indexer: ObservableObject {
                     bytes: contents.filed.reduce(Int64(0)) { $0 + $1.size }
                 )
                 // Documents travel with the photos: they are what makes a folder openable
-                // from the cache and findable by name. They are recorded, never read — and
-                // so are the hidden halves of Live Photos, whose date is the still's anyway.
+                // from the cache and findable by name. They are recorded, never read. The
+                // hidden halves of Live Photos are probed apart, for the two things that
+                // decide their pairing: the identifier and the capture date.
                 await index(contents.filed, in: folder.path,
                             unread: Set(contents.companions.values.map(\.id)),
                             generation: generation, stamp: completion,
@@ -522,8 +523,8 @@ final class Indexer: ObservableObject {
     ///
     /// `files` is the whole listing, documents included. Only the media are read: there is no
     /// capture date to find in a PDF, and fetching its first kilobytes would buy nothing.
-    /// `unread` names the files to record without opening — the hidden half of a Live Photo,
-    /// whose capture date is the still's, so fetching it would be range requests for nothing.
+    /// `unread` names the files not to read like media — the hidden half of a Live Photo,
+    /// probed below for just the identifier and date its pairing verdict hangs on.
     private func index(_ files: [Item], in folder: String, unread skip: Set<Item.ID> = [],
                        generation: Int64, stamp: FolderStamp.Completion?,
                        client: FreeboxClient, progress: inout Progress) async {
@@ -670,7 +671,7 @@ final class Indexer: ObservableObject {
         // ever touching the counter, and the screen sat at 0 / N for the whole folder — the
         // work was happening, it just had no way to say so.
         if !probe.isEmpty {
-            await withTaskGroup(of: Item.self) { group in
+            await withTaskGroup(of: (Item, Date?).self) { group in
                 var next = 0
                 func feed() {
                     guard next < probe.count else { return }
@@ -678,24 +679,38 @@ final class Indexer: ObservableObject {
                     next += 1
                     group.addTask {
                         var stamped = item
+                        // Both scanners walk the same `moov`, so caching the windows makes
+                        // the date ride along on the identifier's requests instead of
+                        // paying its own.
+                        var windows: [Range<Int64>: Data] = [:]
+                        func fetched(_ range: Range<Int64>) async throws -> Data {
+                            if let hit = windows[range] { return hit }
+                            let data = try await client.bytes(item.path, range: range)
+                            windows[range] = data
+                            return data
+                        }
                         do {
                             // `nil` back from a completed scan means the file carries none —
                             // recorded as "" so it is never asked again. A thrown
                             // `Undecided` means the bytes ran out: left `nil`, which reads
                             // as "nobody has looked" and keeps the name rule in charge.
                             stamped.contentID = try await VideoDate.contentIdentifier(
-                                fileSize: item.size,
-                                fetch: { try await client.bytes(item.path, range: $0) }) ?? ""
+                                fileSize: item.size, fetch: fetched) ?? ""
                         } catch {
                             stamped.contentID = nil
                         }
-                        return stamped
+                        // The companion's own date arbitrates the one-sided pairs. A failed
+                        // scan leaves it unknown, which is safe: a missing date keeps the
+                        // pair, exactly what the old blind record did.
+                        let capture = (try? await VideoDate.capture(
+                            fileSize: item.size, fetch: fetched)) ?? nil
+                        return (stamped, capture)
                     }
                 }
                 for _ in 0..<min(Self.parallel, probe.count) { feed() }
-                while let stamped = await group.next() {
+                while let (stamped, capture) = await group.next() {
                     if Task.isCancelled { group.cancelAll(); break }
-                    batch.append((stamped, nil))
+                    batch.append((stamped, capture))
                     done += 1
                     if batch.count >= IndexStore.batchSize { await flush(stamping: false) }
                     if done - published >= Self.publishEvery {

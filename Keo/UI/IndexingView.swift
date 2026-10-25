@@ -199,6 +199,18 @@ struct IndexingView: View {
                 }
                 .disabled(benching || indexer.state.isRunning)
 
+                Button(benching ? "Mesure en cours…" : "Pourquoi « sans date »",
+                       systemImage: "questionmark.circle") {
+                    explainDateless()
+                }
+                .disabled(benching || indexer.state.isRunning)
+
+                Button(benching ? "Mesure en cours…" : "Juger les paires à une face",
+                       systemImage: "livephoto.slash") {
+                    judgeOneSided()
+                }
+                .disabled(benching || indexer.state.isRunning)
+
                 ForEach(benchResult, id: \.parallel) { run in
                     Text(run.line)
                         .font(.system(size: 11, design: .monospaced))
@@ -213,8 +225,9 @@ struct IndexingView: View {
             if let bench {
                 Text("Lit des prefixes de 24 Ko dans « \(bench.path) » (\(bench.count) photos et vidéos) "
                    + "à plusieurs niveaux de parallélisme, chacun sur des fichiers différents "
-                   + "pour ne pas mesurer le cache de la box. N'écrit rien, ni sur le NAS ni "
-                   + "dans l'index.")
+                   + "pour ne pas mesurer le cache de la box. « Pourquoi sans date » et les "
+                   + "paires à une face lisent dans toute la bibliothèque. Rien n'est écrit, "
+                   + "ni sur le NAS ni dans l'index.")
             }
         }
     }
@@ -233,6 +246,26 @@ struct IndexingView: View {
         benching = true
         Task {
             await ReadBench.pairs(folder: folder, client: client)
+            benching = false
+        }
+    }
+
+    /// Samples the real dateless files and asks each one why. One tap, then read the
+    /// `[keo] sansdate:` lines off the device, or the trace file in the app container.
+    private func explainDateless() {
+        benching = true
+        Task {
+            await ReadBench.dateless(client: client)
+            benching = false
+        }
+    }
+
+    /// Judges every one-sided pair of the library by its capture dates — the before/after
+    /// for the rule. `[keo] uneface:` lines.
+    private func judgeOneSided() {
+        benching = true
+        Task {
+            await ReadBench.oneSided(client: client)
             benching = false
         }
     }

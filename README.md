@@ -291,6 +291,29 @@ que soit le nombre d'octets fournis.
 - Le réordonnancement n'a lieu **qu'à la fin du scan**, pas pendant : la grille ne se réorganise
   jamais sous le doigt. Une pastille discrète affiche l'avancement.
 
+### 6,9 % sans date : mesurer avant de corriger
+
+L'échantillon de 120 photos promettait ~1 % de vraies sans-date ; la bibliothèque entière en
+montre **1 584 sur 23 073** (6,9 %), lues de bout en bout. Un échantillon d'un seul dossier
+n'était pas la bibliothèque — la leçon est déjà écrite plus haut, elle se répète.
+
+Avant de toucher au lecteur, `ReadBench.dateless` (bouton « Pourquoi “sans date” », debug)
+tire au sort dans la liste même que compte l'écran Statistiques et demande à chaque fichier
+*pourquoi* : pour une photo, il regrimpe l'échelle exacte de l'indexeur (24 Ko puis 128 Ko —
+une date trouvée là est marquée `(!)`, l'index aurait dû l'avoir), puis deux barreaux qu'il
+n'a pas (512 Ko, puis le fichier entier sous 8 Mo) ; pour une vidéo, il rejoue le parseur
+d'atomes. Le tout est agrégé **par extension et par verdict** dans `[keo] sansdate:`, parce
+que les hypothèses à départager s'y lisent directement : EXIF au-delà de 128 Ko, formats sans
+EXIF (PNG, captures, exports), bogue du second essai, ou vidéos qui dominent le compte.
+
+La dernière ligne compte ce qu'un repli sur le **nom de fichier** récupérerait
+(`FilenameDate`, pur et testé : `IMG_20190714_103000`, WhatsApp, captures d'écran, Pixel —
+et les pièges rejetés : compteurs, 30 février, futur). C'est une **autre vérité** que la date
+de prise de vue — une étiquette posée par un appareil, pas un obturateur — et elle ne sera
+jamais mélangée en silence à une vraie date. Aujourd'hui seul le banc la consomme ; la brancher
+dans l'index, élargir une fenêtre, ou conclure que N fichiers n'ont réellement aucune date et
+le dire tel quel : la décision attend le verdict du banc, pas une intuition.
+
 ### L'index : SQLite, incrémental et durable
 
 `Keo/Media/IndexStore.swift` — un actor propriétaire d'une connexion SQLite en WAL, dans
@@ -590,6 +613,52 @@ base — et qu'une règle qui dérive entre eux montre la vidéo d'un côté et 
 Côté SQL c'est la même fonction, enregistrée sur la connexion sous le nom `stem`, comme
 `fold` pour les accents.
 
+Et elle dérivait : un listing frais venu de la box ne porte ni identifiant ni date, donc
+`FolderContents` ré-appariait au nom seul à chaque rafraîchissement — la vidéo que
+l'identité avait libérée se recachait dès que la box répondait. `IndexStore.enrich`
+recopie maintenant sur le listing frais ce que l'index sait déjà, *avant* l'appariement.
+
+### Les 227 à une face : la date départage
+
+Le cas réel, dans un dossier réel : `IMG_0985.JPEG` lue de bout en bout, aucun identifiant ;
+`IMG_0985.MOV` qui en porte un. Deux histoires possibles, et la bonne change par fichier.
+Soit la photo a été ré-encodée par un outil qui a perdu le MakerNote d'Apple, et la paire est
+vraie — la dé-apparier fabrique un doublon visible. Soit la vraie moitié est ailleurs et la
+vidéo est un film à part — la garder appariée cache une vraie vidéo, ce qui est la seule
+faute grave.
+
+Ce qui les distingue : **les dates**. Les deux moitiés d'une photo live sont écrites à
+quelques secondes l'une de l'autre, la date de la photo est déjà dans l'index, et celle de la
+vidéo sort du même `moov` que son identifiant — elle est donc lue dans la même fenêtre,
+gratuitement, et enregistrée.
+
+La règle, tenue aux trois endroits : **une seule face porteuse et deux dates connues qui
+divergent de plus de seize heures, la paire se défait.** Une date manquante garde la paire —
+masquer à tort perd une vidéo, montrer un doublon n'est que cosmétique — et l'index converge
+au fil des lectures, comme pour le reste.
+
+Seize heures, pas quelques secondes, à cause d'un piège déjà épinglé ici : la date EXIF de la
+photo est une heure locale naïve, réduite en epoch par le fuseau de *cet* appareil, alors que
+la `creationdate` de la vidéo porte son fuseau d'origine. Une vraie paire prise à l'étranger
+atterrit donc jusqu'à ~13 heures d'écart une fois les deux réduites en epoch. Aucune fausse
+paire que la date puisse attraper ne vit si près : deux iPhone qui repassent par le même
+compteur le font à des mois d'écart. La paire fausse prise *le même jour* reste la limite
+assumée de la règle — l'écart est dans le bon sens, elle cache au pire ce qu'on cachait déjà.
+
+Trois conséquences mécaniques :
+
+- `identityVersion = 2` remet en file **uniquement** les vidéos des paires à une face dont la
+  date manque — ~227 lectures de deux ou trois requêtes, pas une relecture générale.
+- Le compagnon porte désormais sa propre date en base. Tous les agrégats de dates — années,
+  mois, jours chargés, « ce jour-là », « sans date » — filtrent donc sur `live = 0` : le
+  moment est déjà compté par sa photo, et un compagnon sans date ne rend pas le *moment*
+  « sans date ».
+- `ReadBench.oneSided` (bouton « Juger les paires à une face », debug) juge toute la
+  bibliothèque **avant** que la file ne rende les verdicts permanents : il lit la date vidéo
+  exactement comme l'indexeur le fera et trace, par paire, l'écart et le verdict, puis les
+  totaux — gardées (dont à moins de deux minutes), dé-appariées, sans date comparable.
+  Les lignes arrivent dans `[keo] uneface:`, console ou fichier de trace du conteneur.
+
 ### Le cache rend tout, la grille applique la règle
 
 `IndexStore.listing` renvoie le compagnon avec le reste, et c'est `FolderContents` qui le
@@ -605,8 +674,9 @@ recherche, les couvertures de tuiles, les photos du widget, les compteurs.
 
 Masquer un fichier de la grille ne doit jamais le masquer de l'index : le balayage
 l'effacerait, et la visionneuse n'aurait plus de vidéo à jouer. Les compagnons sont donc
-enregistrés — mais **jamais lus** : leur date de prise de vue est celle de la photo, aller la
-chercher coûterait des requêtes pour rien.
+enregistrés — et sondés pour les deux seules choses dont leur appariement dépend,
+l'identifiant et la date, lus dans la même fenêtre du `moov`. Rien d'autre : le reste de leur
+contenu ne vaut pas une requête.
 
 Ils comptent aussi dans le **poids** du dossier, qui doit dire ce que le NAS occupe, pas ce
 qui est visible. Le compteur de médias, lui, compte les moments : une photo live, c'est un.
