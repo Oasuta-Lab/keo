@@ -569,6 +569,15 @@ La règle est donc : **seule une contradiction explicite refuse la paire**. Les 
 lues, les deux porteuses, et les deux différentes. Tant qu'un côté n'a pas été lu, la règle du
 nom s'applique exactement comme avant : pas de jour J, l'index converge au fil des lectures.
 
+**L'appariement n'a jamais franchi les frontières d'un dossier** : la règle exige le même
+`folder_id` côté SQL, et ne travaille que sur les médias d'un seul dossier côté Swift. Le cas
+réel venait d'ailleurs — **deux iPhone différents** dont les compteurs repassent par les mêmes
+numéros, et dont les photos ont fini dans un même dossier.
+
+Sur l'ensemble de la bibliothèque, une fois la migration passée : **13 882 paires concordantes,
+71 contradictions, 227 avec un seul côté porteur, 40 sans aucun identifiant**. Les 71
+contradictions sont 70 vraies vidéos qui étaient masquées derrière une photo sans rapport.
+
 Le coût est borné par construction — seule une vidéo dont le nom correspond à une photo du
 même dossier est candidate. Côté photo, l'identifiant arrive dans le préfixe déjà lu : gratuit.
 

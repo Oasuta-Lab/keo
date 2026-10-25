@@ -502,7 +502,7 @@ final class Indexer: ObservableObject {
             todo.removeAll { inherited[$0.id] != nil }
         }
 
-        progress.folderTotal = todo.count
+        progress.folderTotal = todo.count + probe.count
         state = .running(progress)
 
         var batch: [(item: Item, capture: Date?)] = []
@@ -529,41 +529,6 @@ final class Indexer: ObservableObject {
             if batch.count >= IndexStore.batchSize { await flush(stamping: false) }
         }
 
-        // The hidden halves, read for their identifier alone. Bounded by construction: only a
-        // video whose name matches a still in the same folder is ever a candidate, and each
-        // costs the two or three ranged reads the date scanner already uses.
-        if !probe.isEmpty {
-            await withTaskGroup(of: Item.self) { group in
-                var next = 0
-                func feed() {
-                    guard next < probe.count else { return }
-                    let item = probe[next]
-                    next += 1
-                    group.addTask {
-                        var stamped = item
-                        do {
-                            // `nil` back from a completed scan means the file carries none —
-                            // recorded as "" so it is never asked again. A thrown
-                            // `Undecided` means the bytes ran out: left `nil`, which reads
-                            // as "nobody has looked" and keeps the name rule in charge.
-                            stamped.contentID = try await VideoDate.contentIdentifier(
-                                fileSize: item.size,
-                                fetch: { try await client.bytes(item.path, range: $0) }) ?? ""
-                        } catch {
-                            stamped.contentID = nil
-                        }
-                        return stamped
-                    }
-                }
-                for _ in 0..<min(Self.parallel, probe.count) { feed() }
-                while let stamped = await group.next() {
-                    if Task.isCancelled { group.cancelAll(); break }
-                    batch.append((stamped, nil))
-                    if batch.count >= IndexStore.batchSize { await flush(stamping: false) }
-                    feed()
-                }
-            }
-        }
 
         if !todo.isEmpty {
             await withTaskGroup(of: (Item, Result<Date?, Error>).self) { group in
@@ -638,6 +603,53 @@ final class Indexer: ObservableObject {
                                               trouble: .fileUnreadable))
                     }
 
+                    done += 1
+                    if batch.count >= IndexStore.batchSize { await flush(stamping: false) }
+                    if done - published >= Self.publishEvery {
+                        published = done
+                        progress.folderDone = done
+                        state = .running(progress)
+                    }
+                    feed()
+                }
+            }
+        }
+
+
+        // The hidden halves, read for their identifier alone. Bounded by construction: only
+        // a video whose name matches a still in the same folder is ever a candidate, and each
+        // costs the two or three ranged reads the date scanner already uses.
+        //
+        // After the photographs, not before. Run first, it read thousands of videos without
+        // ever touching the counter, and the screen sat at 0 / N for the whole folder — the
+        // work was happening, it just had no way to say so.
+        if !probe.isEmpty {
+            await withTaskGroup(of: Item.self) { group in
+                var next = 0
+                func feed() {
+                    guard next < probe.count else { return }
+                    let item = probe[next]
+                    next += 1
+                    group.addTask {
+                        var stamped = item
+                        do {
+                            // `nil` back from a completed scan means the file carries none —
+                            // recorded as "" so it is never asked again. A thrown
+                            // `Undecided` means the bytes ran out: left `nil`, which reads
+                            // as "nobody has looked" and keeps the name rule in charge.
+                            stamped.contentID = try await VideoDate.contentIdentifier(
+                                fileSize: item.size,
+                                fetch: { try await client.bytes(item.path, range: $0) }) ?? ""
+                        } catch {
+                            stamped.contentID = nil
+                        }
+                        return stamped
+                    }
+                }
+                for _ in 0..<min(Self.parallel, probe.count) { feed() }
+                while let stamped = await group.next() {
+                    if Task.isCancelled { group.cancelAll(); break }
+                    batch.append((stamped, nil))
                     done += 1
                     if batch.count >= IndexStore.batchSize { await flush(stamping: false) }
                     if done - published >= Self.publishEvery {
