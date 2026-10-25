@@ -78,6 +78,7 @@ struct IndexingView: View {
                         Button("Revérifier tous les dossiers",
                                systemImage: "arrow.clockwise") {
                             indexer.start(client: client, scope: .recheck)
+                            ContinuedIndexing.submit(folders: knownFolders)
                         }
 
                         Button(role: .destructive) {
