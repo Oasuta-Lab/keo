@@ -329,8 +329,11 @@ struct StatsView: View {
     private func row(_ open: @escaping () -> Void,
                      @ViewBuilder label: () -> some View) -> some View {
         Button(action: open) {
-            HStack {
+            HStack(spacing: 8) {
+                // The label has to claim the width, or the chevron sits wherever the text
+                // happens to end — which made every row's chevron land somewhere different.
                 label()
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.tertiary)
