@@ -24,8 +24,23 @@ struct HomeView: View {
     @State private var pinCovers: [String: Item] = [:]
     @State private var recent: [Item] = []
     @State private var destination: BrowserSource?
+    @State private var memoryPage = 0
     @State private var showingIndexing = false
     @State private var disk: (total: Int64, free: Int64, seen: Date)?
+
+    /// The page on screen. Clamped, because the list is rebuilt whenever the index moves and
+    /// a stale page number would read past the end.
+    private var shown: (year: Int, items: [Item])? {
+        let years = memoriesByYear
+        guard !years.isEmpty else { return nil }
+        return years[min(memoryPage, years.count - 1)]
+    }
+
+    private func subtitle(for group: (year: Int, items: [Item])) -> String {
+        let count = Undoer.count(group.items.count, "photo", "photos")
+        guard let day = group.items.first?.captureDate else { return count }
+        return "\(HumanDate.story(day)) · \(count)"
+    }
 
     private var memoriesByYear: [(year: Int, items: [Item])] {
         guard let summary else { return [] }
@@ -116,19 +131,73 @@ struct HomeView: View {
         if !memoriesByYear.isEmpty {
             // No header: the card says « CE JOUR-LÀ » itself, over the photo, and a title
             // above a title is the kind of stacking that makes a screen feel like a form.
-            TabView {
-                ForEach(Array(memoriesByYear.enumerated()), id: \.element.year) { page, group in
-                    MemoryCard(group: group, page: page, pages: memoriesByYear.count,
-                               client: client) {
-                        destination = .results(
-                            title: "Ce jour-là en \(group.year)", items: group.items)
+            // Only the photograph slides. The caption and the dots are chrome over the
+            // carousel, not passengers in it — riding along, they read as part of the image
+            // and the eye has to re-find them on every swipe.
+            ZStack(alignment: .bottomLeading) {
+                TabView(selection: $memoryPage) {
+                    ForEach(Array(memoriesByYear.enumerated()), id: \.element.year) { page, group in
+                        Color.clear
+                            .overlay {
+                                if let cover = group.items.first {
+                                    Thumb(item: cover, client: client, selected: nil,
+                                          lookahead: [])
+                                }
+                            }
+                            .clipped()
+                            .tag(page)
                     }
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+
+                LinearGradient(colors: [.black.opacity(0.75), .clear],
+                               startPoint: .bottom, endPoint: .center)
+                    .allowsHitTesting(false)
+
+                if let shown {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("CE JOUR-LÀ")
+                            .font(.caption2.weight(.semibold))
+                            .tracking(1)
+                            .foregroundStyle(.white.opacity(0.7))
+                        Text(HumanDate.yearsAgo(from: shown.items.first?.captureDate ?? Date()))
+                            .font(.title2.bold())
+                            .foregroundStyle(.white)
+                        Text(subtitle(for: shown))
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.75))
+                    }
+                    .padding(16)
+                    .contentTransition(.opacity)
+                    .allowsHitTesting(false)
+                }
+
+                if memoriesByYear.count > 1 {
+                    HStack(spacing: 5) {
+                        ForEach(memoriesByYear.indices, id: \.self) { index in
+                            Circle()
+                                .fill(.white.opacity(index == memoryPage ? 0.95 : 0.4))
+                                .frame(width: 6, height: 6)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.35), in: Capsule())
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .allowsHitTesting(false)
+                    .accessibilityLabel("Année \(memoryPage + 1) sur \(memoriesByYear.count)")
+                }
             }
-            // The system dots sit bottom-centre, straight on top of the year and the date.
-            // Drawn inside the card instead, in the one corner nothing else uses.
-            .tabViewStyle(.page(indexDisplayMode: .never))
             .aspectRatio(4 / 3, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            // The overlays let taps through, so this opens the year on screen while the
+            // carousel keeps its own swipe.
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard let shown else { return }
+                destination = .results(title: "Ce jour-là en \(shown.year)", items: shown.items)
+            }
         }
     }
 
@@ -325,72 +394,6 @@ struct HomeView: View {
 }
 
 // MARK: - Pieces
-
-/// One year of this day, under its own photo. The text sits on a gradient of the photo
-/// itself — the owner's colour, with no extraction code anywhere.
-private struct MemoryCard: View {
-    let group: (year: Int, items: [Item])
-    let page: Int
-    let pages: Int
-    let client: FreeboxClient
-    let open: () -> Void
-
-    var body: some View {
-        Button(action: open) {
-            ZStack(alignment: .bottomLeading) {
-                Color.clear
-                    .overlay {
-                        if let cover = group.items.first {
-                            Thumb(item: cover, client: client, selected: nil, lookahead: [])
-                        }
-                    }
-                    .clipped()
-
-                LinearGradient(colors: [.black.opacity(0.75), .clear],
-                               startPoint: .bottom, endPoint: .center)
-
-                if pages > 1 {
-                    HStack(spacing: 5) {
-                        ForEach(0..<pages, id: \.self) { index in
-                            Circle()
-                                .fill(.white.opacity(index == page ? 0.95 : 0.4))
-                                .frame(width: 6, height: 6)
-                        }
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 6)
-                    .background(.black.opacity(0.35), in: Capsule())
-                    .padding(12)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .allowsHitTesting(false)
-                    .accessibilityLabel("Année \(page + 1) sur \(pages)")
-                }
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("CE JOUR-LÀ")
-                        .font(.caption2.weight(.semibold))
-                        .tracking(1)
-                        .foregroundStyle(.white.opacity(0.7))
-                    Text(HumanDate.yearsAgo(from: group.items.first?.captureDate ?? Date()))
-                        .font(.title2.bold())
-                        .foregroundStyle(.white)
-                    Text(subtitle)
-                        .font(.footnote)
-                        .foregroundStyle(.white.opacity(0.75))
-                }
-                .padding(16)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var subtitle: String {
-        let count = Undoer.count(group.items.count, "photo", "photos")
-        guard let day = group.items.first?.captureDate else { return count }
-        return "\(HumanDate.story(day)) · \(count)"
-    }
-}
 
 private struct PinCard: View {
     let folder: Item
