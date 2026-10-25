@@ -79,7 +79,7 @@ private struct Shelf: View {
                 NavigationStack(path: $browsePath) {
                     BrowserView(client: client,
                                 source: .folder(path: FreeboxClient.rootPath, title: boxName),
-                                root: true)
+                                boxName: boxName, root: true)
                 }
             } label: {
                 // A tab bar fills its symbols by default; outline reads lighter.

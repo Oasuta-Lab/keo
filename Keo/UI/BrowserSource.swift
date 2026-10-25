@@ -53,3 +53,28 @@ enum BrowserSource: Hashable, Identifiable {
         .folder(path: item.path, title: item.name)
     }
 }
+
+/// The chain of folders from the root down to this one, for a breadcrumb.
+///
+/// Pure, so the splitting can be checked: a NAS path can be deep, can carry accents and
+/// spaces, and the root has no name of its own.
+enum Breadcrumb {
+    struct Crumb: Identifiable, Equatable, Sendable {
+        let name: String
+        let path: String
+        var id: String { path }
+    }
+
+    /// Root first, the folder itself last. Empty for anything that is not a NAS folder —
+    /// favourites and a collection have no path to climb.
+    static func trail(to path: String, rootName: String) -> [Crumb] {
+        guard path.hasPrefix("/") else { return [] }
+        var crumbs = [Crumb(name: rootName, path: FreeboxClient.rootPath)]
+        var walked = ""
+        for part in path.split(separator: "/") {
+            walked += "/" + part
+            crumbs.append(Crumb(name: String(part), path: walked))
+        }
+        return crumbs
+    }
+}

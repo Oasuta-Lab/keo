@@ -61,6 +61,7 @@ func checkNothingWritesToTheNAS() {
 
 checkNothingWritesToTheNAS()
 checkDeepLinks()
+checkBreadcrumb()
 checkHumanDates()
 checkFilenameDates()
 

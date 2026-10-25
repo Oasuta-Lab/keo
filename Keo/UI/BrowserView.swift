@@ -3,6 +3,8 @@ import SwiftUI
 struct BrowserView: View {
     let client: FreeboxClient
     let source: BrowserSource
+    /// Shown as the first crumb: the root folder has no name of its own.
+    var boxName = "Freebox"
     /// Only the view at the bottom of a navigation stack declares where pushes land.
     ///
     /// This view pushes *itself*, so every level used to redeclare `navigationDestination`
@@ -204,7 +206,12 @@ struct BrowserView: View {
         // and a cover attached after it inherits that action — the viewer's pager then starts
         // pulling a refresh spinner when you swipe down to dismiss.
         .refreshable { await load() }
-        .safeAreaInset(edge: .top, spacing: 0) { missingBanner }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                breadcrumb
+                missingBanner
+            }
+        }
         .overlay { status }
         .overlay(alignment: .bottom) {
             // Root only, and out of the way whenever an action bar is up.
@@ -450,6 +457,53 @@ struct BrowserView: View {
             undoer.record(Undoer.count(items.count, "élément ajouté", "éléments ajoutés")
                         + " à « \(collection.name) »") {
                 try? await IndexStore.shared.setMembership(items, in: collection.id, false)
+            }
+        }
+    }
+
+    /// Where you are, and a way back to any step of it.
+    ///
+    /// Scrolls rather than truncates: a NAS path can be eight folders deep, and an ellipsis
+    /// in the middle hides exactly the part that tells you where you are. Starts scrolled to
+    /// the end, because the folder you are in matters more than the root you came from.
+    @ViewBuilder
+    private var breadcrumb: some View {
+        let trail = Breadcrumb.trail(to: source.folderPath ?? "", rootName: boxName)
+        if trail.count > 1, !selecting {
+            ScrollViewReader { bar in
+                ScrollView(.horizontal) {
+                    HStack(spacing: 4) {
+                        ForEach(Array(trail.enumerated()), id: \.element.id) { step, crumb in
+                            if step > 0 {
+                                Image(systemName: "chevron.compact.right")
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            // The last one is where you already are: a label, not a button.
+                            if crumb.id == trail.last?.id {
+                                Text(crumb.name)
+                                    .font(.footnote.weight(.medium))
+                                    .lineLimit(1)
+                                    .id(crumb.id)
+                            } else {
+                                Button(crumb.name) {
+                                    goingTo = .folder(path: crumb.path,
+                                                      title: step == 0 ? boxName : crumb.name)
+                                }
+                                .font(.footnote)
+                                .lineLimit(1)
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 7)
+                    .frame(minHeight: 34)
+                }
+                .scrollIndicators(.hidden)
+                .background(.bar)
+                .onAppear { bar.scrollTo(trail.last?.id, anchor: .trailing) }
             }
         }
     }

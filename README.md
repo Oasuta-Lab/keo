@@ -1290,6 +1290,30 @@ Rien de tout ceci ne se simule : il faut l'appareil, un widget posé, et de la p
   dont l'extension ne porte pas la version de l'hôte, et l'échec se produit à l'installation,
   jamais à la compilation.
 
+## Lire une vidéo de plusieurs gigaoctets
+
+La toute première requête d'AVFoundation à un `AVAssetResourceLoader` ne demande **aucune
+donnée** : elle veut la taille, le type, et savoir si les plages d'octets sont gérées. Le code
+ne posait un en-tête `Range` que lorsqu'il y avait une requête de données — cette première-là
+partait donc sans borne, et `URLSession` téléchargeait **le fichier entier en mémoire** pour
+répondre à « quelle taille fait-il ». Sur une GoPro de plusieurs gigaoctets, ça ne revient
+jamais : écran noir, aucun message.
+
+Deux octets répondent à la question aussi bien. Et toute requête part désormais bornée, y
+compris celles qui demandent « tout jusqu'à la fin » : elles sont plafonnées à une fenêtre de
+4 Mo. Une réponse courte est normale et attendue — AVFoundation redemande à partir de là où
+celle-ci s'arrête, ce qui est précisément ce qui rend le plafond sans danger.
+
+Corollaire : la longueur annoncée vient de `Content-Range`, jamais de la taille reçue. La
+déduire de la réponse ferait croire à AVFoundation que la vidéo fait quatre mégaoctets.
+
+## Fil d'Ariane
+
+Il défile, il ne tronque pas. Un chemin de NAS peut faire huit dossiers de profondeur, et des
+points de suspension au milieu cachent exactement la partie qui dit où l'on est. Il s'ouvre
+déjà défilé jusqu'au bout : le dossier où l'on se trouve compte plus que la racine d'où l'on
+vient. Le dernier élément n'est pas un bouton — on y est déjà.
+
 ## Timeline
 
 Quand le tri est par date, la grille se regroupe et un rail apparaît à droite.

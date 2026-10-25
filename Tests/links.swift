@@ -56,3 +56,26 @@ func checkDeepLinks() {
     print("ok — liens profonds : aller-retour, chemins exotiques, et tout ce qui est refusé")
 }
 
+
+/// Un fil d'Ariane qui se trompe d'un cran renvoie dans le mauvais dossier — et sur un NAS,
+/// « le mauvais dossier » peut être à côté de quinze mille photos.
+func checkBreadcrumb() {
+    let trail = Breadcrumb.trail(to: "/NAS/Perso/Photos/Été 2024", rootName: "Freebox")
+    assert(trail.map(\.name) == ["Freebox", "NAS", "Perso", "Photos", "Été 2024"],
+           "la racine d'abord, le dossier courant en dernier — \(trail.map(\.name))")
+    assert(trail.map(\.path) == ["/", "/NAS", "/NAS/Perso", "/NAS/Perso/Photos",
+                                 "/NAS/Perso/Photos/Été 2024"],
+           "chaque miette porte son chemin complet — \(trail.map(\.path))")
+
+    let root = Breadcrumb.trail(to: "/", rootName: "Freebox")
+    assert(root.map(\.name) == ["Freebox"], "à la racine, une seule miette — \(root.map(\.name))")
+
+    assert(Breadcrumb.trail(to: "", rootName: "Freebox").isEmpty,
+           "un favori ou une collection n'a pas de chemin à remonter")
+
+    let spaced = Breadcrumb.trail(to: "/NAS/Job Life/Projets dev", rootName: "Freebox")
+    assert(spaced.last?.path == "/NAS/Job Life/Projets dev",
+           "les espaces ne coupent pas un chemin — \(spaced.last?.path ?? "")")
+
+    print("ok — fil d'Ariane : racine, profondeur, accents, espaces, et les sources sans chemin")
+}
