@@ -57,6 +57,27 @@ func checkNothingWritesToTheNAS() {
 
 checkNothingWritesToTheNAS()
 
+// MARK: - Le jeton d'application se synchronise
+
+/// A source scan for the same reason as above: both ways of breaking a synchronizable item fail
+/// by doing nothing at all — no error, no log, just a device that asks for the box button again.
+/// A `…ThisDeviceOnly` class never leaves the device, and a query without `Synchronizable` is
+/// blind to half the keychain, the attribute being part of the item's primary key.
+func checkTheAppTokenCanSync() {
+    let file = URL(fileURLWithPath: "Keo/App/Keychain.swift")
+    guard let raw = try? String(contentsOf: file, encoding: .utf8) else {
+        assertionFailure("Keychain.swift introuvable — lance le check depuis la racine du dépôt")
+        return
+    }
+    let source = strippingComments(raw)
+    assert(!source.contains("ThisDeviceOnly"),
+           "une classe ThisDeviceOnly ne se synchronise pas, et le refuse en silence")
+    assert(source.contains("kSecAttrSynchronizableAny"),
+           "lire ou supprimer sans Synchronizable: Any laisse passer un jeton de l'autre nature")
+}
+
+checkTheAppTokenCanSync()
+
 // MARK: - Envelope
 
 struct Entry: Decodable {

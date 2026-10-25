@@ -22,14 +22,22 @@ final class Store: ObservableObject {
                                appToken: token)
     }
 
-    /// Reconnects without asking the box again after a reinstall.
+    /// Reconnects without asking the box again after a reinstall — or on a device that has
+    /// never been paired at all, since the token now arrives through the iCloud Keychain.
     ///
     /// The app token survives in the keychain, but the API address lived in `UserDefaults`,
     /// which is wiped with the app — so Keo asked for a new pairing while already holding the
     /// key. The address needs no authentication to rediscover, so there is nothing to ask.
     func reconnectIfPossible() async {
-        guard client == nil, phase == .idle,
-              let token = Keychain.get(account: host), apiBase.isEmpty else { return }
+        guard client == nil, phase == .idle, apiBase.isEmpty else { return }
+
+        // A device that has just joined the iCloud Keychain gets the token a few seconds after
+        // launch. Reading once would miss it and send someone to press ✓ on the box for nothing;
+        // the pairing button stays live throughout and its tap ends this wait.
+        for _ in 0..<15 where Keychain.get(account: host) == nil {
+            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+        }
+        guard client == nil, phase == .idle, let token = Keychain.get(account: host) else { return }
 
         phase = .discovering
         do {

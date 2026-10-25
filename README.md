@@ -28,6 +28,84 @@ Freebox Server**. Le jeton d'application va dans le trousseau iOS.
 Si la navigation renvoie une erreur de droits : Freebox OS → Paramètres → Gestion des accès →
 Applications → Keo → cocher « Accès aux fichiers ».
 
+## Une seule association pour tous tes appareils
+
+Le jeton d'application est marqué `kSecAttrSynchronizable` : le **trousseau iCloud** le porte
+d'un appareil à l'autre. Un deuxième téléphone connecté au même compte Apple installe Keo,
+l'ouvre, et se retrouve apparié sans que personne ne touche à la box.
+
+**Rien à voir avec la synchronisation de la personnalisation plus bas.** Celle-ci est un miroir
+CloudKit que l'app pilote ; le trousseau, lui, est un service système auquel l'app ne fait que
+confier un item. Deux mécanismes, deux interrupteurs dans les Réglages, aucune dépendance entre
+les deux : le trousseau coupé laisse les favoris se synchroniser, et l'inverse aussi.
+
+Le compromis, assumé : la Freebox ne voit **qu'une seule autorisation**, partagée. Impossible
+d'en révoquer une sans révoquer les autres. L'écran d'association le dit en une ligne, parce
+qu'une autorisation partagée qu'on croit individuelle est une mauvaise surprise le jour où on
+veut retirer l'accès à un appareil perdu.
+
+Rien à configurer : pas de capacité à cocher, pas d'entitlement à ajouter — le groupe de
+trousseau par défaut suffit. L'interrupteur existe déjà côté système (Réglages → compte →
+iCloud → Mots de passe), et le couper ramène exactement au comportement d'avant : un jeton
+local, une association par appareil.
+
+### Ce qui est délicat, et ce que fait le code
+
+- **`Synchronizable` fait partie de la clé primaire d'un item.** Une requête qui l'omet ne voit
+  que les items locaux ; une requête qui le fixe à `true` ne voit que les synchronisés. Et un
+  item ne se convertit pas sur place. Toutes les requêtes de `Keychain` passent donc par
+  `kSecAttrSynchronizableAny` : une seule lecture, une seule suppression, qui trouvent le jeton
+  quelle que soit sa nature — aucun appelant n'a changé.
+- **La migration des jetons déjà posés** se fait à la lecture, le seul endroit par lequel tout
+  le monde passe déjà. Si l'item trouvé n'est pas synchronisable, il est réécrit. C'est
+  idempotent : un jeton déjà migré est lu et laissé tranquille.
+- **L'ordre d'écriture est la garantie de non-perte.** On ajoute le synchronisé, et on ne
+  supprime le local **qu'après** un `SecItemAdd` réussi. iOS ne dit pas si le trousseau iCloud
+  est actif ; un échec, un appareil hors ligne ou un compte Apple absent ne coûtent donc rien,
+  le jeton reste lisible et la tentative se répète au lancement suivant. Perdre le jeton
+  coûterait un aller à la box — c'est précisément le bug déjà vécu une fois.
+- **`kSecAttrAccessibleAfterFirstUnlock` est conservé.** Les classes en `…ThisDeviceOnly` sont
+  refusées pour un item synchronisable, et refusées **en silence**. `AfterFirstUnlock` est la
+  classe la plus stricte qui se synchronise encore, et c'est celle qu'il faut pour qu'un
+  téléchargement repris en arrière-plan après un redémarrage puisse lire le jeton.
+- **La déconnexion efface les deux natures**, toujours via `Any`. Sans ça, l'item local
+  survivrait à la suppression du synchronisé et le jeton ressusciterait au lancement suivant.
+- **Le jeton met parfois quelques secondes à arriver** sur un appareil qui vient de rejoindre le
+  trousseau. L'écran d'association attend donc jusqu'à quinze secondes avant de renoncer, sans
+  jamais bloquer le bouton : un tap dessus met fin à l'attente.
+- **Le jeton est la seule chose stockée dans le trousseau** — `Keychain.set/get/delete` n'est
+  jamais appelé avec un autre compte que l'hôte de la box. La question « que synchroniser
+  d'autre » ne se pose donc pas ; le jour où elle se posera, elle se posera par secret, pas en
+  bloc : le partage se justifie ici parce que l'autorisation est celle du foyer, pas celle de
+  l'appareil.
+
+### Vérifier à la main
+
+Le scan de sources dans `Tests/main.swift` interdit les deux régressions qui échouent en
+silence (une classe `ThisDeviceOnly`, une requête sans `Synchronizable`). Le reste exige deux
+appareils et un vrai trousseau iCloud :
+
+- **Migration** : sur un appareil déjà apparié par l'ancienne version, installer celle-ci et
+  lancer. La galerie s'ouvre directement, sans écran d'association et **sans appui sur ✓**. Le
+  jeton a été réécrit en silence.
+- **Deuxième appareil, même compte Apple** : installer Keo, lancer. L'écran d'association
+  apparaît, puis bascule tout seul sur la galerie en quelques secondes, box jamais touchée.
+- **Trousseau iCloud coupé** (Réglages → compte → iCloud → Mots de passe) : l'appareil déjà
+  apparié reste apparié, la galerie s'ouvre comme avant. Un nouvel appareil, lui, demande
+  l'appui sur ✓ — comportement d'avant, pas une panne.
+- **Hors ligne** : mode avion, désinstaller, réinstaller, lancer. Le jeton local ayant disparu
+  avec l'app et le trousseau ne pouvant rien livrer, l'écran d'association s'affiche sans
+  tourner en rond. Réseau rétabli, relancer : la galerie s'ouvre toute seule.
+- **Deuxième compte Apple** : sur l'appareil signé avec l'autre compte, le jeton n'arrive pas.
+  Appairer normalement — et vérifier que ce deuxième appairage ne casse pas le premier (la box
+  autorise bien deux applications homonymes, elles ont des jetons distincts).
+- **Déconnexion puis relance** : « Déconnecter » sur l'appareil A, tuer l'app, relancer :
+  l'écran d'association reste, le jeton ne ressuscite pas. Puis relancer l'appareil B : lui
+  aussi redemande l'association, ce qui est le compromis, pas un bug.
+- **Révocation côté box** : Freebox OS → Gestion des accès → retirer Keo. Au lancement suivant,
+  la validation par listing échoue, le jeton est effacé des deux natures et l'association
+  normale reprend, sans boucle.
+
 ## Numéro de build
 
 `Scripts/stamp-build.sh` tamponne l'`Info.plist` **construit** — jamais celui du dépôt — au
@@ -571,6 +649,9 @@ se teste qu'à la main, voir plus haut.
 - **LAN uniquement.** L'accès distant existe côté box mais son certificat vient de la CA
   Freebox, absente du magasin iOS. Un VPN IKEv2 sur la Freebox est la meilleure réponse : le
   téléphone se retrouve sur le réseau local et l'app n'a pas une ligne à changer.
+- **Une seule autorisation Freebox pour tous les appareils d'un même compte Apple**, puisque le
+  jeton passe par le trousseau iCloud. Pas de révocation par appareil : retirer l'accès les
+  retire tous.
 - **Pas de téléchargement de dossier entier** — la sélection porte sur des fichiers.
 - **Téléchargements en série** — une barre de progression lisible plutôt qu'un débit maximal.
 - **Pas de cible de tests Xcode.** La logique vérifiable est pure et le script ci-dessus suffit ;
