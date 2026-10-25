@@ -158,6 +158,8 @@ struct BrowserView: View {
                     + "at=\(anchor.flatMap { mediaIndex[$0] }.map(String.init) ?? "absent") "
                     + "pending=\(pendingDates.count)")
                 guard let anchor else { return }
+                trace("dismiss scroll to \(anchor) at=\(mediaIndex[anchor].map(String.init) ?? "absent") "
+                    + "n=\(contents.media.count)")
                 proxy.scrollTo(anchor, anchor: .center)
             }
             .coordinateSpace(name: Self.gridSpace)
@@ -304,6 +306,7 @@ struct BrowserView: View {
 
         // Reordering is a local question: no reason to ask the box again.
         .onChange(of: order) { _, new in
+            trace("contents: reordered order=\(new) n=\(contents.media.count)")
             contents = contents.reordered(by: new)
             rebuildSections()
         }
@@ -670,6 +673,7 @@ struct BrowserView: View {
 
             let known = try await IndexStore.shared.known(contents.media, in: path)
             if !known.isEmpty {
+                trace("contents: known dates n=\(known.count)")
                 contents = contents.applying(known, order: order)
                 rebuildSections()
             }
@@ -711,7 +715,8 @@ struct BrowserView: View {
             case .folder: saved = []
             // Straight out of the index a moment ago: re-resolving would be pure waste.
             case .results(_, let items):
-                contents = FolderContents(items, order: order)
+                trace("contents: results n=\(items.count)")
+            contents = FolderContents(items, order: order)
                 rebuildSections()
                 error = nil
                 loaded = true
@@ -720,6 +725,7 @@ struct BrowserView: View {
             // A moved file is quietly repathed; only a genuinely absent one is set aside.
             let resolved = try await IndexStore.shared.resolve(saved)
             missing = resolved.missing
+            trace("contents: local n=\(resolved.present.count)")
             contents = FolderContents(resolved.present, order: order)
             rebuildSections()
             error = nil
@@ -778,6 +784,7 @@ struct BrowserView: View {
         // 14 600 files, the index answers in milliseconds.
         if contents.isEmpty, let remembered = try? await IndexStore.shared.listing(path),
            !remembered.isEmpty {
+            trace("contents: cache n=\(remembered.count)")
             contents = FolderContents(remembered, order: order)
             rebuildSections()
             fromCache = true
@@ -796,6 +803,7 @@ struct BrowserView: View {
                     loaded = true
                 }
             }
+            trace("contents: live n=\(live.media.count) was=\(contents.media.count)")
             contents = live
             fromCache = false
             rebuildSections()

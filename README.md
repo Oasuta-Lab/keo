@@ -1456,6 +1456,26 @@ Le geste de fermeture maison et la transition système veulent piloter la même 
 photo est rendue à son cadre naturel avant `dismiss()`, sinon le zoom démarre d'une image déjà
 réduite par le glissement.
 
+## Le bug de la grille au retour du plein écran, non résolu
+
+Rapporté deux fois : ouvrir une photo, rester un moment, fermer — et la grille montre autre
+chose, « d'autres dates », impossible de retrouver ses photos ; sortir du dossier et revenir
+répare.
+
+**Première théorie, réfutée.** L'indexation publie ses dates par lots, la grille se retriait
+derrière la photo, et la fermeture scrollait vers la photo regardée — désormais ailleurs. Le
+correctif (ne pas retrier tant qu'une photo est ouverte) est en place et juste en soi, mais la
+trace du second signalement dit `pending=0` et l'indexation était terminée : **ce n'est pas
+le mécanisme**.
+
+Ce que la trace dit par ailleurs : `viewer dismissed anchor=…/IMG_0984.JPEG at=364`. L'ancre
+n'est donc pas perdue, et le scroll de retour vise délibérément l'index 364.
+
+Ce qui manquait pour conclure : **l'horodatage**. Impossible de savoir si le `load` observé
+précédait ou suivait la fermeture. Les traces sont donc horodatées à la milliseconde, chaque
+remplacement du contenu de la grille se nomme avec sa raison et sa taille, et le scroll de
+retour dit où il a vraiment atterri. La prochaine reproduction tranchera.
+
 ## Ce qui se réévalue pendant le scroll
 
 Trois choses se cumulaient sur la grille de 14 600 éléments, et toutes les trois pendant le

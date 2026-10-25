@@ -19,13 +19,32 @@ import UIKit
 ///       --source "Library/Application Support/Keo/trace.log" --destination /tmp/
 func trace(_ message: @autoclosure () -> String) {
     #if DEBUG
-    let line = "[keo] \(message())"
+    // Timestamped: the first reproduction of the grid bug could not be read because nothing
+    // said whether a reload happened before or after the viewer was dismissed.
+    let line = "[keo] \(TraceClock.now()) \(message())"
     print(line)
     TraceFile.append(line)
     #endif
 }
 
 #if DEBUG
+/// Wall clock to the millisecond, because the order of two events is often the whole answer.
+private enum TraceClock {
+    nonisolated(unsafe) private static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "HH:mm:ss.SSS"
+        return formatter
+    }()
+    private static let lock = NSLock()
+
+    static func now() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return formatter.string(from: Date())
+    }
+}
+
 /// Append-only, size-capped, and silent on failure: a diagnostic that can break the app it
 /// diagnoses is worse than no diagnostic.
 private enum TraceFile {
