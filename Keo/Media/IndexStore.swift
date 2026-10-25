@@ -2034,6 +2034,66 @@ actor IndexStore {
         }
     }
 
+    // MARK: Widget
+
+    /// The photos the widget shows for a pinned folder, taken from its whole subtree.
+    ///
+    /// Ordered by kind first so photos come before videos: a video costs an
+    /// `AVAssetImageGenerator` pass to produce one frame. Undated files sort last on their
+    /// own — SQLite ranks NULL below everything, so `capture DESC` leaves them as filler for
+    /// a folder the date reader has not reached yet, rather than as the headline.
+    /// Named apart from `covers(for:)`, which answers "one tile image per folder" — same
+    /// ordering, a different question, and two overloads of one name would read as the same.
+    func recentMedia(under folder: String, limit: Int = 12) throws -> [Item] {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        // The shared spelling, which also behaves at the root — see `subtree(_:)`.
+        let scope = "d.path = ?2 OR " + Self.subtree("d.path")
+        try prepare("""
+            SELECT d.path, fi.name, fi.size, fi.capture, fi.kind
+            FROM file fi JOIN folder d ON d.id = fi.folder_id
+            WHERE (\(scope)) AND fi.kind IN (\(Item.Kind.image.code), \(Item.Kind.video.code))
+            ORDER BY fi.kind, fi.capture DESC, d.path, fi.name
+            LIMIT ?3
+            """, into: &statement)
+        bind(statement, 1, Statistics.scopePrefix(folder))
+        bind(statement, 2, folder)
+        sqlite3_bind_int64(statement, 3, Int64(limit))
+
+        var found: [Item] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let parent = sqlite3_column_text(statement, 0),
+                  let raw = sqlite3_column_text(statement, 1) else { continue }
+            let name = String(cString: raw)
+            let kind = Item.Kind(code: Int(sqlite3_column_int64(statement, 4)))
+            let capture = sqlite3_column_type(statement, 3) == SQLITE_NULL
+                ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))
+            found.append(Item(path: (String(cString: parent) as NSString)
+                                .appendingPathComponent(name),
+                              name: name, isDirectory: false,
+                              size: sqlite3_column_int64(statement, 2),
+                              modified: nil, mimeType: kind?.mimeHint,
+                              captureDate: capture))
+        }
+        return found
+    }
+
+    /// Grants one widget render per interval, or straight away when the pinned set changed —
+    /// a folder just pinned must not wait an hour for its first photos. Claiming writes the
+    /// stamp, so two foregrounds in a row cannot both win it.
+    func claimWidgetRender(signature: String, interval: TimeInterval) throws -> Bool {
+        try open()
+        let now = Date().timeIntervalSince1970
+        let last = Double(try value(forKey: "widgetRenderedAt") ?? 0)
+        if now - last < interval, try textValue(forKey: "widgetFolders") == signature {
+            return false
+        }
+        try setValue(Int64(now), forKey: "widgetRenderedAt")
+        try setTextValue(signature, forKey: "widgetFolders")
+        return true
+    }
+
     /// What a folder tile shows, summed over the folder and everything beneath it — a parent
     /// full of subfolders would otherwise claim to be empty.
     func stats(for folders: [String]) throws -> [String: FolderStats] {

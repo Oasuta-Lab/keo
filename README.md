@@ -125,6 +125,12 @@ le bas de l'écran, et n'apparaît pas dans les sous-dossiers ni en plein écran
 Sans git (build depuis une archive), le script sort sans rien faire et la valeur du dépôt est
 conservée.
 
+La phase est montée **sur les deux cibles**, Keo et KeoWidgetExtension. Le script travaille
+sur `$TARGET_BUILD_DIR/$INFOPLIST_PATH`, donc il tamponne le bundle de la cible qui l'exécute,
+sans rien changer d'autre. Ne la retirer d'aucune des deux : **iOS refuse d'installer une app
+dont l'extension ne porte pas le même `CFBundleVersion` que l'hôte**, et l'app partirait en
+build 42 avec un `.appex` resté à 1. L'échec est à l'installation, pas à la compilation.
+
 ## Identité
 
 Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copié dans
@@ -147,7 +153,8 @@ Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copi
 | `Keo/Media/` | Pipeline de vignettes, décodage ImageIO, cache disque LRU, index des dates |
 | `Keo/Downloads/` | File d'attente, pellicule, feuille de partage |
 | `Keo/Sync/` | Miroir CloudKit de la personnalisation : identité des enregistrements, moteur |
-| `Keo/UI/` | Association, grille, recherche, visionneuse plein écran |
+| `Keo/UI/` | Association, grille, recherche, statistiques, visionneuse plein écran |
+| `KeoWidget/` | L'extension WidgetKit. Ne lie que Foundation, SwiftUI, ImageIO et AppIntents |
 
 Les dépendances vont vers l'intérieur : `UI` → `Media`/`Downloads` → `Freebox`. Rien dans
 `Freebox` ne connaît SwiftUI.
@@ -504,9 +511,9 @@ Trois idées portent tout le reste :
 ### Configuration — ce que le propriétaire doit faire à la main
 
 Le dépôt contient déjà `Keo/Keo.entitlements` (CloudKit, conteneur
-`iCloud.com.oasutalab.keo`, `aps-environment`) et le mode background `remote-notification`.
-Le build **simulateur** passe tel quel. Pour un appareil, une fois, dans Xcode avec le compte
-de l'équipe ton équipe Apple :
+`iCloud.com.oasutalab.keo`, `aps-environment`, groupe d'app) et le mode background
+`remote-notification`. Le build **simulateur** passe tel quel. Pour un appareil, une fois,
+dans Xcode avec le compte de l'équipe ton équipe Apple :
 
 1. Cible Keo → *Signing & Capabilities* → vérifier que les capacités **iCloud → CloudKit**
    (conteneur `iCloud.com.oasutalab.keo`) et **Push Notifications** apparaissent ; la
@@ -516,6 +523,16 @@ de l'équipe ton équipe Apple :
 3. Avant toute distribution : [CloudKit Console](https://icloud.developer.apple.com) →
    conteneur → *Deploy Schema Changes* vers **Production**. Sans ce clic, une build
    TestFlight/App Store ne peut rien écrire.
+4. **Groupe d'app, pour le widget.** Cibles **Keo** *et* **KeoWidgetExtension** →
+   *Signing & Capabilities* → **App Groups** doit lister `group.com.oasutalab.keo`. Les deux
+   fichiers d'entitlements le déclarent déjà ; ce qui manque est son enregistrement côté App
+   ID, et c'est ce clic qui le fait.
+
+   `xcodebuild` ne sait pas le faire : en ligne de commande la build échoue sur
+   « *Provisioning profile … doesn't include the App Groups capability* » pour les deux
+   cibles, tant que Xcode n'a pas été ouvert une fois. Ce n'est pas un défaut du projet — la
+   compilation et l'assemblage passent (`CODE_SIGNING_ALLOWED=NO` le montre), seule la
+   signature attend ce passage par l'interface.
 
 ### Vérifier le reste à la main
 
@@ -543,6 +560,125 @@ lancement avec un compte, l'existant remonte tout seul (la graine ci-dessus). Pa
 dans l'app : iOS fournit déjà l'interrupteur (Réglages → compte → iCloud → Keo), et le couper
 ramène simplement au comportement d'avant — tout local, rien de perdu, le journal attend. Le
 retirer du système pour le redonder dans l'app serait un deuxième endroit où se tromper.
+
+## Widget
+
+**L'app pré-rend, le widget ne fait qu'ouvrir des fichiers.** L'extension ne lie que
+Foundation, SwiftUI, ImageIO et AppIntents. Pas d'entitlement de trousseau, aucune socket,
+jamais de SQLite.
+
+L'autre option aurait été de partager l'index par App Group. Elle est écartée pour une raison
+simple : **l'index ne contient aucun pixel.** Il stocke `(folder_id, name, size, capture,
+read, kind, gen)` — des chemins et des dates. Le partager ferait migrer la base irremplaçable
+du propriétaire pour n'y gagner qu'un nom de fichier et un flou. Et `IndexStore.open()`
+exécute huit écritures avant son premier `SELECT` : quatre `ALTER TABLE`, un `UPDATE`, puis
+`retryDatelessAfterReaderChange`, `repairKinds` et `migrateFromJSON` — sans compter le
+`CREATE TABLE` du schéma. Une extension de 30 Mo que le système peut tuer en pleine
+transaction ne doit jamais faire tourner ça.
+
+Les seuls pixels qui existent sont des vignettes de 400 px dans `Caches/`, purgeable et évincé
+en LRU par l'app elle-même, et seulement pour les photos déjà défilées.
+
+### Pourquoi pas de réseau dans l'extension
+
+1. L'app est **LAN uniquement**, et le téléphone est hors du Wi-Fi de la maison les deux tiers
+   de la journée. Un widget réseau passerait sa vie à afficher un échec.
+2. Partager le jeton voudrait dire un `keychain-access-groups` et réécrire l'élément sous un
+   nouveau groupe. Perdre ce jeton coûte un déplacement physique devant la face avant de la
+   Freebox, et c'est déjà arrivé une fois. Par ailleurs `Keychain.service` vaut
+   `Bundle.main.bundleIdentifier`, soit `com.oasutalab.keo.KeoWidget` dans l'extension :
+   elle chercherait en silence dans le mauvais service.
+3. 30 Mo pour tout le processus, quand `ThumbnailPipeline.still()` peut retomber sur un
+   téléchargement de 40 Mo.
+4. `NSLocalNetworkUsageDescription` dans un `.appex` lève un **second** dialogue de
+   permission, attribué à quelque chose que le propriétaire ne voit pas.
+5. Une extension sans `FreeboxClient` ne peut pas écrire sur le NAS, même par accident.
+
+### Ce que l'app écrit
+
+Au premier plan, avec un client vivant, `WidgetRenderer` prend les douze captures les plus
+récentes du **sous-arbre** de chaque dossier épinglé, les passe par le pipeline de vignettes
+existant en 1200 px, et écrit le tout dans `group.com.oasutalab.keo/Widget/` :
+
+```
+Widget/widget.json                  le manifeste, écrit en atomique
+Widget/<sha256(chemin)>/<sha256(chemin du fichier)>
+```
+
+Les noms sont hachés parce qu'un chemin du NAS n'est pas un nom de fichier : il porte des
+slashes et pourrait porter des `..`. L'extension joint donc de l'hexadécimal plat, qui ne peut
+pas remonter hors du conteneur.
+
+- Protection `completeUntilFirstUserAuthentication`, **pas** `complete` : le widget se
+  rafraîchit téléphone verrouillé, et des fichiers illisibles le videraient à chaque fois.
+- Le rendu est **sauté entièrement pendant que l'`Indexer` tourne** — c'est volontairement un
+  lecteur série unique, un second ramènerait le trafic doublé qu'on avait justement supprimé.
+- Une fois par heure, **sauf si l'ensemble des épingles a changé** : épingler un dossier ne
+  doit pas attendre une heure pour s'afficher.
+- Les dossiers désépinglés et les photos sorties du top 12 sont retirés du conteneur au
+  passage ; sinon il grossirait indéfiniment.
+
+### La liste des dossiers
+
+Elle vient de la table **`shortcut`** — des dossiers que le propriétaire a déjà choisis par
+appui long sur leur tuile. Curée, typiquement moins de cinquante entrées, aucune nouvelle
+interface, et le coût du rendu est borné par construction. Si un dossier n'est pas proposé, la
+réponse tient en un appui long ; la feuille de réglages du widget le dit.
+
+La configuration passe par un `EntityQuery`, pas un `DynamicOptionsProvider` : le choix doit
+persister par une identité stable — le chemin Freebox — et être re-résolu quand la liste
+change. Un fournisseur d'options stocke la valeur au lieu d'une référence et rancit dès le
+premier épinglage.
+
+La timeline fait 48 entrées, une toutes les 30 minutes, sur 24 h, `.atEnd` : un rechargement
+de fond par jour pour un budget d'environ 40 à 70. `reloadAllTimelines()` depuis l'app au
+premier plan n'est pas budgété du tout, et c'est lui qui fait réellement la fraîcheur.
+
+`widgetAccentedRenderingMode(.fullColor)` est obligatoire : sans lui le mode teinté de l'écran
+d'accueil aplatit les photos en silhouettes blanches. Pour un widget photo, c'est un bug.
+
+### Récupérer le conteneur partagé depuis l'appareil
+
+Le conteneur de groupe n'est **pas** dans celui de l'app : il a son propre domaine.
+
+```sh
+xcrun devicectl device info files --device <UDID> \
+  --domain-type appGroupDataContainer --domain-identifier group.com.oasutalab.keo \
+  --username mobile
+xcrun devicectl device copy from --device <UDID> \
+  --domain-type appGroupDataContainer --domain-identifier group.com.oasutalab.keo \
+  --username mobile --source Widget --destination /tmp/keo-widget
+```
+
+Y vérifier `widget.json` (nombre de dossiers, noms d'images) et la taille des JPEG. L'app
+trace la même chose à chaque rendu, en build DEBUG :
+
+```sh
+grep -a "\[keo\] widget" /tmp/keo-console.log
+```
+
+### À vérifier à la main
+
+Rien de tout ceci ne se simule : il faut l'appareil, un widget posé, et de la patience.
+
+- **Écran verrouillé.** Poser le widget, verrouiller, attendre un rafraîchissement : la photo
+  reste visible. Si elle devient noire, la classe de protection est repassée à `complete`.
+- **Avant le premier déverrouillage après un redémarrage.** Redémarrer le téléphone et
+  regarder l'écran d'accueil **sans** déverrouiller : le widget doit afficher un état vide
+  propre, jamais une case cassée. C'est le seul moment où
+  `completeUntilFirstUserAuthentication` refuse réellement les fichiers.
+- **Mode avion.** Le widget doit continuer à tourner sur ses photos déjà rendues. S'il affiche
+  quoi que ce soit qui ressemble à une erreur réseau, c'est qu'il a appris à parler au NAS et
+  il faut l'en empêcher.
+- **Dossier désépinglé sous le widget.** Épingler un dossier, le choisir dans le widget,
+  rouvrir Keo et le désépingler, puis laisser l'app re-rendre : le widget doit annoncer « Ce
+  dossier n'est plus épinglé » et surtout **pas** les photos d'un autre dossier.
+- **Widget posé avant le premier lancement de Keo.** Sur une installation neuve, poser le
+  widget sans jamais ouvrir l'app : « Ouvre Keo pour remplir le widget », pas un crash.
+- **Rien d'épinglé.** Ouvrir Keo sans aucun raccourci : « Épingle un dossier dans Keo ».
+- **Numéro de build.** Après installation, vérifier que l'app démarre : iOS refuse une app
+  dont l'extension ne porte pas la version de l'hôte, et l'échec se produit à l'installation,
+  jamais à la compilation.
 
 ## Timeline
 
@@ -832,6 +968,10 @@ Couvre la garantie de lecture seule, l'enveloppe `{success, result}`, l'encodage
 la classification des médias, l'éviction LRU, l'arithmétique de progression, et toute la
 partie pure de la synchronisation iCloud (`Tests/sync.swift`) — le moteur CloudKit lui-même ne
 se teste qu'à la main, voir plus haut.
+
+`Tests/widget.swift` couvre le manifeste du widget et, contre le vrai SQLite, la sélection des
+douze couvertures d'un dossier épinglé : tout le sous-arbre, les plus récentes d'abord, les
+vidéos après les photos, les voisins au nom proche exclus.
 
 ## Pièges de l'API Freebox, vérifiés sur la box
 

@@ -25,29 +25,33 @@ func checkNothingWritesToTheNAS() {
     let forbiddenRoutes = ["fs/mv", "fs/rm", "fs/rename", "fs/mkdir", "fs/copy", "fs/delete",
                            "fs/archive", "fs/extract", "fs/chmod", "fs/cp"]
 
-    let root = URL(fileURLWithPath: "Keo")
-    guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
-    else {
-        assertionFailure("sources introuvables — lance le check depuis la racine du dépôt")
-        return
-    }
-
+    // L'extension widget compte autant que l'app : un répertoire non parcouru rendrait la
+    // garantie déclarative au lieu de structurelle.
     var sourceCount = 0
     var postSites: [String] = []
 
-    for case let file as URL in walker where file.pathExtension == "swift" {
-        guard let raw = try? String(contentsOf: file, encoding: .utf8) else { continue }
-        let text = strippingComments(raw)
-        sourceCount += 1
-        let name = file.lastPathComponent
+    for root in ["Keo", "KeoWidget"] {
+        guard let walker = FileManager.default.enumerator(
+            at: URL(fileURLWithPath: root), includingPropertiesForKeys: nil)
+        else {
+            assertionFailure("\(root) introuvable — lance le check depuis la racine du dépôt")
+            return
+        }
 
-        for verb in forbiddenVerbs {
-            assert(!text.contains(verb), "\(name) emploie \(verb) : écriture possible sur le NAS")
+        for case let file as URL in walker where file.pathExtension == "swift" {
+            guard let raw = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            let text = strippingComments(raw)
+            sourceCount += 1
+            let name = file.lastPathComponent
+
+            for verb in forbiddenVerbs {
+                assert(!text.contains(verb), "\(name) emploie \(verb) : écriture possible sur le NAS")
+            }
+            for route in forbiddenRoutes {
+                assert(!text.contains(route), "\(name) appelle \(route) : écriture possible sur le NAS")
+            }
+            if text.contains("httpMethod = \"POST\"") { postSites.append(name) }
         }
-        for route in forbiddenRoutes {
-            assert(!text.contains(route), "\(name) appelle \(route) : écriture possible sur le NAS")
-        }
-        if text.contains("httpMethod = \"POST\"") { postSites.append(name) }
     }
 
     assert(sourceCount > 5, "le scan n'a vu que \(sourceCount) fichiers, il a dû rater l'arbre")
@@ -77,6 +81,27 @@ func checkTheAppTokenCanSync() {
 }
 
 checkTheAppTokenCanSync()
+
+// MARK: - Les deux copies du manifeste
+
+/// L'extension porte sa propre copie de `WidgetManifest`, parce que partager le fichier
+/// demanderait de le sortir du groupe synchronisé de l'app. Une copie qui dérive, c'est un
+/// widget qui décode dans le vide sans rien dire : les deux sont donc comparées à l'octet.
+func checkTheManifestCopiesMatch() {
+    let app = "Keo/Media/WidgetManifest.swift"
+    let widget = "KeoWidget/WidgetManifest.swift"
+    guard let inApp = try? Data(contentsOf: URL(fileURLWithPath: app)),
+          let inWidget = try? Data(contentsOf: URL(fileURLWithPath: widget)) else {
+        assertionFailure("copies du manifeste introuvables — lance le check depuis la racine")
+        return
+    }
+    assert(inApp == inWidget,
+           "\(app) et \(widget) ont divergé : le widget décoderait dans le vide")
+    assert(inApp.count > 200,
+           "le manifeste fait \(inApp.count) octets, le scan a dû lire le mauvais fichier")
+}
+
+checkTheManifestCopiesMatch()
 
 // MARK: - Envelope
 
@@ -549,3 +574,5 @@ try await checkSync()
 try await checkFolderCovers()
 try await checkStatistics()
 try await checkRootIsNotItsOwnChild()
+
+try await checkWidget()

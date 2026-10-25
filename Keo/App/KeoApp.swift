@@ -42,6 +42,7 @@ private struct Shelf: View {
 
     enum Place: Hashable { case browse, shortcuts, favourites, collections, search }
 
+    @EnvironmentObject private var indexer: Indexer
     @State private var place: Place = .browse
     @State private var browsePath = NavigationPath()
     @State private var searchPath = NavigationPath()
@@ -95,6 +96,11 @@ private struct Shelf: View {
             }
         }
         .modifier(MinimisingTabBar())
+        // The widget has no client of its own, so its photos can only be made here, while
+        // the box is reachable and someone is looking at the app anyway.
+        .task(priority: .utility) {
+            await WidgetRenderer.refresh(client: client, indexing: indexer.state.isRunning)
+        }
     }
 
     /// Tapping the tab you are already on returns to its root — the behaviour every iOS app

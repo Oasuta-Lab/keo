@@ -34,11 +34,11 @@ swiftc -swift-version 6 -D DEBUG \
   Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift Keo/Media/FolderStamp.swift \
   Keo/Media/WalkOutcome.swift Keo/Media/SearchQuery.swift Keo/Media/Statistics.swift \
   Keo/Media/IndexStore.swift \
-  Keo/Media/VideoDate.swift Keo/Sync/SyncModel.swift \
+  Keo/Media/VideoDate.swift Keo/Media/WidgetManifest.swift Keo/Sync/SyncModel.swift \
   Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift Keo/UI/BrowserSource.swift \
   Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
   Tests/sync.swift Tests/search.swift Tests/covers.swift Tests/notes.swift \
-  Tests/stats.swift \
+  Tests/stats.swift Tests/widget.swift \
   -o /tmp/keocheck && /tmp/keocheck
 ```
 
@@ -68,6 +68,19 @@ français, sur le vrai SQLite quand c'est du stockage. Pas de framework, pas de 
   `SearchQuery`, `BrowserSource.parent(of:)`). Continuer comme ça.
 
 ## 4. Appareil
+
+Le projet a **deux cibles** depuis le widget. Construire avec
+`-allowProvisioningUpdates` : le groupe d'app doit être enregistré contre l'App ID, et sans
+ce drapeau la signature échoue pour l'app *et* pour l'extension.
+
+```sh
+xcodebuild -project Keo.xcodeproj -scheme Keo -configuration Debug \
+  -destination 'generic/platform=iOS' -allowProvisioningUpdates build
+ls ~/Library/Developer/Xcode/DerivedData/Keo-*/Build/Products/Debug-iphoneos/Keo.app/PlugIns/
+```
+
+La seconde ligne n'est pas décorative : une édition du `project.pbxproj` qui perd la phase
+d'embarquement produit une app qui compile et s'installe **sans son extension**, sans erreur.
 
 ```sh
 xcrun devicectl list devices                     # UDID des appareils branchés

@@ -2,18 +2,24 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Base privée uniquement : la personnalisation n'est jamais partagée ni publique. -->
-	<key>com.apple.developer.icloud-services</key>
-	<array>
-		<string>CloudKit</string>
-	</array>
-	<key>com.apple.developer.icloud-container-identifiers</key>
-	<array>
-		<string>iCloud.com.oasutalab.keo</string>
-	</array>
 	<!-- CKSyncEngine s'abonne aux pushes silencieux pour apprendre les changements des
 	     autres appareils. Xcode bascule la valeur en production à la distribution. -->
 	<key>aps-environment</key>
 	<string>development</string>
+	<!-- Base privée uniquement : la personnalisation n'est jamais partagée ni publique. -->
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.com.oasutalab.keo</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<!-- Le seul terrain commun avec le widget : des JPEG déjà rendus et leur manifeste.
+	     Ni l'index, ni le trousseau, ni une socket ne le traversent. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.com.oasutalab.keo</string>
+	</array>
 </dict>
 </plist>
