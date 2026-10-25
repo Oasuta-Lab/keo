@@ -167,10 +167,10 @@
 				};
 			};
 			buildConfigurationList = 1A00000000000000000000B1 /* Build configuration list for PBXProject "Keo" */;
-			developmentRegion = en;
+			developmentRegion = fr;
 			hasScannedForEncodings = 0;
 			knownRegions = (
-				en,
+				fr,
 				Base,
 			);
 			mainGroup = 1A00000000000000000000A4;

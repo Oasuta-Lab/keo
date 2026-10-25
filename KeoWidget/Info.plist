@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<string>fr</string>
 	<key>CFBundleDisplayName</key>
 	<string>Keo</string>
 	<key>CFBundleExecutable</key>
@@ -12,23 +12,20 @@
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>fr</string>
+	</array>
 	<key>CFBundleName</key>
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>XPC!</string>
-	<!-- iOS refuse d'installer une app dont l'extension ne porte pas la même version que
-	     l'hôte. Les deux viennent donc des mêmes réglages, et Scripts/stamp-build.sh est
-	     monté sur les deux cibles. -->
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<!-- Délibérément sans NSAppTransportSecurity ni NSLocalNetworkUsageDescription :
-	     l'extension n'ouvre aucune socket. Les déclarer lèverait un second dialogue de
-	     permission, attribué à quelque chose que le propriétaire ne voit pas. -->
 	<key>NSExtension</key>
 	<dict>
-		<!-- Pas de NSExtensionPrincipalClass : le @main WidgetBundle est le point d'entrée. -->
 		<key>NSExtensionPointIdentifier</key>
 		<string>com.apple.widgetkit-extension</string>
 	</dict>

@@ -144,6 +144,16 @@ Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copi
   bleu foncé manquerait de contraste. Il teinte toute l'app : boutons, dossiers, rail de la
   timeline.
 
+## L'app parlait anglais sans le savoir
+
+`CFBundleDevelopmentRegion` valait `en` et aucune localisation française n'était déclarée.
+`Locale.current` résolvait donc en anglais **quel que soit le réglage de l'iPhone** : toutes
+les dates formatées par l'app sortaient en anglais — « August 2011 » sous une interface
+entièrement française. Visible seulement là où un mois s'écrit en toutes lettres, donc resté
+invisible des mois.
+
+Le bundle déclare maintenant `fr`, dans l'app comme dans l'extension widget.
+
 ## L'accueil
 
 Ouvrir Keo tombait dans un listing de dossiers titré d'un nom d'hôte. Ce listing est le
@@ -160,7 +170,7 @@ passées, une page par année, le texte posé sur le dégradé de la photo elle-
 de l'utilisateur, sans une ligne d'extraction de palette), les **dossiers épinglés**, les
 **dernières photos par date de prise de vue** (ce qu'aucune galerie NAS ne fait honnêtement :
 Plex et Jellyfin classent par date d'import, qui sur un NAS est la date de copie, précisément
-le mensonge que cet index existe pour corriger), la **chronologie**, et la carte
+le mensonge que cet index existe pour corriger), et la carte
 **Bibliothèque**.
 
 Tout sort de l'index local : cinq requêtes, pas la douzaine de `statistics`, parce que cet

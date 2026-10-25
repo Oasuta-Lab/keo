@@ -74,7 +74,7 @@ final class Undoer: ObservableObject {
     /// it and none of them should be the place a plural rule is got wrong — note that French
     /// keeps the singular at zero, which `> 1` gets right and `!= 1` would not.
     static func count(_ n: Int, _ one: String, _ many: String) -> String {
-        "\(n) \(n > 1 ? many : one)"
+        "\(n.formatted()) \(n > 1 ? many : one)"
     }
 
     /// Hides the banner without touching the stack: the action stays undoable by shaking,
