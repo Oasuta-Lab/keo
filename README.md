@@ -459,10 +459,10 @@ swiftc -swift-version 6 -D DEBUG Keo/Freebox/Item.swift Keo/Freebox/Transport.sw
   Keo/Freebox/FreeboxClient.swift Keo/Downloads/DownloadJob.swift \
   Keo/Freebox/MediaSection.swift Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift \
   Keo/Media/FolderStamp.swift Keo/Media/WalkOutcome.swift Keo/Media/IndexStore.swift \
-  Keo/Media/VideoDate.swift Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift \
-  Keo/Sync/SyncModel.swift \
+  Keo/Media/VideoDate.swift Keo/Media/WidgetManifest.swift Keo/UI/MediaDate.swift \
+  Keo/UI/RailLayout.swift Keo/Sync/SyncModel.swift \
   Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
-  Tests/sync.swift \
+  Tests/sync.swift Tests/widget.swift \
   -o /tmp/keocheck && /tmp/keocheck
 ```
 
@@ -475,6 +475,10 @@ Couvre la garantie de lecture seule, l'enveloppe `{success, result}`, l'encodage
 la classification des médias, l'éviction LRU, l'arithmétique de progression, et toute la
 partie pure de la synchronisation iCloud (`Tests/sync.swift`) — le moteur CloudKit lui-même ne
 se teste qu'à la main, voir plus haut.
+
+`Tests/widget.swift` couvre le manifeste du widget et, contre le vrai SQLite, la sélection des
+douze couvertures d'un dossier épinglé : tout le sous-arbre, les plus récentes d'abord, les
+vidéos après les photos, les voisins au nom proche exclus.
 
 ## Pièges de l'API Freebox, vérifiés sur la box
 
