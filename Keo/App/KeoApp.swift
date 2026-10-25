@@ -6,6 +6,7 @@ struct KeoApp: App {
     @StateObject private var downloader = Downloader()
     @StateObject private var indexer = Indexer()
     @StateObject private var sync = CloudSync()
+    @StateObject private var undoer = Undoer()
     /// Held here rather than in `Shelf`: a `keo://` URL can land before the box
     /// has answered, and the shelf does not exist yet at that point.
     @State private var link: DeepLink?
@@ -23,11 +24,16 @@ struct KeoApp: App {
             .environmentObject(downloader)
             .environmentObject(indexer)
             .environmentObject(sync)
+            .environmentObject(undoer)
             .preferredColorScheme(.dark)
             // Independent of the Freebox pairing: favourites can come back from iCloud
             // before the box has ever answered.
             .task { await sync.start() }
             .onOpenURL { link = DeepLink($0) }
+            // Zero-sized, and the only place a shake is heard. It gives up first responder
+            // to any text field that wants it, which is right: while typing, a shake belongs
+            // to the field's own undo.
+            .background(ShakeCatcher { undoer.undo() })
         }
     }
 }
@@ -102,6 +108,9 @@ private struct Shelf: View {
             }
         }
         .modifier(MinimisingTabBar())
+        .overlay(alignment: .bottom) {
+            UndoBanner().padding(.bottom, 8)
+        }
         .onChange(of: link) { _, now in
             guard let now else { return }
             open(now)

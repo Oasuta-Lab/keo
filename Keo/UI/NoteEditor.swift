@@ -15,6 +15,7 @@ struct NoteEditor: View {
     @State private var failure: String?
     @FocusState private var writing: Bool
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var undoer: Undoer
 
     var body: some View {
         NavigationStack {
@@ -71,11 +72,20 @@ struct NoteEditor: View {
 
     private func save() {
         let text = body_
+        let item = item
         Task {
             do {
+                // Captured before the write, because clearing the text deletes the note and
+                // there would be nothing left to read it back from.
+                let previous = (try? await IndexStore.shared.note(on: item)) ?? ""
                 try await IndexStore.shared.setNote(text, on: item)
-                onSave(text.trimmingCharacters(in: .whitespacesAndNewlines))
+                let kept = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                onSave(kept)
                 dismiss()
+                guard kept != previous else { return }
+                undoer.record(kept.isEmpty ? "Note supprimée" : "Note enregistrée") {
+                    try? await IndexStore.shared.setNote(previous, on: item)
+                }
             } catch {
                 failure = error.localizedDescription
             }

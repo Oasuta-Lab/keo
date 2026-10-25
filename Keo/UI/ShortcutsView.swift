@@ -3,6 +3,7 @@ import SwiftUI
 /// The Shortcuts tab: folders pinned for one-tap access, wherever they sit in the tree.
 struct ShortcutsView: View {
     let client: FreeboxClient
+    @EnvironmentObject private var undoer: Undoer
 
     @EnvironmentObject private var sync: CloudSync
     @State private var shortcuts: [Item] = []
@@ -53,6 +54,9 @@ struct ShortcutsView: View {
                         Task {
                             try? await IndexStore.shared.setShortcut(folder, false)
                             await reload()
+                            undoer.record("« \(folder.name) » dépinglé") {
+                                try? await IndexStore.shared.setShortcut(folder, true)
+                            }
                         }
                     }
                 }

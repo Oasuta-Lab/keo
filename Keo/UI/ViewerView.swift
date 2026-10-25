@@ -13,6 +13,7 @@ struct ViewerView: View {
 
     @EnvironmentObject private var downloader: Downloader
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var undoer: Undoer
 
     @State private var currentID: Item.ID?
     @State private var drag: CGSize = .zero
@@ -64,6 +65,9 @@ struct ViewerView: View {
         .overlay(alignment: .top) { chrome.opacity(1 - progress) }
         .overlay(alignment: .bottom) {
             VStack(spacing: 10) {
+                // Again here, and not only on the shelf: a cover is drawn over the root, so
+                // an overlay on the root is invisible from the photo.
+                UndoBanner()
                 DownloadBar(downloader: downloader)
                     .frame(maxWidth: 420)
                 actionBar
@@ -109,12 +113,22 @@ struct ViewerView: View {
         let next = !favourite
         favourite = next
         favouriteTaps += 1
-        Task { try? await IndexStore.shared.setFavourite([current], next) }
+        Task {
+            try? await IndexStore.shared.setFavourite([current], next)
+            undoer.record(next ? "1 favori ajouté" : "1 favori retiré") {
+                try? await IndexStore.shared.setFavourite([current], !next)
+            }
+        }
     }
 
     private func add(to collection: IndexStore.Collection) {
         guard let current else { return }
-        Task { try? await IndexStore.shared.setMembership([current], in: collection.id, true) }
+        Task {
+            try? await IndexStore.shared.setMembership([current], in: collection.id, true)
+            undoer.record("Ajouté à « \(collection.name) »") {
+                try? await IndexStore.shared.setMembership([current], in: collection.id, false)
+            }
+        }
     }
 
     /// A paging `ScrollView` rather than `TabView`: a page-style TabView keeps structural

@@ -11,6 +11,7 @@ struct BrowserView: View {
     @EnvironmentObject private var store: Store
     @EnvironmentObject private var downloader: Downloader
     @EnvironmentObject private var sync: CloudSync
+    @EnvironmentObject private var undoer: Undoer
 
     /// Split by kind once, at load. Filtering in computed properties re-scanned the whole
     /// listing on every body evaluation, which is what made large folders stutter.
@@ -333,6 +334,9 @@ struct BrowserView: View {
             let on = !pinned.contains(folder.path)
             try? await IndexStore.shared.setShortcut(folder, on)
             await refreshLibrary()
+            undoer.record(on ? "« \(folder.name) » épinglé" : "« \(folder.name) » dépinglé") {
+                try? await IndexStore.shared.setShortcut(folder, !on)
+            }
         }
     }
 
@@ -340,11 +344,16 @@ struct BrowserView: View {
     private func toggleFavourite() {
         let items = contents.selectable.filter { selection.contains($0) }
         guard !items.isEmpty else { return }
+        let adding = !selectionIsFavourite
         Task {
-            try? await IndexStore.shared.setFavourite(items, !selectionIsFavourite)
+            try? await IndexStore.shared.setFavourite(items, adding)
             await refreshSelectionState()
             await refreshLibrary()
             if source == .favourites { await loadLocal() }
+            undoer.record(Undoer.count(items.count, adding ? "favori ajouté" : "favori retiré",
+                                       adding ? "favoris ajoutés" : "favoris retirés")) {
+                try? await IndexStore.shared.setFavourite(items, !adding)
+            }
         }
     }
 
@@ -369,6 +378,10 @@ struct BrowserView: View {
             await refreshLibrary()
             selecting = false
             selection = []
+            undoer.record(Undoer.count(items.count, "élément ajouté", "éléments ajoutés")
+                        + " à « \(collection.name) »") {
+                try? await IndexStore.shared.setMembership(items, in: collection.id, false)
+            }
         }
     }
 

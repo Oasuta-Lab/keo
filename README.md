@@ -416,6 +416,30 @@ qui est visible. Le compteur de médias, lui, compte les moments : une photo liv
 La migration ne relit rien sur le NAS. Un seul `UPDATE` sur la table `file` marque tous les
 dossiers déjà indexés au premier lancement, gouverné par `liveVersion`.
 
+## Annuler
+
+Retirer trois favoris d'un coup les sortait de la liste instantanément, et la liste était le
+seul endroit où ils existaient : plus rien pour les retrouver. Rien de tout cela ne touche au
+NAS, donc rien n'est dangereux — mais c'est **irrécupérable**, ce qui à l'usage est pire.
+
+Un bandeau *et* un secouage, délibérément les deux. Le secouage est le mécanisme iOS, mais
+personne ne le découvre : seul, la fonctionnalité existerait sans exister. Le bandeau la rend
+visible ; le secouage laisse remonter plus loin, jusqu'à huit pas en arrière.
+
+Sont annulables : les favoris (ajout comme retrait, sélection multiple comprise), l'ajout à une
+collection, l'épinglage d'un dossier, et l'écriture ou l'effacement d'une note. Pour la note,
+le texte précédent est capturé **avant** l'écriture : vider le champ supprime la ligne, et il
+ne resterait rien à relire.
+
+Le bandeau est posé à deux endroits — au-dessus de la barre d'onglets, et à nouveau dans la
+visionneuse. Un `fullScreenCover` est dessiné par-dessus la racine, donc une superposition
+posée sur la racine serait invisible depuis la photo.
+
+Le capteur de secouage est un premier répondeur de taille nulle, faute de geste de secouage en
+SwiftUI et parce que les alternatives sont le *swizzling* de `UIWindow` ou une liste de
+fenêtres dépréciée. Il cède le premier répondeur dès qu'un champ de texte le réclame, ce qui
+est le comportement voulu : pendant qu'on tape, un secouage appartient à l'annulation du champ.
+
 ## Notes
 
 Une note sur une photo, une vidéo ou un dossier. C'est la seule personnalisation dont le

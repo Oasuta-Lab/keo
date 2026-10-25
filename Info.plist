@@ -58,6 +58,8 @@
 	<string>Pour enregistrer dans votre pellicule les photos et vidéos téléchargées depuis la Freebox.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIApplicationSupportsShakeToEdit</key>
+	<true/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
