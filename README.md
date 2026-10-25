@@ -547,6 +547,10 @@ Quand le tri est par date, la grille se regroupe et un rail apparaît à droite.
   photographié. Les changements d'année sont étiquetés, avec au moins 64 pt entre deux : sur quinze ans, elles
 s'empilaient par-dessus la grille. Et sans trait de rattachement après le texte — « 2025 – » se
 lisait comme une étiquette privée de sa valeur. On le glisse pour sauter directement.
+- **Le rail ne prend que 16 pt au repos**, et s'élargit à 44 pt une fois le doigt parti en
+  glissade. Il en occupait 44 en permanence : un tiers de la colonne de droite ne pouvait plus
+  ouvrir une photo, le tapotement partait au rail. Et il faut maintenant parcourir 8 pt pour
+  l'armer, sinon un simple tapotement comptait comme une glissade et téléportait la grille.
 - Le segment de la période à l'écran est mis en avant, via la position des en-têtes rendus.
 - Les fichiers **sans date** forment une section en fin de liste plutôt que de disparaître.
 
@@ -676,6 +680,39 @@ et le verdict de fin de parcours avec tous ses compteurs.
 C'est ce qui a montré, noir sur blanc, qu'une reprise visitait deux dossiers et se déclarait
 terminée. **Ne pas modifier le cycle de vie de l'indexation sur la foi d'un raisonnement :
 brancher la console d'abord.**
+
+## Toucher, haptique et VoiceOver
+
+Les cibles tactiles tiennent les 44 pt sans grossir à l'écran : la barre de sélection, les
+pastilles d'indexation et le bouton « Retirer » du bandeau élargissent leur zone de contact,
+pas leur dessin.
+
+Trois retours haptiques, et seulement trois — le système possède déjà ceux du défilement et du
+feuilletage, en ajouter par-dessus donnerait un appareil qui vibre en continu :
+
+| Geste | Retour |
+|---|---|
+| Rail de timeline, à chaque période franchie | `.selection` |
+| Cœur en plein écran | `.impact(.soft)` |
+| Cellule ajoutée ou retirée de la sélection | `.selection` |
+
+Le rail se déclenche sur la période active, pas sur la position du doigt : une glissade d'un
+bout à l'autre rend un cran par mois traversé, pas cent vingt par seconde. Le cœur compte les
+tapotements et non l'état du favori, sinon feuilleter d'une photo aimée vers une autre
+vibrerait tout seul.
+
+**À vérifier à la main** — rien de tout ça ne se simule, ni ne se teste depuis un Mac :
+
+- Dossier daté, grille en mois : taper une photo de la colonne de droite l'ouvre, à ras du
+  bord de l'écran. Puis glisser depuis ce même bord scrute toujours la timeline.
+- Glisser le rail sur plusieurs années : un cran par période, aucun crépitement continu.
+- Cœur en plein écran : une impulsion au tapotement, rien en feuilletant entre une photo
+  aimée et une autre.
+- Sélection : un cran par cellule, et « Tout » n'en produit qu'un seul.
+- VoiceOver activé : balayer la grille annonce le nom du fichier et « Sélectionné » le cas
+  échéant ; le rail est ignoré, les en-têtes de période servent de navigation ; en plein écran,
+  les quatre boutons s'annoncent « Fermer », « Favori », « Ajouter à une collection »,
+  « Enregistrer ou partager ».
 
 ## Vérifier
 
