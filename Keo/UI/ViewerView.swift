@@ -33,6 +33,10 @@ struct ViewerView: View {
     @State private var choosingCollection = false
     /// Capture dates discovered while opening a file, keyed by path.
     @State private var captured: [Item.ID: Date] = [:]
+    /// Same reason as `livePlaying`: the transport sits in the bottom bar, which the page
+    /// does not own. Keyed by page rather than a single slot — paging builds the neighbour
+    /// before it retires the page leaving, and one slot would hand the bar the wrong player.
+    @State private var players: [Item.ID: AVPlayer] = [:]
 
     /// The dismiss drag rewrites `drag` on every touch frame and the body reads `current`
     /// several times per pass; a linear scan of a 14 600-item folder does not fit in a frame.
@@ -157,7 +161,8 @@ struct ViewerView: View {
                 ForEach(items) { item in
                     Page(item: item, client: client, live: companions[item.id],
                          playing: item.id == currentID ? $livePlaying : .constant(false),
-                         zoomed: $zoomed, onCaptureDate: { captured[item.id] = $0 })
+                         zoomed: $zoomed, onCaptureDate: { captured[item.id] = $0 },
+                         onPlayer: { players[item.id] = $0 })
                         .containerRelativeFrame(.horizontal)
                         .id(item.id)
                 }
@@ -223,6 +228,11 @@ struct ViewerView: View {
     /// to four all write to Keo's own index — note, collection, favourite — and rise in
     /// frequency towards the thumb. Live is in none of those families: it changes what is on
     /// screen, not what is recorded, so it is not in the group at all.
+    ///
+    /// On a video the capsule grows a second row above the glyphs rather than a second
+    /// capsule beside them: the transport and the actions were two objects fighting for the
+    /// same inch of thumb, and the one drawn from the page could only guess the other's
+    /// height — it guessed 84 pt and was 10 pt short.
     private var actionBar: some View {
         Group {
             if #available(iOS 26.0, *) {
@@ -242,9 +252,30 @@ struct ViewerView: View {
         return companions[current.id] != nil
     }
 
+    private var currentPlayer: AVPlayer? {
+        guard let currentID else { return nil }
+        return players[currentID]
+    }
+
+    /// A capsule's radius is half its height, so on the two-row video bar it would bite into
+    /// the glyphs. Fixed radius there, true capsule when the transport is away — and the
+    /// same `glassEffectID` either way, so the bar grows its row instead of popping.
+    private var barShape: AnyShape {
+        currentPlayer == nil
+            ? AnyShape(Capsule())
+            : AnyShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+    }
+
     private func barRow(morphing: Bool) -> some View {
-        cluster
-            .modifier(BarSurface(shape: AnyShape(Capsule()), morphing: morphing,
+        VStack(spacing: 0) {
+            if let player = currentPlayer {
+                Transport(player: player)
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+            }
+            cluster
+        }
+            .modifier(BarSurface(shape: barShape, morphing: morphing,
                                  id: "cluster", in: glassSpace))
             .frame(maxWidth: .infinity)
             // An overlay is positioned, not laid out against its siblings, so the bubble
@@ -260,6 +291,7 @@ struct ViewerView: View {
                 }
             }
             .animation(.snappy(duration: 0.25), value: hasLive)
+            .animation(.snappy(duration: 0.25), value: currentPlayer != nil)
             .padding(.horizontal, 16)
     }
 
@@ -436,11 +468,13 @@ private struct Page: View {
     @Binding var playing: Bool
     @Binding var zoomed: Bool
     let onCaptureDate: (Date) -> Void
+    let onPlayer: (AVPlayer?) -> Void
 
     var body: some View {
         switch item.kind {
         case .video:
-            VideoPage(item: item, client: client, onCaptureDate: onCaptureDate)
+            VideoPage(item: item, client: client, onCaptureDate: onCaptureDate,
+                      onPlayer: onPlayer)
         case .other:
             DocumentPage(item: item, client: client)
         default:
@@ -511,6 +545,7 @@ private struct VideoPage: View {
     let item: Item
     let client: FreeboxClient
     let onCaptureDate: (Date) -> Void
+    let onPlayer: (AVPlayer?) -> Void
 
     @State private var source: AuthenticatedAsset?   // owns the resource loader
     @State private var player: AVPlayer?
@@ -521,13 +556,6 @@ private struct VideoPage: View {
             Color.black
             if let player {
                 PlayerSurface(player: player)
-                    .overlay(alignment: .bottom) {
-                        Transport(player: player)
-                            // Dessinée par-dessus, pas insérée : l'image garde toute la
-                            // fenêtre, en portrait comme en paysage.
-                            .padding(.horizontal, 20)
-                            .padding(.bottom, 84)
-                    }
             } else if let failure {
                 ContentUnavailableView("Lecture impossible", systemImage: "play.slash",
                                        description: Text(failure))
@@ -556,7 +584,13 @@ private struct VideoPage: View {
                 failure = error.localizedDescription
             }
         }
-        .onDisappear { player?.pause() }
+        // Covers the failure path as well as the happy one: `reportFailure` clears `player`,
+        // and the bar has to lose its transport with it.
+        .onChange(of: player) { _, now in onPlayer(now) }
+        .onDisappear {
+            player?.pause()
+            onPlayer(nil)
+        }
     }
 
     /// Without this a broken stream just spins forever with nothing to go on.
@@ -599,7 +633,9 @@ private struct PlayerSurface: UIViewControllerRepresentable {
     }
 }
 
-/// Lecture, position, durée. Le strict nécessaire, dans la même capsule que les actions.
+/// Lecture, position, durée. Le strict nécessaire, et sans fond à lui : c'est une rangée de
+/// la capsule des actions, pas une capsule de plus — deux pastilles empilées au même endroit
+/// se disputaient le pouce et le bas de l'écran.
 private struct Transport: View {
     let player: AVPlayer
 
@@ -608,7 +644,6 @@ private struct Transport: View {
     @State private var playing = true
     /// Pendant qu'un doigt tient la tête de lecture, l'horloge n'a pas son mot à dire.
     @State private var scrubbing = false
-    @Namespace private var space
 
     var body: some View {
         HStack(spacing: 12) {
@@ -638,10 +673,6 @@ private struct Transport: View {
         }
         .font(.caption)
         .foregroundStyle(.white)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .modifier(BarSurface(shape: AnyShape(Capsule()), morphing: true,
-                             id: "transport", in: space))
         .task {
             if let duration = try? await player.currentItem?.asset.load(.duration),
                duration.isNumeric {
