@@ -117,14 +117,17 @@ struct HomeView: View {
             // No header: the card says « CE JOUR-LÀ » itself, over the photo, and a title
             // above a title is the kind of stacking that makes a screen feel like a form.
             TabView {
-                ForEach(memoriesByYear, id: \.year) { group in
-                    MemoryCard(group: group, client: client) {
+                ForEach(Array(memoriesByYear.enumerated()), id: \.element.year) { page, group in
+                    MemoryCard(group: group, page: page, pages: memoriesByYear.count,
+                               client: client) {
                         destination = .results(
                             title: "Ce jour-là en \(group.year)", items: group.items)
                     }
                 }
             }
-            .tabViewStyle(.page(indexDisplayMode: memoriesByYear.count > 1 ? .automatic : .never))
+            // The system dots sit bottom-centre, straight on top of the year and the date.
+            // Drawn inside the card instead, in the one corner nothing else uses.
+            .tabViewStyle(.page(indexDisplayMode: .never))
             .aspectRatio(4 / 3, contentMode: .fit)
         }
     }
@@ -327,6 +330,8 @@ struct HomeView: View {
 /// itself — the owner's colour, with no extraction code anywhere.
 private struct MemoryCard: View {
     let group: (year: Int, items: [Item])
+    let page: Int
+    let pages: Int
     let client: FreeboxClient
     let open: () -> Void
 
@@ -343,6 +348,23 @@ private struct MemoryCard: View {
 
                 LinearGradient(colors: [.black.opacity(0.75), .clear],
                                startPoint: .bottom, endPoint: .center)
+
+                if pages > 1 {
+                    HStack(spacing: 5) {
+                        ForEach(0..<pages, id: \.self) { index in
+                            Circle()
+                                .fill(.white.opacity(index == page ? 0.95 : 0.4))
+                                .frame(width: 6, height: 6)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.35), in: Capsule())
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .allowsHitTesting(false)
+                    .accessibilityLabel("Année \(page + 1) sur \(pages)")
+                }
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text("CE JOUR-LÀ")
