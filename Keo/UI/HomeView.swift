@@ -26,6 +26,7 @@ struct HomeView: View {
     @State private var recent: [Item] = []
     @State private var destination: BrowserSource?
     @State private var showingIndexing = false
+    @State private var picked: Int?
 
     private var memoriesByYear: [(year: Int, items: [Item])] {
         guard let summary else { return [] }
@@ -155,20 +156,38 @@ struct HomeView: View {
 
     // MARK: Chronologie
 
+    /// Bars you can land on, not a shape to admire.
+    ///
+    /// Built first as a silent chart with no scale and no tap, which failed the rule the
+    /// whole screen is built on: a number nobody can go and check is a number nobody should
+    /// believe, and a chart that answers nothing is decoration. Touching a year opens it.
     @ViewBuilder
     private var chronology: some View {
         if let summary, summary.years.count >= 2 {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Chronologie").font(.title3.bold())
-                VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("Chronologie").font(.title3.bold())
+                    Text("photos par année")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 12) {
+                    // The readout replaces the missing Y axis: touching a bar says the year
+                    // and the count in words, which is what an axis would have made you
+                    // squint to work out.
+                    Text(pickedLabel(summary))
+                        .font(.subheadline.weight(.medium))
+                        .fontDesign(.rounded)
+                        .contentTransition(.numericText())
+
                     Chart(summary.years) { tally in
-                        BarMark(x: .value("Année", tally.year),
-                                y: .value("Nombre", tally.total))
-                            .foregroundStyle(.tint)
+                        BarMark(x: .value("Année", tally.year), y: .value("Photos", tally.total))
+                            .foregroundStyle(picked == nil || picked == tally.year
+                                             ? AnyShapeStyle(.tint)
+                                             : AnyShapeStyle(.tint.opacity(0.35)))
                     }
                     .chartYAxis(.hidden)
-                    // First and last year only: a decade of labels under a 110 pt chart is
-                    // noise, and the two ends are what "the shape of a life" needs.
                     .chartXAxis {
                         AxisMarks(values: [summary.years.first?.year ?? 0,
                                            summary.years.last?.year ?? 0]) { value in
@@ -177,6 +196,22 @@ struct HomeView: View {
                                     Text(String(year)).font(.caption2).fontDesign(.rounded)
                                 }
                             }
+                        }
+                    }
+                    .chartOverlay { proxy in
+                        GeometryReader { geometry in
+                            Rectangle().fill(.clear).contentShape(Rectangle())
+                                .gesture(
+                                    DragGesture(minimumDistance: 0)
+                                        .onChanged { value in
+                                            picked = year(at: value.location, proxy, geometry,
+                                                          summary)
+                                        }
+                                        .onEnded { _ in
+                                            if let picked { open(year: picked) }
+                                            picked = nil
+                                        }
+                                )
                         }
                     }
                     .frame(height: 110)
@@ -191,6 +226,33 @@ struct HomeView: View {
                 .background(.quaternary.opacity(0.4),
                             in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             }
+        }
+    }
+
+    private func pickedLabel(_ summary: HomeSummary) -> String {
+        guard let picked, let tally = summary.years.first(where: { $0.year == picked }) else {
+            let total = summary.years.reduce(0) { $0 + $1.total }
+            let span = "\(summary.years.first?.year ?? 0) – \(summary.years.last?.year ?? 0)"
+            return "\(Undoer.count(total, "photo datée", "photos datées")) · \(span)"
+        }
+        return "\(tally.year) · \(Undoer.count(tally.total, "photo", "photos"))"
+    }
+
+    private func year(at point: CGPoint, _ proxy: ChartProxy,
+                      _ geometry: GeometryProxy, _ summary: HomeSummary) -> Int? {
+        guard let plot = proxy.plotFrame else { return nil }
+        let x = point.x - geometry[plot].origin.x
+        guard let value: Int = proxy.value(atX: x) else { return nil }
+        // Nearest known year, so the gap left by a year with no photo does not swallow a tap.
+        return summary.years.min { abs($0.year - value) < abs($1.year - value) }?.year
+    }
+
+    private func open(year: Int) {
+        Task {
+            let found = (try? await IndexStore.shared.search(SearchQuery(period: .year(year)),
+                                                             limit: 2_000)) ?? []
+            guard !found.isEmpty else { return }
+            destination = .results(title: String(year), items: found)
         }
     }
 
