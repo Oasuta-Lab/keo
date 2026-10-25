@@ -10,6 +10,11 @@ struct IndexingView: View {
 
     @State private var confirmingRebuild = false
     @State private var knownCount = 0
+    #if DEBUG
+    @State private var bench: (path: String, count: Int)?
+    @State private var benching = false
+    @State private var benchResult: [ReadBench.Run] = []
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -81,6 +86,10 @@ struct IndexingView: View {
                        + "L'indexation se met en pause quand tu quittes l'app et reprend au retour. "
                        + "Elle continue pendant que tu navigues, en laissant la priorité aux vignettes.")
                 }
+
+                #if DEBUG
+                benchSection
+                #endif
             }
             .alert("Index inaccessible", isPresented: Binding(
                 get: { indexer.failure != nil },
@@ -90,7 +99,12 @@ struct IndexingView: View {
             } message: {
                 Text(indexer.failure ?? "")
             }
-            .task { knownCount = (try? await IndexStore.shared.fileCount()) ?? 0 }
+            .task {
+                knownCount = (try? await IndexStore.shared.fileCount()) ?? 0
+                #if DEBUG
+                bench = try? await IndexStore.shared.largestFolder()
+                #endif
+            }
             .confirmationDialog("Tout relire depuis zéro ?", isPresented: $confirmingRebuild,
                                 titleVisibility: .visible) {
                 Button("Effacer et tout relire", role: .destructive) {
@@ -111,6 +125,49 @@ struct IndexingView: View {
     }
 
     /// Says what it costs, in the user's own numbers, before anything is thrown away.
+    #if DEBUG
+    /// Debug builds only: `Indexer.parallel = 3` was a cautious guess, never measured.
+    /// One tap, then read the `[keo] bench:` lines off the device console.
+    @ViewBuilder
+    private var benchSection: some View {
+        Section {
+            if let bench {
+                Button(benching ? "Mesure en cours…" : "Mesurer les lectures",
+                       systemImage: "speedometer") {
+                    measure(bench.path)
+                }
+                .disabled(benching || indexer.state.isRunning)
+
+                ForEach(benchResult, id: \.parallel) { run in
+                    Text(run.line)
+                        .font(.system(size: 11, design: .monospaced))
+                }
+            } else {
+                Text("Rien d'indexé à mesurer")
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Banc d'essai (debug)")
+        } footer: {
+            if let bench {
+                Text("Lit des prefixes de 24 Ko dans « \(bench.path) » (\(bench.count) médias) "
+                   + "à plusieurs niveaux de parallélisme, chacun sur des fichiers différents "
+                   + "pour ne pas mesurer le cache de la box. N'écrit rien, ni sur le NAS ni "
+                   + "dans l'index.")
+            }
+        }
+    }
+
+    private func measure(_ folder: String) {
+        benching = true
+        benchResult = []
+        Task {
+            benchResult = await ReadBench.run(folder: folder, client: client)
+            benching = false
+        }
+    }
+    #endif
+
     private var rebuildWarning: String {
         let dates = knownCount.formatted()
         return "Les \(dates) dates déjà lues seront effacées, puis chaque photo sera relue "

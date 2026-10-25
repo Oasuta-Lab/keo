@@ -4,3 +4,6 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 *.xcworkspace/xcuserdata/
+
+# Copies de travail des agents : du jetable, jamais du dépôt
+.claude/worktrees/

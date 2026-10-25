@@ -1606,6 +1606,21 @@ actor IndexStore {
         return years
     }
 
+    #if DEBUG
+    /// The folder with the most indexed media — what `ReadBench` should be pointed at, so the
+    /// measurement is not dominated by the cost of listing a folder of twelve files.
+    func largestFolder() throws -> (path: String, count: Int)? {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT path, media_count FROM folder WHERE media_count IS NOT NULL "
+                  + "ORDER BY media_count DESC LIMIT 1", into: &statement)
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let raw = sqlite3_column_text(statement, 0) else { return nil }
+        return (String(cString: raw), Int(sqlite3_column_int64(statement, 1)))
+    }
+    #endif
+
     /// Folders the index has read end to end — what search can actually see.
     func indexedFolderCount() throws -> Int {
         try open()
