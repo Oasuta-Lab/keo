@@ -84,12 +84,10 @@ struct ViewerView: View {
         .sheet(item: $annotating) { item in
             NoteEditor(item: item) { body in hasNote = !body.isEmpty }
         }
-        .confirmationDialog("Ajouter à une collection", isPresented: $choosingCollection,
-                            titleVisibility: .visible) {
-            ForEach(collections) { collection in
-                Button(collection.name) { add(to: collection) }
-            }
-            Button("Annuler", role: .cancel) {}
+        .collectionPicker(choosing: $choosingCollection, collections: collections) { collection in
+            add(to: collection)
+        } create: { name in
+            createCollection(named: name)
         }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: favouriteTaps)
         .task { collections = (try? await IndexStore.shared.collections()) ?? [] }
@@ -125,6 +123,18 @@ struct ViewerView: View {
             try? await IndexStore.shared.setFavourite([current], next)
             undoer.record(next ? "1 favori ajouté" : "1 favori retiré") {
                 try? await IndexStore.shared.setFavourite([current], !next)
+            }
+        }
+    }
+
+    private func createCollection(named name: String) {
+        guard let current else { return }
+        Task {
+            guard let id = try? await IndexStore.shared.createCollection(named: name) else { return }
+            try? await IndexStore.shared.setMembership([current], in: id, true)
+            collections = (try? await IndexStore.shared.collections()) ?? []
+            undoer.record("Ajouté à « \(name) »") {
+                try? await IndexStore.shared.setMembership([current], in: id, false)
             }
         }
     }

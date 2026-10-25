@@ -259,12 +259,10 @@ struct BrowserView: View {
                 if !source.isOnNAS { await loadLocal() }
             }
         }
-        .confirmationDialog("Ajouter à une collection", isPresented: $choosingCollection,
-                            titleVisibility: .visible) {
-            ForEach(collections) { collection in
-                Button(collection.name) { addSelection(to: collection) }
-            }
-            Button("Annuler", role: .cancel) {}
+        .collectionPicker(choosing: $choosingCollection, collections: collections) { collection in
+            addSelection(to: collection)
+        } create: { name in
+            createCollection(named: name)
         }
         .task {
             // A relaunch after iOS killed the app mid-index still has somewhere to pick up.
@@ -376,6 +374,23 @@ struct BrowserView: View {
             allStarred = (try? await IndexStore.shared.isFavourite(item)) ?? false
         }
         selectionIsFavourite = allStarred
+    }
+
+    /// Creates it and files the selection in one go, from wherever the user already was.
+    private func createCollection(named name: String) {
+        let items = contents.selectable.filter { selection.contains($0) }
+        guard !items.isEmpty else { return }
+        Task {
+            guard let id = try? await IndexStore.shared.createCollection(named: name) else { return }
+            try? await IndexStore.shared.setMembership(items, in: id, true)
+            await refreshLibrary()
+            selecting = false
+            selection = []
+            undoer.record(Undoer.count(items.count, "élément ajouté", "éléments ajoutés")
+                        + " à « \(name) »") {
+                try? await IndexStore.shared.setMembership(items, in: id, false)
+            }
+        }
     }
 
     private func addSelection(to collection: IndexStore.Collection) {
