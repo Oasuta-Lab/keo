@@ -753,6 +753,25 @@ parseur. N'écrit rien, ni sur le NAS ni dans l'index.
 Un seul passage ne suffit pas à conclure. La constante ne bouge que sur plusieurs passages
 indépendants qui disent la même chose.
 
+## Ce qui se réévalue pendant le scroll
+
+Trois choses se cumulaient sur la grille de 14 600 éléments, et toutes les trois pendant le
+scroll :
+
+- Chaque en-tête épinglé publiait sa position par `PreferenceKey` à chaque frame, et
+  `onPreferenceChange` écrivait un `@State` de `BrowserView` — donc réévaluait ses huit cents
+  lignes de corps, par frame. Renvoyer une préférence dans l'état du parent est la façon
+  canonique de défaire les conteneurs paresseux qui se trouvent en dessous.
+- Chacune de ces réévaluations reconstruisait `Array(items.enumerated())` pour chaque section
+  instanciée : un mois de 5 000 photos payait 5 000 allocations de tuples par frame, juste
+  pour alimenter `ForEach`.
+- Le geste de fermeture du plein écran cherchait la photo courante par balayage linéaire du
+  tableau, à chaque frame du glissement.
+
+La section active vit maintenant dans un `SectionCursor` observable que **seul le rail** lit :
+le corps de la grille ne s'y abonne plus, donc seul le rail s'invalide. Les positions sont
+pré-calculées une fois par chargement dans un dictionnaire, et la visionneuse en a un aussi.
+
 ## Tenue à l'échelle
 
 La galerie est supposée très grande. Ce qui a été fait pour ça :

@@ -7,7 +7,9 @@ import SwiftUI
 /// you barely did. Dragging it jumps straight to that period.
 struct TimelineRail: View {
     let sections: [MediaSection]
-    let activeID: MediaSection.ID?
+    /// Read here rather than passed down as a value: the grid's body must not be
+    /// re-evaluated every time the scroll crosses a section boundary.
+    @Bindable var cursor: SectionCursor
     let onJump: (MediaSection.ID) -> Void
 
     @State private var dragging: MediaSection.ID?
@@ -76,7 +78,7 @@ struct TimelineRail: View {
     // MARK: Pieces
 
     private func segment(_ bar: Bar, height: CGFloat) -> some View {
-        let highlighted = bar.id == (dragging ?? activeID)
+        let highlighted = bar.id == (dragging ?? cursor.id)
         return Capsule()
             .fill(highlighted ? AnyShapeStyle(.tint) : AnyShapeStyle(.white.opacity(0.42)))
             .frame(width: highlighted ? Self.activeWidth : Self.railWidth,
@@ -143,4 +145,16 @@ struct TimelineRail: View {
         guard let index = RailLayout.index(at: fraction, in: segments) else { return nil }
         return bars[index]
     }
+}
+
+
+/// The one piece of state the rail and the grid share while scrolling.
+///
+/// `@Observable` and not `@State` on the grid: a preference that publishes on every frame,
+/// written back into the grid's own state, re-evaluates eight hundred lines of body per frame
+/// and defeats the lazy containers underneath. Only the rail reads this, so only the rail
+/// invalidates.
+@Observable
+final class SectionCursor {
+    var id: MediaSection.ID?
 }

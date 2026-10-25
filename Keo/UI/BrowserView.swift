@@ -26,7 +26,13 @@ struct BrowserView: View {
 
     /// Only built when sorting by date — grouping a name-sorted grid by month would be noise.
     @State private var sections: [MediaSection] = []
-    @State private var activeSection: MediaSection.ID?
+    /// Which section is under the top edge. Deliberately a reference the rail reads for
+    /// itself rather than `@State` this view reads: a `@State` write re-evaluates this
+    /// whole body, and the preference publishes on every scroll frame.
+    @State private var cursor = SectionCursor()
+    /// Position of each photo in the flat media array, so a cell can find its prefetch
+    /// window without rebuilding `Array(enumerated())` per section per frame.
+    @State private var mediaIndex: [Item.ID: Int] = [:]
     @EnvironmentObject private var indexer: Indexer
     @State private var showingIndexing = false
     @State private var showingStats = false
@@ -105,14 +111,14 @@ struct BrowserView: View {
                     if sectioned {
                         ForEach(sections) { section in
                             Section {
-                                grid(section.items, from: section.startIndex)
+                                grid(section.items)
                             } header: {
                                 SectionHeader(section: section)
                             }
                             .id(section.id)
                         }
                     } else if !contents.media.isEmpty {
-                        grid(contents.media, from: 0)
+                        grid(contents.media)
                     }
 
                     ForEach(contents.documents) { document in
@@ -127,11 +133,11 @@ struct BrowserView: View {
             }
             .coordinateSpace(name: Self.gridSpace)
             .onPreferenceChange(SectionTopKey.self) { tops in
-                activeSection = Self.topmost(of: tops)
+                cursor.id = Self.topmost(of: tops)
             }
             .overlay(alignment: .trailing) {
                 if sectioned, !selecting {
-                    TimelineRail(sections: sections, activeID: activeSection) { id in
+                    TimelineRail(sections: sections, cursor: cursor) { id in
                         withAnimation(.easeOut(duration: 0.18)) {
                             proxy.scrollTo(id, anchor: .top)
                         }
@@ -249,15 +255,13 @@ struct BrowserView: View {
         .onChange(of: granularity) { _, _ in rebuildSections() }
     }
 
-    /// `offset` is the position of the first item inside the flat media array, so each cell
-    /// can still work out its prefetch window.
-    private func grid(_ items: [Item], from offset: Int) -> some View {
+    private func grid(_ items: [Item]) -> some View {
         LazyVGrid(columns: columns, spacing: 2) {
-            ForEach(Array(items.enumerated()), id: \.element) { index, item in
+            ForEach(items) { item in
                 Button { tap(item) } label: {
                     Thumb(item: item, client: client,
                           selected: selecting ? selection.contains(item) : nil,
-                          lookahead: lookahead(after: offset + index))
+                          lookahead: lookahead(after: item))
                         .overlay(alignment: .topLeading) {
                             if noted.contains(item.path) { NoteBadge() }
                         }
@@ -525,7 +529,8 @@ struct BrowserView: View {
     }
 
     /// The window a cell warms up when it appears — roughly two screens ahead.
-    private func lookahead(after index: Int) -> ArraySlice<Item> {
+    private func lookahead(after item: Item) -> ArraySlice<Item> {
+        guard let index = mediaIndex[item.id] else { return [] }
         let start = index + 1
         guard start < contents.media.count else { return [] }
         return contents.media[start..<min(start + 24, contents.media.count)]
@@ -622,7 +627,12 @@ struct BrowserView: View {
         sections = order == .name
             ? []
             : MediaGrouping.sections(from: contents.media, granularity: granularity)
-        activeSection = sections.first?.id
+        cursor.id = sections.first?.id
+        // `uniquingKeysWith` rather than `uniqueKeysWithValues`: nothing guarantees distinct
+        // paths in a hand-assembled list, and a duplicate must not kill the grid over a
+        // prefetch hint.
+        mediaIndex = Dictionary(contents.media.enumerated().map { ($0.element.id, $0.offset) },
+                                uniquingKeysWith: { first, _ in first })
     }
 
     private func load() async {
