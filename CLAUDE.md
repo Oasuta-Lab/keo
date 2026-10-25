@@ -86,8 +86,10 @@ xcrun devicectl device process launch --device <UDID> --console com.oasutalab.ke
 - **Cycle de vie de l'indexation** : trois correctifs plausibles et faux avant celui qui a
   marché. Ne rien y changer sur la foi d'un raisonnement — brancher la console de l'appareil
   d'abord et partir de ce qu'elle raconte. Voir README, « Lire les traces de l'appareil ».
-- **`Pairing.appID` vaut `fr.yieldstudio.keo`** et ne doit pas suivre l'identifiant de bundle :
-  c'est ce que la box a autorisé. Le changer oblige à réappuyer sur ✓ sur la Freebox.
+- **`Pairing.appID` est ce que la box a autorisé**, pas l'identifiant de bundle — ils
+  coïncident aujourd'hui, c'est tout. Le changer invalide l'autorisation : jeton refusé,
+  `Store.reconnectIfPossible` le jette, et il faut réappuyer sur ✓ sur la face avant de la
+  Freebox. Ne pas y toucher sans le dire.
 - **Migration de schéma SQLite** : une colonne `NOT NULL DEFAULT 0` sur `kind` a transformé
   toutes les photos déjà indexées en dossiers. Vérifier ce que vaut la valeur par défaut dans
   l'énumération, pas seulement dans le SQL.

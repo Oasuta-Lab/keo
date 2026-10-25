@@ -36,7 +36,10 @@ struct FreeboxEndpoint: Sendable, Equatable {
 
 /// One-time handshake: the box prints a prompt on its front panel and the user presses ✓.
 enum Pairing {
-    static let appID = "fr.yieldstudio.keo"
+    /// What the box stores its authorization against — not the bundle identifier, even though
+    /// they match today. Changing it invalidates the authorization: the stored token is then
+    /// refused, `Store.reconnectIfPossible` drops it, and the app asks to pair again.
+    static let appID = "com.oasutalab.keo"
 
     struct Request: Decodable, Sendable {
         let app_token: String

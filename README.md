@@ -461,12 +461,12 @@ Trois idées portent tout le reste :
 ### Configuration — ce que le propriétaire doit faire à la main
 
 Le dépôt contient déjà `Keo/Keo.entitlements` (CloudKit, conteneur
-`iCloud.fr.yieldstudio.keo`, `aps-environment`) et le mode background `remote-notification`.
+`iCloud.com.oasutalab.keo`, `aps-environment`) et le mode background `remote-notification`.
 Le build **simulateur** passe tel quel. Pour un appareil, une fois, dans Xcode avec le compte
 de l'équipe ton équipe Apple :
 
 1. Cible Keo → *Signing & Capabilities* → vérifier que les capacités **iCloud → CloudKit**
-   (conteneur `iCloud.fr.yieldstudio.keo`) et **Push Notifications** apparaissent ; la
+   (conteneur `iCloud.com.oasutalab.keo`) et **Push Notifications** apparaissent ; la
    signature automatique enregistre alors l'App ID et crée le conteneur.
 2. Premier lancement en debug : le schéma (type `Personalisation`, champs chiffrés) se crée
    tout seul dans l'environnement **Development** au premier enregistrement.
