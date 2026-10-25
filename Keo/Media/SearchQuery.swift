@@ -3,13 +3,24 @@ import Foundation
 /// What the user is looking for. Pure, so the matching rules can be checked without a database.
 struct SearchQuery: Equatable, Hashable, Sendable {
     enum Kinds: String, CaseIterable, Sendable {
-        case everything, photos, videos
+        case everything, photos, videos, documents
 
         var label: String {
             switch self {
             case .everything: return "Tout"
             case .photos: return "Photos"
             case .videos: return "Vidéos"
+            case .documents: return "Fichiers"
+            }
+        }
+
+        /// Matches `Item.Kind.code`. Folders never appear here: they have no type.
+        var codes: [Int] {
+            switch self {
+            case .everything: return [1, 2, 3]
+            case .photos: return [1]
+            case .videos: return [2]
+            case .documents: return [3]
             }
         }
     }

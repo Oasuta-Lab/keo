@@ -53,6 +53,24 @@ func checkSearch() async throws {
     assert(!hits.contains { $0.isDirectory && $0.name == "Été 2024" },
            "« Photos » ne doit pas remonter tous les sous-dossiers de /Photos")
 
+    // --- les documents, qui n'ont ni date ni vignette ------------------------------------
+    let pdf = Item(path: "\(other)/Contrat.pdf", name: "Contrat.pdf", isDirectory: false,
+                   size: 90_000, modified: nil, mimeType: "application/pdf")
+    try await store.commit([(pdf, nil)], in: other, generation: generation)
+
+    hits = try await store.search(SearchQuery(text: "contrat"))
+    assert(hits.map(\.name) == ["Contrat.pdf"],
+           "un PDF doit se chercher comme le reste — \(hits.map(\.name))")
+
+    hits = try await store.search(SearchQuery(kinds: .documents))
+    assert(hits.map(\.name) == ["Contrat.pdf"], "filtre fichiers — \(hits.map(\.name))")
+
+    hits = try await store.search(SearchQuery(kinds: .photos))
+    assert(!hits.contains { $0.name.hasSuffix(".pdf") }, "un PDF n'est pas une photo")
+
+    hits = try await store.search(SearchQuery(text: "contrat", period: .year(2024)))
+    assert(hits.isEmpty, "un document n'a pas de date : une période l'exclut forcément")
+
     // --- les filtres ---------------------------------------------------------------------
     hits = try await store.search(SearchQuery(kinds: .videos))
     assert(hits.map(\.name) == ["Rentrée.mov"], "filtre vidéo — \(hits.map(\.name))")
@@ -97,5 +115,5 @@ func checkSearch() async throws {
     let dated = hits.filter { !$0.isDirectory }.compactMap(\.captureDate)
     assert(dated == dated.sorted(by: >), "les résultats datés descendent — \(dated)")
 
-    print("ok — recherche : accents, jokers SQL, filtres type/année/intervalle/favoris, dossiers par leur nom")
+    print("ok — recherche : accents, jokers SQL, filtres type/fichiers/année/intervalle/favoris, dossiers par leur nom")
 }

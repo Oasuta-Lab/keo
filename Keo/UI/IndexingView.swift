@@ -23,7 +23,7 @@ struct IndexingView: View {
                     if let progress = indexer.state.progress {
                         report(progress)
                     } else if knownCount > 0 {
-                        Label("\(knownCount.formatted()) photos indexées",
+                        Label("\(knownCount.formatted()) fichiers indexés",
                               systemImage: "checkmark.circle")
                             .foregroundStyle(.secondary)
                     } else {

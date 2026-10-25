@@ -71,6 +71,7 @@ actor IndexStore {
 
         ready = true
         retryDatelessAfterReaderChange()
+        relistAfterListingChange()
         repairKinds()
         migrateFromJSON(in: folder)
     }
@@ -494,6 +495,25 @@ actor IndexStore {
     /// How much of a file the date reader looks at. Bumping this re-queues every file that
     /// came back without a date, because a better reader may now find one — the old 4 KB
     /// probe missed 61 % of them, and those rows would otherwise stay wrong for ever.
+    /// Bumped when a pass must relist every folder — not re-read a single file. Documents
+    /// were counted but never recorded, so folders stamped before that stay complete forever
+    /// and their files would never appear. Clearing the stamp costs one listing per folder.
+    private static let listingVersion: Int64 = 1
+
+    private func relistAfterListingChange() {
+        guard let seen = try? value(forKey: "listingVersion") ?? 0,
+              seen < Self.listingVersion else { return }
+        do {
+            try exec("BEGIN IMMEDIATE")
+            // Only the stamp: `read = 1` is untouched, so no photo is read a second time.
+            try exec("UPDATE folder SET mtime = NULL")
+            try setValue(Self.listingVersion, forKey: "listingVersion")
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+        }
+    }
+
     private static let readerVersion: Int64 = 3
 
     private func retryDatelessAfterReaderChange() {
@@ -1514,15 +1534,12 @@ actor IndexStore {
         if !query.text.trimmingCharacters(in: .whitespaces).isEmpty {
             conditions.append("(fold(fi.name) LIKE ?1 ESCAPE '\\' OR fold(d.path) LIKE ?1 ESCAPE '\\')")
         }
-        switch query.kinds {
-        case .everything: conditions.append("fi.kind IN (1, 2)")
-        case .photos: conditions.append("fi.kind = 1")
-        case .videos: conditions.append("fi.kind = 2")
-        }
+        conditions.append("fi.kind IN (\(query.kinds.codes.map(String.init).joined(separator: ", ")))")
         if query.favouritesOnly {
             conditions.append("EXISTS (SELECT 1 FROM favourite f "
                             + "WHERE f.path = d.path || '/' || fi.name AND f.size = fi.size)")
         }
+        // A document has no capture date; a period narrows to what was actually shot.
         let window = query.period.range()
         if window != nil {
             conditions.append("fi.capture IS NOT NULL AND fi.capture BETWEEN ?2 AND ?3")

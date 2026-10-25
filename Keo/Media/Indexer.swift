@@ -345,8 +345,11 @@ final class Indexer: ObservableObject {
                     bytes: (contents.media + contents.documents)
                         .reduce(Int64(0)) { $0 + $1.size }
                 )
-                await index(contents.media, in: folder.path, generation: generation,
-                            stamp: completion, client: client, progress: &progress)
+                // Documents travel with the photos: they are what makes a folder openable
+                // from the cache and findable by name. They are recorded, never read.
+                await index(contents.media + contents.documents, in: folder.path,
+                            generation: generation, stamp: completion,
+                            client: client, progress: &progress)
             }
 
             // Only a pass that truly saw everything may decide what has disappeared.
@@ -392,11 +395,15 @@ final class Indexer: ObservableObject {
     // MARK: Reading
 
     /// Reads whatever is still unknown, in batches, and hands the folder's dates back.
-    private func index(_ media: [Item], in folder: String, generation: Int64,
+    ///
+    /// `files` is the whole listing, documents included. Only the media are read: there is no
+    /// capture date to find in a PDF, and fetching its first kilobytes would buy nothing.
+    private func index(_ files: [Item], in folder: String, generation: Int64,
                        stamp: FolderStamp.Completion?,
                        client: FreeboxClient, progress: inout Progress) async {
-        guard let store = try? await IndexStore.shared.unread(media, in: folder) else { return }
-        var todo = store
+        guard let store = try? await IndexStore.shared.unread(files, in: folder) else { return }
+        var todo = store.filter(\.isMedia)
+        let filed = store.filter { !$0.isMedia }
         var discovered: [Item.ID: Date] = [:]
 
         // A folder renamed or moved keeps its photos: the same name and size elsewhere in the
@@ -425,12 +432,17 @@ final class Indexer: ObservableObject {
                 try await IndexStore.shared.commit(
                     batch, in: folder, generation: generation,
                     stamp: stamping ? stamp : nil,
-                    present: stamping ? media : [], sweep: stamping
+                    present: stamping ? files : [], sweep: stamping
                 )
                 batch.removeAll(keepingCapacity: true)
             } catch {
                 failure = error.localizedDescription
             }
+        }
+
+        for document in filed {
+            batch.append((document, nil))
+            if batch.count >= IndexStore.batchSize { await flush(stamping: false) }
         }
 
         if !todo.isEmpty {

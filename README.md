@@ -306,6 +306,21 @@ grossit beaucoup, il faudra une colonne repliée et son index.
 
 Les jokers SQL `%` et `_` sont échappés : un fichier peut légitimement s'appeler `100%_brut`.
 
+### Les documents aussi
+
+L'index ne retenait que les photos et les vidéos : un `Contrat.pdf` était compté dans le
+poids du dossier et nulle part ailleurs. Il était donc introuvable, et absent d'une grille
+peinte depuis le cache. Le parcours enregistre maintenant toute la liste, documents compris —
+**enregistrés, jamais lus** : il n'y a pas de date de prise de vue dans un PDF, aller en
+chercher les premiers kilo-octets n'achèterait rien.
+
+Les dossiers déjà tamponnés resteraient complets pour toujours, donc leurs fichiers
+n'apparaîtraient jamais. `listingVersion` efface les tampons une fois : chaque dossier est
+relisté, aucun fichier n'est relu (`read = 1` n'est pas touché).
+
+Un filtre de période exclut forcément les documents, qui n'ont pas de date. C'est voulu et
+c'est dit par le filtre « Fichiers ».
+
 ### Période
 
 Un seul axe, trois états : toutes les périodes, une année, ou un intervalle entre deux dates.
