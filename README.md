@@ -144,6 +144,55 @@ Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copi
   bleu foncé manquerait de contraste. Il teinte toute l'app : boutons, dossiers, rail de la
   timeline.
 
+## L'accueil
+
+Ouvrir Keo tombait dans un listing de dossiers titré d'un nom d'hôte. Ce listing est le
+meilleur navigateur de dossiers qu'une Freebox aura jamais — quinze ans de l'organisation de
+quelqu'un — mais il n'a jamais été un accueil. Il reste, un onglet plus loin.
+
+**Le principe, et c'est celui qui tient toute la refonte : l'âme ne se met pas dans le
+chrome.** Les deux applications Apple les plus chaleureuses, Journal et Fitness, ont un chrome
+rigoureusement standard. La chaleur vient d'ailleurs — du contenu de la personne, du langage,
+et d'un seul personnage strictement rationné. Squelette système, chair personnelle.
+
+L'accueil montre, dans l'ordre : **Ce jour-là** (les photos prises à cette date les années
+passées, une page par année, le texte posé sur le dégradé de la photo elle-même — la couleur
+de l'utilisateur, sans une ligne d'extraction de palette), les **dossiers épinglés**, les
+**dernières photos par date de prise de vue** (ce qu'aucune galerie NAS ne fait honnêtement :
+Plex et Jellyfin classent par date d'import, qui sur un NAS est la date de copie, précisément
+le mensonge que cet index existe pour corriger), la **chronologie**, et la carte
+**Bibliothèque**.
+
+Tout sort de l'index local : cinq requêtes, pas la douzaine de `statistics`, parce que cet
+écran s'ouvre à chaque lancement. La box peut rester éteinte toute la journée sans que
+l'accueil cligne — ce qui est le but, puisqu'elle est sur le réseau de la maison et que le
+téléphone n'y est pas, les deux tiers du temps.
+
+### L'onglet Épinglés disparaît
+
+Une épingle est un **accélérateur, pas une destination**, et garer un accélérateur dans un
+emplacement de destination est exactement ce qui faisait que cet onglet sonnait faux — son
+contenu n'était d'ailleurs qu'une liste de chemins, il n'y a jamais eu l'idée d'un écran
+dedans. Les épingles deviennent l'étagère de l'accueil, *au-dessus de la ligne de flottaison*,
+donc strictement plus accessibles qu'avant.
+
+### La machinerie a une pièce à elle
+
+Indexation, Statistiques et Déconnexion vivaient dans le menu de tri de chaque dossier. La
+machinerie visible partout est la maladie qui fait qu'Immich ressemble à une console
+d'administration. Elles sont dans la carte Bibliothèque, où l'état de l'indexation est
+**visible en permanence** plutôt qu'à redécouvrir. Les surfaces contextuelles restent, parce
+qu'elles sont justifiées par le contexte : les pastilles, et le bouton de la recherche.
+
+### La mascotte
+
+La loutre en rendu 3D n'entre jamais dans l'app : de la fourrure photoréaliste à côté de SF
+Symbols et de verre liquide se lit comme un écran-titre de jeu free-to-play, et ça daterait en
+deux ans. Elle reste sur l'icône. La silhouette crème plate apparaît dans **trois endroits**,
+tous des moments « l'app n'a encore rien de toi à montrer » : l'association, la carte de
+bienvenue au premier lancement, et l'indexation jamais commencée. Jamais sur un écran qui
+contient des photos — là, les photos gagnent.
+
 ## Structure
 
 | Dossier | Rôle |
@@ -153,7 +202,7 @@ Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copi
 | `Keo/Media/` | Pipeline de vignettes, décodage ImageIO, cache disque LRU, index des dates |
 | `Keo/Downloads/` | File d'attente, pellicule, feuille de partage |
 | `Keo/Sync/` | Miroir CloudKit de la personnalisation : identité des enregistrements, moteur |
-| `Keo/UI/` | Association, grille, recherche, statistiques, visionneuse plein écran |
+| `Keo/UI/` | Accueil, association, grille, recherche, statistiques, visionneuse |
 | `KeoWidget/` | L'extension WidgetKit. Ne lie que Foundation, SwiftUI, ImageIO et AppIntents |
 
 Les dépendances vont vers l'intérieur : `UI` → `Media`/`Downloads` → `Freebox`. Rien dans

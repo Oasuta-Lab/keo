@@ -41,6 +41,25 @@ struct LibraryStats: Sendable {
     }
 }
 
+/// What the home screen needs, and nothing else.
+///
+/// `LibraryStats` costs a dozen scans of the index — fine once, on a screen someone chose to
+/// open. The home screen opens every time the app does, so it asks five questions instead.
+struct HomeSummary: Sendable {
+    /// Taken on this day, in years gone by.
+    var memories: [Item] = []
+    var years: [YearTally] = []
+    var firstCapture: Date?
+    var knownFolders = 0
+    var indexedFolders = 0
+    var unreadFiles = 0
+    var fileCount = 0
+
+    var isEmpty: Bool { fileCount == 0 }
+    /// Something is known, but not everything — the card says so rather than rounding up.
+    var isPartial: Bool { indexedFolders < knownFolders || unreadFiles > 0 }
+}
+
 struct YearTally: Sendable, Identifiable {
     let year: Int
     let photos: Int

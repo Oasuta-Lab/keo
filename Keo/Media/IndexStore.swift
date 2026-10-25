@@ -2296,6 +2296,24 @@ actor IndexStore {
     /// primary key already carries the name, so a secondary index that would speed these up
     /// costs roughly another copy of the table on disk. The screen reads this once and keeps
     /// it for as long as it is open.
+    /// Five questions, not the dozen `statistics` asks: this one runs on every launch.
+    func homeSummary(on today: Date = Date()) throws -> HomeSummary {
+        try open()
+        var summary = HomeSummary()
+        summary.memories = try memories(today, limit: 120)
+        summary.years = try years()
+        if let first = try scalar("SELECT CAST(min(capture) AS INTEGER) FROM file "
+                                + "WHERE kind IN (1, 2) AND capture IS NOT NULL") {
+            summary.firstCapture = Date(timeIntervalSince1970: Double(first))
+        }
+        summary.knownFolders = Int(try scalar("SELECT count(*) FROM folder") ?? 0)
+        summary.indexedFolders = Int(try scalar(
+            "SELECT count(*) FROM folder WHERE mtime IS NOT NULL") ?? 0)
+        summary.unreadFiles = Int(try scalar("SELECT count(*) FROM file WHERE read = 0") ?? 0)
+        summary.fileCount = Int(try scalar("SELECT count(*) FROM file") ?? 0)
+        return summary
+    }
+
     func statistics(under root: String, on today: Date = Date()) throws -> LibraryStats {
         try open()
         var stats = LibraryStats()

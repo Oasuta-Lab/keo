@@ -40,7 +40,6 @@ struct BrowserView: View {
     @State private var anchor: Item.ID?
     @EnvironmentObject private var indexer: Indexer
     @State private var showingIndexing = false
-    @State private var showingStats = false
     @State private var showingInvitation = false
     /// Asked once; afterwards the chip and the menu are enough.
     @AppStorage("explainedIndexing") private var explainedIndexing = false
@@ -181,10 +180,6 @@ struct BrowserView: View {
             } else if unindexed > 0, !selecting, !downloader.isRunning {
                 UnindexedChip(count: unindexed) { showingIndexing = true }
                     .padding(.bottom, 8)
-            } else if source == .favourites, !selecting, !downloader.isRunning {
-                SyncFootnote().padding(.bottom, 8)
-            } else if source.isRoot, !selecting, !downloader.isRunning {
-                BuildStampLabel().padding(.bottom, 8)
             }
         }
         .navigationTitle(selecting ? selectionTitle : title)
@@ -215,9 +210,6 @@ struct BrowserView: View {
         }
         .sheet(isPresented: $showingIndexing) {
             IndexingView(client: client)
-        }
-        .sheet(isPresented: $showingStats) {
-            StatsView(client: client)
         }
         .sheet(isPresented: $showingInvitation) {
             IndexingInvitation(client: client) {
@@ -518,15 +510,6 @@ struct BrowserView: View {
                             }
                         }
                     }
-                    // Temporary: statistics move to the home screen's Bibliothèque card in
-                    // the next step. Leaving them unreachable in between would make this
-                    // change un-shippable on its own.
-                    if source.isRoot {
-                        Divider()
-                        Button("Statistiques…", systemImage: "chart.bar") { showingStats = true }
-                        Button("Déconnexion", systemImage: "rectangle.portrait.and.arrow.right",
-                               role: .destructive) { store.signOut() }
-                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -791,7 +774,9 @@ private struct SectionTopKey: PreferenceKey {
 
 // MARK: - Cells
 
-private struct Thumb: View {
+/// Shared with the home screen, which shows the same cells in its memory card, its pinned
+/// shelf and its recent strip — and benefits from the same prefetch and cache.
+struct Thumb: View {
     let item: Item
     let client: FreeboxClient
     /// nil when not selecting.

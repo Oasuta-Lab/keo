@@ -10,6 +10,9 @@ import SwiftUI
 /// and check is a number nobody should believe.
 struct StatsView: View {
     let client: FreeboxClient
+    /// Pushed from the home screen, presented as a sheet from the chips that raise it in
+    /// context. A pushed screen brings its own stack and its own way out; a sheet needs both.
+    var standalone = true
 
     @Environment(\.dismiss) private var dismiss
 
@@ -20,8 +23,15 @@ struct StatsView: View {
     @State private var showingIndexing = false
 
     var body: some View {
-        NavigationStack {
-            List {
+        if standalone {
+            NavigationStack { content }
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
+        List {
                 if let stats {
                     if stats.isPartial { coverage(stats) }
                     chronology(stats)
@@ -35,20 +45,21 @@ struct StatsView: View {
                 }
             }
             .navigationTitle("Statistiques")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(standalone ? .inline : .large)
             .navigationDestination(item: $destination) { source in
                 BrowserView(client: client, source: source)
             }
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("OK") { dismiss() }
+                if standalone {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("OK") { dismiss() }
+                    }
                 }
             }
             .sheet(isPresented: $showingIndexing) { IndexingView(client: client) }
             .task {
                 stats = try? await IndexStore.shared.statistics(under: FreeboxClient.rootPath)
             }
-        }
     }
 
     // MARK: Coverage

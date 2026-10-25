@@ -4,6 +4,8 @@ import SwiftUI
 /// that restarts every time you change folder.
 struct IndexingView: View {
     let client: FreeboxClient
+    /// Pushed from the home screen, a sheet from the chips. See `StatsView.standalone`.
+    var standalone = true
 
     @EnvironmentObject private var indexer: Indexer
     @Environment(\.dismiss) private var dismiss
@@ -17,8 +19,15 @@ struct IndexingView: View {
     #endif
 
     var body: some View {
-        NavigationStack {
-            List {
+        if standalone {
+            NavigationStack { content }
+        } else {
+            content
+        }
+    }
+
+    private var content: some View {
+        List {
                 Section {
                     if let progress = indexer.state.progress {
                         report(progress)
@@ -115,13 +124,14 @@ struct IndexingView: View {
                 Text(rebuildWarning)
             }
             .navigationTitle("Indexation")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarTitleDisplayMode(standalone ? .inline : .large)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("OK") { dismiss() }
+                if standalone {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("OK") { dismiss() }
+                    }
                 }
             }
-        }
     }
 
     /// Says what it costs, in the user's own numbers, before anything is thrown away.

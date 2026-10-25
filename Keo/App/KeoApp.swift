@@ -51,19 +51,27 @@ private struct Shelf: View {
     let boxName: String
     @Binding var link: DeepLink?
 
-    enum Place: Hashable { case browse, shortcuts, favourites, collections, search }
+    enum Place: Hashable { case home, browse, favourites, collections, search }
 
     @EnvironmentObject private var indexer: Indexer
-    @State private var place: Place = .browse
+    @State private var place: Place = .home
     @State private var browsePath = NavigationPath()
     @State private var searchPath = NavigationPath()
     @State private var searchSeed: SearchQuery?
-    @State private var shortcutsPath = NavigationPath()
+    @State private var homePath = NavigationPath()
     @State private var favouritesPath = NavigationPath()
     @State private var collectionsPath = NavigationPath()
 
     var body: some View {
         TabView(selection: selection) {
+            Tab(value: Place.home) {
+                NavigationStack(path: $homePath) {
+                    HomeView(client: client, boxName: boxName)
+                }
+            } label: {
+                Label("Accueil", systemImage: "house").environment(\.symbolVariants, .none)
+            }
+
             Tab(value: Place.browse) {
                 NavigationStack(path: $browsePath) {
                     BrowserView(client: client,
@@ -72,15 +80,6 @@ private struct Shelf: View {
             } label: {
                 // A tab bar fills its symbols by default; outline reads lighter.
                 Label("Parcourir", systemImage: "folder").environment(\.symbolVariants, .none)
-            }
-
-            Tab(value: Place.shortcuts) {
-                NavigationStack(path: $shortcutsPath) {
-                    ShortcutsView(client: client)
-                }
-            } label: {
-                // A tab bar fills its symbols by default; outline reads lighter.
-                Label("Épinglés", systemImage: "pin").environment(\.symbolVariants, .none)
             }
 
             Tab(value: Place.favourites) {
@@ -149,9 +148,9 @@ private struct Shelf: View {
 
     private func popToRoot(_ place: Place) {
         switch place {
+        case .home: homePath = NavigationPath()
         case .browse: browsePath = NavigationPath()
         case .search: searchPath = NavigationPath()
-        case .shortcuts: shortcutsPath = NavigationPath()
         case .favourites: favouritesPath = NavigationPath()
         case .collections: collectionsPath = NavigationPath()
         }
