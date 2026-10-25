@@ -2187,6 +2187,26 @@ actor IndexStore {
         return found
     }
 
+    /// The five scalars the coverage widget lives on.
+    ///
+    /// Not `homeSummary()`, which also scans for memories and year tallies: this one runs on
+    /// every foreground pass, including the ones where the render is skipped entirely.
+    func widgetCoverage() throws -> WidgetManifest.Coverage {
+        try open()
+        var coverage = WidgetManifest.Coverage()
+        coverage.knownFolders = Int(try scalar("SELECT count(*) FROM folder") ?? 0)
+        coverage.indexedFolders = Int(try scalar(
+            "SELECT count(*) FROM folder WHERE mtime IS NOT NULL") ?? 0)
+        coverage.unreadFiles = Int(try scalar("SELECT count(*) FROM file WHERE read = 0") ?? 0)
+        // Same population as `datelessFiles()` lists, so the number on the Lock Screen and
+        // the rows behind the tap cannot disagree.
+        coverage.datelessFiles = Int(try scalar(
+            "SELECT count(*) FROM file WHERE kind IN (1, 2) AND capture IS NULL AND read = 1")
+            ?? 0)
+        coverage.fileCount = Int(try scalar("SELECT count(*) FROM file") ?? 0)
+        return coverage
+    }
+
     /// Grants one widget render per interval, or straight away when the pinned set changed —
     /// a folder just pinned must not wait an hour for its first photos. Claiming writes the
     /// stamp, so two foregrounds in a row cannot both win it.
