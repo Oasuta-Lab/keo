@@ -1523,9 +1523,9 @@ actor IndexStore {
             conditions.append("EXISTS (SELECT 1 FROM favourite f "
                             + "WHERE f.path = d.path || '/' || fi.name AND f.size = fi.size)")
         }
-        if let year = query.year {
-            conditions.append("fi.capture IS NOT NULL AND "
-                            + "CAST(strftime('%Y', fi.capture, 'unixepoch') AS INTEGER) = \(year)")
+        let window = query.period.range()
+        if window != nil {
+            conditions.append("fi.capture IS NOT NULL AND fi.capture BETWEEN ?2 AND ?3")
         }
 
         let sql = "SELECT d.path, fi.name, fi.size, fi.capture, fi.kind "
@@ -1538,6 +1538,10 @@ actor IndexStore {
         try prepare(sql, into: &statement)
         if !query.text.trimmingCharacters(in: .whitespaces).isEmpty {
             bind(statement, 1, SearchQuery.pattern(for: query.text))
+        }
+        if let window {
+            sqlite3_bind_double(statement, 2, window.lowerBound)
+            sqlite3_bind_double(statement, 3, window.upperBound)
         }
 
         var found: [Item] = []
@@ -1562,7 +1566,7 @@ actor IndexStore {
     private func matchingFolders(_ query: SearchQuery, limit: Int = 100) throws -> [Item] {
         let text = query.text.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty, query.kinds == .everything,
-              !query.favouritesOnly, query.year == nil else { return [] }
+              !query.favouritesOnly, !query.period.isSet else { return [] }
 
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }

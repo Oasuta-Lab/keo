@@ -206,7 +206,12 @@ pause en arrière-plan et reprend au retour.
 
 ## Recherche
 
-Onglet dédié, et **une seule source : l'index local**. On n'interroge jamais la box.
+Onglet dédié, porté par `TabRole.search` : iOS le range où il range la recherche partout
+ailleurs — à part, à l'extrémité droite — au lieu d'enfoncer un cinquième onglet égal dans la
+rangée. Les quatre autres passent en symboles non remplis (`symbolVariants = .none`), qu'une
+barre d'onglets applique en `.fill` par défaut ; la rangée respire.
+
+Et, et **une seule source : l'index local**. On n'interroge jamais la box.
 
 Le marché est explicite : la recherche répond en quelques millisecondes, elle marche box
 éteinte — et elle ne voit que ce qui a été indexé. Un dossier jamais parcouru n'apparaît pas.
@@ -222,6 +227,14 @@ d'index — quelques millisecondes à notre échelle. Le plafond est noté dans 
 grossit beaucoup, il faudra une colonne repliée et son index.
 
 Les jokers SQL `%` et `_` sont échappés : un fichier peut légitimement s'appeler `100%_brut`.
+
+### Période
+
+Un seul axe, trois états : toutes les périodes, une année, ou un intervalle entre deux dates.
+Pas une année *et* une plage côte à côte — deux contrôles qui restreignent la même chose
+finissent par se contredire. `SearchQuery.Period` porte les trois cas et calcule lui-même la
+fenêtre en secondes : bornes inclusives, journées entières (mêmes dates aux deux bouts = cette
+journée, pas cet instant), et bornes remises à l'endroit si elles sont inversées.
 
 ### Dossiers
 

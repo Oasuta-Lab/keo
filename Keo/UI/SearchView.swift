@@ -14,6 +14,9 @@ struct SearchView: View {
     @State private var years: [Int] = []
     @State private var indexedFolders = 0
     @State private var showingIndexing = false
+    @State private var pickingDates = false
+    @State private var from = Date()
+    @State private var to = Date()
 
     private var resultsTitle: String {
         results.count == 1 ? "1 résultat" : "\(results.count) résultats"
@@ -36,6 +39,7 @@ struct SearchView: View {
         .task(id: query) { await run() }
         .task { await loadContext() }
         .sheet(isPresented: $showingIndexing) { IndexingView(client: client) }
+        .sheet(isPresented: $pickingDates) { dateRangeSheet }
     }
 
     // MARK: Filters
@@ -49,16 +53,19 @@ struct SearchView: View {
 
             HStack(spacing: 8) {
                 Menu {
-                    Button("Toutes les années") { query.year = nil }
-                    ForEach(years, id: \.self) { year in
-                        Button(String(year)) { query.year = year }
+                    Button("Toutes les périodes") { query.period = .any }
+                    Button("Entre deux dates…") { pickingDates = true }
+                    if !years.isEmpty {
+                        Section("Année") {
+                            ForEach(years, id: \.self) { year in
+                                Button(String(year)) { query.period = .year(year) }
+                            }
+                        }
                     }
                 } label: {
-                    Chip(label: query.year.map(String.init) ?? "Période",
-                         icon: "calendar", on: query.year != nil)
+                    Chip(label: Self.label(for: query.period), icon: "calendar",
+                         on: query.period.isSet)
                 }
-                // Folders have no capture date, so a period can only ever narrow to files.
-                .disabled(years.isEmpty)
 
                 Button {
                     query.favouritesOnly.toggle()
@@ -77,6 +84,45 @@ struct SearchView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    private static let short: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "fr_FR")
+        formatter.setLocalizedDateFormatFromTemplate("ddMMyy")
+        return formatter
+    }()
+
+    private static func label(for period: SearchQuery.Period) -> String {
+        switch period {
+        case .any: return "Période"
+        case .year(let year): return String(year)
+        case .between(let from, let to):
+            return "\(short.string(from: min(from, to))) – \(short.string(from: max(from, to)))"
+        }
+    }
+
+    private var dateRangeSheet: some View {
+        NavigationStack {
+            Form {
+                DatePicker("Du", selection: $from, displayedComponents: .date)
+                DatePicker("Au", selection: $to, in: from..., displayedComponents: .date)
+            }
+            .navigationTitle("Entre deux dates")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Annuler") { pickingDates = false }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Appliquer") {
+                        query.period = .between(from, to)
+                        pickingDates = false
+                    }
+                }
+            }
+        }
+        .presentationDetents([.height(220)])
     }
 
     // MARK: Results

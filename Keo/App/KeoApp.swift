@@ -28,18 +28,21 @@ struct KeoApp: App {
     }
 }
 
-/// The five top-level places, as a tab bar.
+/// The top-level places, as a tab bar.
 ///
 /// A side drawer would have been the obvious shape for this, and it is exactly what Apple's
 /// guidelines rule out: navigation hidden behind an icon is navigation nobody finds. Tabs are
 /// what Photos itself uses for the same split.
+///
+/// Search carries `TabRole.search`, so iOS places it where it places search everywhere else —
+/// apart, at the trailing end — instead of wedging a fifth equal tab into the row.
 private struct Shelf: View {
     let client: FreeboxClient
     let boxName: String
 
-    enum Tab: Hashable { case browse, search, shortcuts, favourites, collections }
+    enum Place: Hashable { case browse, shortcuts, favourites, collections, search }
 
-    @State private var tab: Tab = .browse
+    @State private var place: Place = .browse
     @State private var browsePath = NavigationPath()
     @State private var searchPath = NavigationPath()
     @State private var shortcutsPath = NavigationPath()
@@ -48,51 +51,63 @@ private struct Shelf: View {
 
     var body: some View {
         TabView(selection: selection) {
-            NavigationStack(path: $browsePath) {
-                BrowserView(client: client,
-                            source: .folder(path: FreeboxClient.rootPath, title: boxName))
+            Tab(value: Place.browse) {
+                NavigationStack(path: $browsePath) {
+                    BrowserView(client: client,
+                                source: .folder(path: FreeboxClient.rootPath, title: boxName))
+                }
+            } label: {
+                // A tab bar fills its symbols by default; outline reads lighter.
+                Label("Parcourir", systemImage: "folder").environment(\.symbolVariants, .none)
             }
-            .tabItem { Label("Parcourir", systemImage: "folder") }
-            .tag(Tab.browse)
 
-            NavigationStack(path: $searchPath) {
-                SearchView(client: client)
+            Tab(value: Place.shortcuts) {
+                NavigationStack(path: $shortcutsPath) {
+                    ShortcutsView(client: client)
+                }
+            } label: {
+                // A tab bar fills its symbols by default; outline reads lighter.
+                Label("Raccourcis", systemImage: "star").environment(\.symbolVariants, .none)
             }
-            .tabItem { Label("Recherche", systemImage: "magnifyingglass") }
-            .tag(Tab.search)
 
-            NavigationStack(path: $shortcutsPath) {
-                ShortcutsView(client: client)
+            Tab(value: Place.favourites) {
+                NavigationStack(path: $favouritesPath) {
+                    BrowserView(client: client, source: .favourites)
+                }
+            } label: {
+                // A tab bar fills its symbols by default; outline reads lighter.
+                Label("Favoris", systemImage: "heart").environment(\.symbolVariants, .none)
             }
-            .tabItem { Label("Raccourcis", systemImage: "star") }
-            .tag(Tab.shortcuts)
 
-            NavigationStack(path: $favouritesPath) {
-                BrowserView(client: client, source: .favourites)
+            Tab(value: Place.collections) {
+                NavigationStack(path: $collectionsPath) {
+                    CollectionsView(client: client)
+                }
+            } label: {
+                // A tab bar fills its symbols by default; outline reads lighter.
+                Label("Collections", systemImage: "square.stack").environment(\.symbolVariants, .none)
             }
-            .tabItem { Label("Favoris", systemImage: "heart") }
-            .tag(Tab.favourites)
 
-            NavigationStack(path: $collectionsPath) {
-                CollectionsView(client: client)
+            Tab(value: Place.search, role: .search) {
+                NavigationStack(path: $searchPath) {
+                    SearchView(client: client)
+                }
             }
-            .tabItem { Label("Collections", systemImage: "square.stack") }
-            .tag(Tab.collections)
         }
         .modifier(MinimisingTabBar())
     }
 
     /// Tapping the tab you are already on returns to its root — the behaviour every iOS app
     /// has, and the quickest way back to the top of the NAS.
-    private var selection: Binding<Tab> {
-        Binding(get: { tab }, set: { chosen in
-            if chosen == tab { popToRoot(chosen) }
-            tab = chosen
+    private var selection: Binding<Place> {
+        Binding(get: { place }, set: { chosen in
+            if chosen == place { popToRoot(chosen) }
+            place = chosen
         })
     }
 
-    private func popToRoot(_ tab: Tab) {
-        switch tab {
+    private func popToRoot(_ place: Place) {
+        switch place {
         case .browse: browsePath = NavigationPath()
         case .search: searchPath = NavigationPath()
         case .shortcuts: shortcutsPath = NavigationPath()

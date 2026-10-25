@@ -57,10 +57,10 @@ func checkSearch() async throws {
     hits = try await store.search(SearchQuery(kinds: .videos))
     assert(hits.map(\.name) == ["Rentrée.mov"], "filtre vidéo — \(hits.map(\.name))")
 
-    hits = try await store.search(SearchQuery(kinds: .photos, year: 2024))
+    hits = try await store.search(SearchQuery(kinds: .photos, period: .year(2024)))
     assert(hits.map(\.name) == ["Plage.jpg"], "photos de 2024 — \(hits.map(\.name))")
 
-    hits = try await store.search(SearchQuery(text: "ete", year: 2024))
+    hits = try await store.search(SearchQuery(text: "ete", period: .year(2024)))
     assert(!hits.contains { $0.isDirectory }, "une période exclut les dossiers, qui n'ont pas de date")
 
     // --- favoris ---------------------------------------------------------------------------
@@ -69,6 +69,24 @@ func checkSearch() async throws {
     try await store.setFavourite([plage], true)
     hits = try await store.search(SearchQuery(favouritesOnly: true))
     assert(hits.map(\.name) == ["Plage.jpg"], "filtre favoris — \(hits.map(\.name))")
+
+    // --- l'intervalle entre deux dates --------------------------------------------------
+    let day = Date(timeIntervalSince1970: 1_720_000_000)        // 3 juillet 2024
+    hits = try await store.search(SearchQuery(period: .between(day, day)))
+    assert(hits.map(\.name) == ["Plage.jpg"],
+           "mêmes dates aux deux bouts : la journée entière, pas l'instant — \(hits.map(\.name))")
+
+    let week = Date(timeIntervalSince1970: 1_720_000_000 - 86_400 * 7)
+    hits = try await store.search(SearchQuery(period: .between(day, week)))
+    assert(hits.map(\.name) == ["Plage.jpg"], "bornes inversées : on les remet à l'endroit")
+
+    hits = try await store.search(SearchQuery(period: .between(week, week)))
+    assert(hits.isEmpty, "hors de l'intervalle — \(hits.map(\.name))")
+
+    hits = try await store.search(SearchQuery(period: .between(
+        Date(timeIntervalSince1970: 1_000_000_000), day)))
+    assert(hits.count == 2, "l'intervalle large reprend les deux fichiers — \(hits.map(\.name))")
+    assert(!SearchQuery(period: .between(day, day)).isEmpty, "un intervalle seul est une recherche")
 
     // --- le contexte affiché à l'écran -------------------------------------------------------
     let years = try await store.indexedYears()
@@ -79,5 +97,5 @@ func checkSearch() async throws {
     let dated = hits.filter { !$0.isDirectory }.compactMap(\.captureDate)
     assert(dated == dated.sorted(by: >), "les résultats datés descendent — \(dated)")
 
-    print("ok — recherche : accents, jokers SQL, filtres type/période/favoris, dossiers par leur nom")
+    print("ok — recherche : accents, jokers SQL, filtres type/année/intervalle/favoris, dossiers par leur nom")
 }
