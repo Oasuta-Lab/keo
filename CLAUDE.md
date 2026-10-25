@@ -139,7 +139,11 @@ base plutôt que le demander.
   trois niveaux en avait trois concurrentes. SwiftUI ne promet rien dans ce cas et reconstruit
   la destination — l'état de la vue est détruit, la grille se recharge toutes les quelques
   secondes et la position de lecture est perdue. Les destinations se déclarent **une fois, à
-  la racine de la pile** (`PushTargets`), les vues poussées en héritent.
+  la racine de la pile** (`PushTargets`), les vues poussées en héritent. **La variante
+  `navigationDestination(item:)` compte aussi** : le piège a été refermé pour `for:` et laissé
+  ouvert pour `item:`, et il est revenu intact — le fil d'Ariane bouclait. Une vue récursive ne
+  déclare aucune destination ; pour pousser ou dépiler elle lit `\.stackPath`, le chemin que la
+  pile publie dans l'environnement.
 - **La date de modification n'est pas une date de prise de vue.** Sur un NAS c'est la date de
   copie. Ne jamais la laisser alimenter le tri, les sections ou la timeline — elle y fait
   remonter en tête des photos que personne n'a prises ce jour-là. Elle se dit sous la photo,
