@@ -8,16 +8,33 @@ func checkWidget() async throws {
     let manifest = WidgetManifest(
         version: WidgetManifest.currentVersion,
         stamped: Date(timeIntervalSince1970: 1_700_000_000),
-        folders: [.init(path: "/NAS/Photos/2024", name: "2024", images: ["aa", "bb"])]
+        folders: [.init(path: "/NAS/Photos/2024", name: "2024", images: ["aa", "bb"],
+                        mediaCount: 412, span: "2019 – 2024"),
+                  // Un dossier pas encore entièrement indexé : le compte est inconnu, et le
+                  // widget doit l'omettre plutôt que d'afficher zéro.
+                  .init(path: "/NAS/Photos/Brut", name: "Brut", images: ["cc"],
+                        mediaCount: nil, span: nil)],
+        onThisDay: .init(images: ["d1", "d2"], years: [2016, 2009],
+                         label: "25 octobre", total: 23)
     )
     let decoded = try JSONDecoder().decode(WidgetManifest.self,
                                            from: JSONEncoder().encode(manifest))
     assert(decoded.version == WidgetManifest.currentVersion)
     assert(decoded.stamped == manifest.stamped)
-    assert(decoded.folders.map(\.path) == ["/NAS/Photos/2024"],
+    assert(decoded.folders.map(\.path) == ["/NAS/Photos/2024", "/NAS/Photos/Brut"],
            "le chemin est l'identité que l'intent de configuration retient")
     assert(decoded.folders[0].name == "2024")
     assert(decoded.folders[0].images == ["aa", "bb"], "l'ordre des images est la sélection")
+    assert(decoded.folders[0].mediaCount == 412 && decoded.folders[0].span == "2019 – 2024",
+           "le contexte affiché à côté du nom")
+    assert(decoded.folders[1].mediaCount == nil && decoded.folders[1].span == nil,
+           "inconnu reste inconnu : un zéro se lirait « ce dossier est vide »")
+    assert(decoded.onThisDay?.years == [2016, 2009],
+           "les années accompagnent les images, dans le même ordre")
+    assert(decoded.onThisDay?.total == 23 && decoded.onThisDay?.label == "25 octobre")
+
+    // Une version antérieure doit être refusée, pas décodée de travers.
+    assert(WidgetManifest.currentVersion == 2, "la version suit la forme du manifeste")
 
     // Un nom de fichier du NAS ne peut pas sortir du conteneur une fois haché.
     let traversal = WidgetManifest.key(for: "/NAS/../../etc/passwd")

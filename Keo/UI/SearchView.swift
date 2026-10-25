@@ -7,6 +7,9 @@ import SwiftUI
 /// of letting an un-walked folder look like "no results".
 struct SearchView: View {
     let client: FreeboxClient
+    /// Set by a widget tap. Consumed once, then cleared, so going back to the tab
+    /// later does not silently re-apply yesterday's filter.
+    @Binding var seed: SearchQuery?
 
     @State private var query = SearchQuery()
     @State private var results: [Item] = []
@@ -38,6 +41,11 @@ struct SearchView: View {
         // One query per settled keystroke: typing eight letters runs one search, not eight.
         .task(id: query) { await run() }
         .task { await loadContext() }
+        .onChange(of: seed) { _, now in
+            guard let now else { return }
+            query = now
+            seed = nil
+        }
         .sheet(isPresented: $showingIndexing) { IndexingView(client: client) }
         .sheet(isPresented: $pickingDates) { dateRangeSheet }
     }

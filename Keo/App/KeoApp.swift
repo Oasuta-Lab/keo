@@ -6,12 +6,15 @@ struct KeoApp: App {
     @StateObject private var downloader = Downloader()
     @StateObject private var indexer = Indexer()
     @StateObject private var sync = CloudSync()
+    /// Held here rather than in `Shelf`: a `keo://` URL can land before the box
+    /// has answered, and the shelf does not exist yet at that point.
+    @State private var link: DeepLink?
 
     var body: some Scene {
         WindowGroup {
             Group {
                 if let client = store.client {
-                    Shelf(client: client, boxName: store.boxName)
+                    Shelf(client: client, boxName: store.boxName, link: $link)
                 } else {
                     ConnectView()
                 }
@@ -24,6 +27,7 @@ struct KeoApp: App {
             // Independent of the Freebox pairing: favourites can come back from iCloud
             // before the box has ever answered.
             .task { await sync.start() }
+            .onOpenURL { link = DeepLink($0) }
         }
     }
 }
@@ -39,6 +43,7 @@ struct KeoApp: App {
 private struct Shelf: View {
     let client: FreeboxClient
     let boxName: String
+    @Binding var link: DeepLink?
 
     enum Place: Hashable { case browse, shortcuts, favourites, collections, search }
 
@@ -46,6 +51,7 @@ private struct Shelf: View {
     @State private var place: Place = .browse
     @State private var browsePath = NavigationPath()
     @State private var searchPath = NavigationPath()
+    @State private var searchSeed: SearchQuery?
     @State private var shortcutsPath = NavigationPath()
     @State private var favouritesPath = NavigationPath()
     @State private var collectionsPath = NavigationPath()
@@ -91,15 +97,35 @@ private struct Shelf: View {
 
             Tab(value: Place.search, role: .search) {
                 NavigationStack(path: $searchPath) {
-                    SearchView(client: client)
+                    SearchView(client: client, seed: $searchSeed)
                 }
             }
         }
         .modifier(MinimisingTabBar())
+        .onChange(of: link) { _, now in
+            guard let now else { return }
+            open(now)
+            link = nil
+        }
         // The widget has no client of its own, so its photos can only be made here, while
         // the box is reachable and someone is looking at the app anyway.
         .task(priority: .utility) {
             await WidgetRenderer.refresh(client: client, indexing: indexer.state.isRunning)
+        }
+    }
+
+    /// A tap on a widget. Deliberately resets the stack before pushing: arriving six levels
+    /// deep under whatever was open last is not what "open this folder" means.
+    private func open(_ link: DeepLink) {
+        switch link {
+        case .folder(let path):
+            place = .browse
+            browsePath = NavigationPath()
+            guard let title = DeepLink.title(for: path) else { return }
+            browsePath.append(BrowserSource.folder(path: path, title: title))
+        case .day(let day):
+            place = .search
+            searchSeed = SearchQuery(period: .between(day, day))
         }
     }
 

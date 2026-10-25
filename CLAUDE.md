@@ -36,9 +36,10 @@ swiftc -swift-version 6 -D DEBUG \
   Keo/Media/IndexStore.swift \
   Keo/Media/VideoDate.swift Keo/Media/WidgetManifest.swift Keo/Sync/SyncModel.swift \
   Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift Keo/UI/BrowserSource.swift \
+  Keo/UI/DeepLink.swift \
   Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
   Tests/sync.swift Tests/search.swift Tests/covers.swift Tests/notes.swift \
-  Tests/stats.swift Tests/widget.swift \
+  Tests/stats.swift Tests/widget.swift Tests/links.swift \
   -o /tmp/keocheck && /tmp/keocheck
 ```
 

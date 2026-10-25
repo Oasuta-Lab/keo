@@ -19,6 +19,8 @@ enum WidgetRenderer {
     /// A large widget on the biggest iPad at 2×. Rendering higher only grows the container.
     static let maxPixel: CGFloat = 1200
     static let interval: TimeInterval = 3_600
+    /// Enough to fill a large mosaic and rotate through the day without repeating.
+    static let perMemory = 12
 
     static func refresh(client: FreeboxClient, indexing: Bool) async {
         // The NAS reader is deliberately a single serial worker. A second one here would
@@ -65,15 +67,22 @@ enum WidgetRenderer {
             guard !names.isEmpty else { continue }
 
             prune(home, keeping: Set(names))
-            folders.append(.init(path: pin.path, name: pin.name, images: names))
+            // Both optional in the manifest, and both genuinely unknown on a folder the
+            // index has not finished: the widget omits what it is not given rather than
+            // printing a zero that would read as "this folder is empty".
+            let totals = (try? await IndexStore.shared.stats(for: [pin.path]))?[pin.path]
+            folders.append(.init(path: pin.path, name: pin.name, images: names,
+                                 mediaCount: totals?.mediaCount, span: totals?.span))
         }
+
+        let memory = await renderMemories(client: client, into: directory, rendered: &rendered)
 
         // A folder unpinned months ago must not keep its photos in the container for ever.
         prune(directory, keeping: Set(folders.map { WidgetManifest.key(for: $0.path) }
-                                    + [WidgetManifest.fileName]))
+                                    + [WidgetManifest.fileName, WidgetManifest.dayKey]))
 
         let manifest = WidgetManifest(version: WidgetManifest.currentVersion,
-                                      stamped: Date(), folders: folders)
+                                      stamped: Date(), folders: folders, onThisDay: memory)
         guard let encoded = try? JSONEncoder().encode(manifest) else { return }
         let file = directory.appendingPathComponent(WidgetManifest.fileName)
         try? encoded.write(to: file, options: .atomic)
@@ -82,6 +91,58 @@ enum WidgetRenderer {
 
         trace("widget \(directory.path) folders=\(folders.count) rendered=\(rendered)")
         WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    /// Photos taken on this calendar day in years gone by.
+    ///
+    /// Rendered into one fixed directory rather than one per date: a directory per day of the
+    /// year would quietly accumulate three hundred and sixty-five of them.
+    private static func renderMemories(client: FreeboxClient, into directory: URL,
+                                       rendered: inout Int) async -> WidgetManifest.Memory? {
+        let today = Date()
+        let found = (try? await IndexStore.shared.onThisDay(today, limit: 200)) ?? []
+        let home = directory.appendingPathComponent(WidgetManifest.dayKey, isDirectory: true)
+        guard !found.isEmpty else {
+            // Nothing today: clear last day's photos rather than leave them to be shown
+            // again under today's label.
+            try? FileManager.default.removeItem(at: home)
+            return nil
+        }
+
+        try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        protect(home)
+
+        let calendar = Calendar.current
+        var names: [String] = []
+        var years: [Int] = []
+        for item in found.prefix(perMemory) {
+            guard let capture = item.captureDate else { continue }
+            let name = WidgetManifest.key(for: item.path)
+            let file = home.appendingPathComponent(name)
+            if !FileManager.default.fileExists(atPath: file.path) {
+                guard let image = await ThumbnailPipeline.shared
+                        .thumbnail(for: item, client: client, maxPixel: maxPixel),
+                      let data = ImageDecoding.cacheData(for: image) else { continue }
+                try? data.write(to: file, options: .atomic)
+                protect(file)
+                rendered += 1
+            }
+            names.append(name)
+            years.append(calendar.component(.year, from: capture))
+        }
+        guard !names.isEmpty else { return nil }
+
+        prune(home, keeping: Set(names))
+        return .init(images: names, years: years, label: dayLabel(today), total: found.count)
+    }
+
+    /// Written by the app because the extension has no business formatting a date the app
+    /// already knows how to write.
+    private static func dayLabel(_ day: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.setLocalizedDateFormatFromTemplate("d MMMM")
+        return formatter.string(from: day)
     }
 
     /// Not `.complete`: the widget refreshes while the phone is locked, and files it could

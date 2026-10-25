@@ -2213,7 +2213,7 @@ actor IndexStore {
 
         stats.biggest = try biggestFiles()
         stats.busiestDays = try busiestDays()
-        stats.onThisDay = try onThisDay(today)
+        stats.onThisDay = try memories(today, limit: 300)
         return stats
     }
 
@@ -2421,7 +2421,15 @@ actor IndexStore {
 
     /// The same calendar day in earlier years. Bounded by the start of today so this
     /// morning's own photos do not come back as a souvenir.
-    private func onThisDay(_ today: Date, limit: Int = 300) throws -> [Item] {
+    ///
+    /// Not private: the widget renderer wants the same list, and a second query that drifts
+    /// from this one would put a different day on the Home Screen than in the app.
+    func onThisDay(_ today: Date, limit: Int = 300) throws -> [Item] {
+        try open()
+        return try memories(today, limit: limit)
+    }
+
+    private func memories(_ today: Date, limit: Int) throws -> [Item] {
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
         try prepare(Self.fileColumns + """

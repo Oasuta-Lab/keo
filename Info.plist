@@ -18,6 +18,19 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLName</key>
+			<string>com.oasutalab.keo</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>keo</string>
+			</array>
+		</dict>
+	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>KeoCommit</key>
@@ -26,30 +39,25 @@
 	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<!-- Couvre une saisie par IP privée (192.168.x.1). -->
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
-		<!-- mafreebox.freebox.fr resout vers une IP publique : ATS le traite comme
-		     un domaine distant, NSAllowsLocalNetworking ne s'y applique donc pas. -->
 		<key>NSExceptionDomains</key>
 		<dict>
 			<key>freebox.fr</key>
 			<dict>
-				<key>NSIncludesSubdomains</key>
-				<true/>
 				<key>NSExceptionAllowsInsecureHTTPLoads</key>
+				<true/>
+				<key>NSIncludesSubdomains</key>
 				<true/>
 			</dict>
 		</dict>
 	</dict>
-	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Pour enregistrer dans votre pellicule les photos et vidéos téléchargées depuis la Freebox.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Keo se connecte à votre NAS sur le réseau local pour afficher vos photos et vidéos.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Pour enregistrer dans votre pellicule les photos et vidéos téléchargées depuis la Freebox.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
-	<!-- Pushes silencieux CloudKit : CKSyncEngine apprend ainsi qu'un autre appareil
-	     a modifié les favoris, sans interroger le serveur en boucle. -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
