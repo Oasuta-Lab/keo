@@ -77,6 +77,13 @@ final class Undoer: ObservableObject {
         "\(n) \(n > 1 ? many : one)"
     }
 
+    /// Hides the banner without touching the stack: the action stays undoable by shaking,
+    /// it has just stopped asking for attention.
+    func dismissBanner() {
+        hide?.cancel()
+        banner = nil
+    }
+
     /// Nothing to go back to once the thing you would go back to is gone — a rebuilt index,
     /// a disconnection. Called rather than left to rot.
     func forget() {
@@ -92,6 +99,7 @@ final class Undoer: ObservableObject {
 /// so an overlay on the root would never be seen from the photo.
 struct UndoBanner: View {
     @EnvironmentObject private var undoer: Undoer
+    @State private var push: CGFloat = 0
 
     var body: some View {
         if let step = undoer.banner {
@@ -112,8 +120,23 @@ struct UndoBanner: View {
             .frame(maxWidth: 420)
             .background(.bar, in: Capsule())
             .padding(.horizontal, 16)
+            // Swipe it away rather than wait it out. The step stays on the stack — shaking
+            // still undoes it — the banner has simply stopped asking for attention.
+            .offset(y: max(push, 0))
+            .gesture(
+                DragGesture(minimumDistance: 8)
+                    .onChanged { push = $0.translation.height }
+                    .onEnded { value in
+                        if value.translation.height > 24
+                            || value.predictedEndTranslation.height > 80 {
+                            undoer.dismissBanner()
+                        }
+                        withAnimation(.snappy(duration: 0.2)) { push = 0 }
+                    }
+            )
             .transition(.move(edge: .bottom).combined(with: .opacity))
             .animation(.snappy(duration: 0.25), value: step.id)
+            .onChange(of: step.id) { _, _ in push = 0 }
         }
     }
 }

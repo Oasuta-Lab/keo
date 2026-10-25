@@ -431,6 +431,9 @@ collection, l'épinglage d'un dossier, et l'écriture ou l'effacement d'une note
 le texte précédent est capturé **avant** l'écriture : vider le champ supprime la ligne, et il
 ne resterait rien à relire.
 
+Un glissement vers le bas le chasse sans attendre les cinq secondes. L'étape reste sur la
+pile — le secouage l'annule toujours — le bandeau a simplement cessé de réclamer l'attention.
+
 Le bandeau est posé à deux endroits — au-dessus de la barre d'onglets, et à nouveau dans la
 visionneuse. Un `fullScreenCover` est dessiné par-dessus la racine, donc une superposition
 posée sur la racine serait invisible depuis la photo.
