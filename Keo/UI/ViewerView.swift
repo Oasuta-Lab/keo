@@ -513,11 +513,17 @@ private struct ImagePage: View {
         }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: playing) { _, now in now }
         .task(id: item.path) {
-            // The grid thumbnail first so the page is never blank, then the real thing.
-            if image == nil,
-               let preview = await ThumbnailPipeline.shared.thumbnail(for: item, client: client) {
-                image = preview
+            // The grid thumbnail and the full file race, rather than the second waiting on the
+            // first. Chaining them meant the page showed nothing at all whenever the pipeline
+            // was busy — which, opened from the bottom of a long scroll, is exactly when.
+            let preview = Task { @MainActor in
+                guard let thumb = await ThumbnailPipeline.shared.thumbnail(for: item,
+                                                                           client: client),
+                      image == nil else { return }
+                image = thumb
             }
+            defer { preview.cancel() }
+
             guard !sharp, !Task.isCancelled else { return }
 
             // Streamed to disk and decoded from the file: a 50 MP original never becomes a Data.

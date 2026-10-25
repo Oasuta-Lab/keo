@@ -19,9 +19,13 @@ actor ThumbnailPipeline {
     /// One task per key, shared by every caller that wants the same thumbnail.
     private var inFlight: [String: Task<UIImage?, Never>] = [:]
 
-    /// Separate gates so a prefetch never makes a visible cell wait behind it.
+    /// Visible cells only: a prefetch bounds itself by the number of drains on its window,
+    /// so gating it a second time would say the same thing twice.
     private let visible = Gate(limit: 4)
-    private let ahead = Gate(limit: 2)
+
+    /// The rows the scroll is heading for, and the drains working on them.
+    private var window = PrefetchWindow()
+    private var windowSize = gridSize
 
     private var trimmed = false
 
@@ -39,37 +43,50 @@ actor ThumbnailPipeline {
         let key = DiskCache.key(for: item.path, size: item.size, maxPixel: Int(maxPixel))
         if let cached = memory[key] { return cached }
 
-        return await load(item, client: client, key: key, maxPixel: maxPixel, gate: visible)
+        return await load(item, client: client, key: key, maxPixel: maxPixel,
+                          gate: visible, priority: .userInitiated)
     }
 
     /// Warms the cache for rows the user is about to reach. Fire-and-forget by design: the
     /// result lands in the cache, and the cell picks it up when it appears.
+    ///
+    /// The hint replaces the previous one rather than piling onto it — see `PrefetchWindow`
+    /// for why a queue that only grew is what emptied the grid on a long scroll.
     func prefetch(_ items: [Item], client: FreeboxClient, maxPixel: CGFloat = gridSize) {
-        for item in items where item.isMedia {
-            let key = DiskCache.key(for: item.path, size: item.size, maxPixel: Int(maxPixel))
-            guard memory[key] == nil, inFlight[key] == nil else { continue }
+        windowSize = maxPixel
+        for _ in 0 ..< window.replace(with: items) {
+            Task(priority: .utility) { await self.drain(client: client) }
+        }
+    }
 
-            Task(priority: .utility) {
-                _ = await self.load(item, client: client, key: key,
-                                    maxPixel: maxPixel, gate: self.ahead)
-            }
+    private func drain(client: FreeboxClient) async {
+        while let item = window.next() {
+            let maxPixel = windowSize
+            let key = DiskCache.key(for: item.path, size: item.size, maxPixel: Int(maxPixel))
+            guard memory[key] == nil else { continue }
+            _ = await load(item, client: client, key: key, maxPixel: maxPixel,
+                           gate: nil, priority: .utility)
         }
     }
 
     // MARK: Loading
 
-    private func load(_ item: Item, client: FreeboxClient, key: String,
-                      maxPixel: CGFloat, gate: Gate) async -> UIImage? {
+    private func load(_ item: Item, client: FreeboxClient, key: String, maxPixel: CGFloat,
+                      gate: Gate?, priority: TaskPriority) async -> UIImage? {
         if let existing = inFlight[key] { return await existing.value }
 
-        let task = Task<UIImage?, Never> { [disk, memory] in
+        // Detached on purpose. A plain `Task` created here inherits the actor, so every disk
+        // read, decode, JPEG encode and disk write below ran on the pipeline's own executor —
+        // one at a time, whatever the gate said. The gate was bounding a queue that was
+        // already serial, and a cell coming on screen waited behind every job before it.
+        let task = Task<UIImage?, Never>.detached(priority: priority) { [disk, memory] in
             if let data = disk.read(key), let image = UIImage(data: data) {
                 memory.insert(image, for: key)
                 return image
             }
 
-            await gate.wait()
-            defer { Task { await gate.signal() } }
+            await gate?.wait()
+            defer { if let gate { Task { await gate.signal() } } }
 
             guard let image = await self.produce(item, client: client, maxPixel: maxPixel) else {
                 return nil
@@ -87,19 +104,22 @@ actor ThumbnailPipeline {
         return image
     }
 
-    private func produce(_ item: Item, client: FreeboxClient, maxPixel: CGFloat) async -> UIImage? {
+    private nonisolated func produce(_ item: Item, client: FreeboxClient, maxPixel: CGFloat) async -> UIImage? {
         switch item.kind {
         case .video: return await frame(item, client: client, maxPixel: maxPixel)
         default: return await still(item, client: client, maxPixel: maxPixel)
         }
     }
 
-    private func still(_ item: Item, client: FreeboxClient, maxPixel: CGFloat) async -> UIImage? {
+    private nonisolated func still(_ item: Item, client: FreeboxClient, maxPixel: CGFloat) async -> UIImage? {
         if let probe = try? await client.bytes(item.path, prefix: probeBytes) {
             // The prefix is already here, so the capture date costs nothing to read.
             let folder = (item.path as NSString).deletingLastPathComponent
-            try? await IndexStore.shared.note(ImageDecoding.captureDate(prefix: probe),
-                                              for: item, in: folder)
+            let taken = ImageDecoding.captureDate(prefix: probe)
+            // Recorded, not waited on: filing the date is a side effect of the thumbnail, and
+            // making every cell queue behind whatever the indexing pass is writing to SQLite
+            // is a second serialisation on a path that already has one.
+            Task { try? await IndexStore.shared.note(taken, for: item, in: folder) }
             if let image = ImageDecoding.embeddedPreview(probe, maxPixel: maxPixel) {
                 return image
             }
@@ -113,7 +133,7 @@ actor ThumbnailPipeline {
     }
 
     /// AVFoundation range-requests only the atoms it needs, so this never pulls the whole video.
-    private func frame(_ item: Item, client: FreeboxClient, maxPixel: CGFloat) async -> UIImage? {
+    private nonisolated func frame(_ item: Item, client: FreeboxClient, maxPixel: CGFloat) async -> UIImage? {
         guard let source = try? await client.videoSource(item.path) else { return nil }
         let authenticated = AuthenticatedAsset(source: source)
 

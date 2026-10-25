@@ -60,6 +60,7 @@ func checkNothingWritesToTheNAS() {
 }
 
 checkNothingWritesToTheNAS()
+checkPrefetchWindow()
 checkDeepLinks()
 checkBreadcrumb()
 checkHumanDates()

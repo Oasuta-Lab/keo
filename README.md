@@ -486,6 +486,60 @@ Le filtre agit **avant** que le parcours descende, pas pendant : rien dans le cy
 l'indexation ne change, un sous-arbre n'y entre simplement jamais. C'est ce qui rend ce
 changement sûr là où les autres pistes d'optimisation ne le sont pas.
 
+## Les vignettes : scroller loin ne doit pas vider la grille
+
+Un scroll lent allait bien, un scroll long arrivait sur des cases grises — et ouvrir une photo
+ou une vidéo depuis ce point-là n'affichait rien non plus. Trois causes, toutes dans le chemin
+de lecture, aucune dans le réseau.
+
+**Le préchargement empilait au lieu de remplacer.** Chaque cellule qui apparaissait demandait
+les vingt-quatre lignes suivantes, chacune en tâche séparée. Passer mille cellules laissait
+donc des dizaines de milliers de demandes en attente, toutes pour des lignes sorties de
+l'écran depuis longtemps, et toutes **devant** celle où le lecteur venait de s'arrêter. La
+déduplication ne rattrapait rien : la clé n'entrait dans `inFlight` qu'une fois la tâche
+ordonnancée, donc le même fichier était redemandé autant de fois qu'il était survolé.
+
+`PrefetchWindow` remplace cette file par une **fenêtre unique**, écrasée à chaque consigne et
+vidée par deux drains. Ce qui a été dépassé est oublié : personne ne le regarde, et le cache
+disque répond si le lecteur remonte. C'est une structure pure, hors de l'acteur, pour que
+`Tests/prefetch.swift` puisse la pousser à mille consignes d'affilée et vérifier qu'il reste
+une fenêtre et deux drains.
+
+**Tout le décodage était sérialisé sur l'acteur.** `Task { }` créé dans une méthode isolée
+**hérite de l'acteur** — la lecture disque, le décodage, l'encodage JPEG et l'écriture du cache
+s'exécutaient donc sur l'exécuteur du pipeline, une vignette à la fois. Le `Gate(limit: 4)`
+bornait une file déjà sérielle, et une cellule arrivant à l'écran attendait derrière tout ce
+qui était déjà en file. Le `Task` est devenu `Task.detached`, et `produce` / `still` / `frame`
+sont `nonisolated`. L'acteur ne garde que ce qui est à lui : le cache mémoire, les tâches en
+cours, la fenêtre.
+
+**Le visualiseur attendait sa vignette avant de commencer son travail.** `PhotoPage` enchaînait
+« vignette, puis fichier complet » ; la vignette venant du pipeline encombré, la page restait
+noire alors que le téléchargement aurait pu démarrer tout de suite. Les deux courent désormais
+en parallèle, et le premier arrivé s'affiche — la vignette ne réécrit pas une image déjà nette.
+
+Accessoirement, `still` n'attend plus l'écriture de la date de prise de vue dans SQLite : c'est
+un effet de bord de la vignette, pas sa raison d'être, et le faire attendre mettait chaque
+cellule derrière ce que la passe d'indexation était en train d'écrire.
+
+### Vérifier à la main
+
+`Tests/prefetch.swift` couvre la fenêtre ; le reste demande l'appareil et une vraie
+bibliothèque :
+
+- **Scroll long** : ouvrir un dossier de plusieurs milliers de photos, scroller d'un trait
+  jusqu'au milieu, lâcher. Les cases visibles doivent se remplir en une seconde ou deux, sans
+  rapport avec la distance parcourue.
+- **Ouvrir depuis là** : taper une photo juste après ce scroll. Quelque chose doit apparaître
+  tout de suite — la vignette ou l'image nette, peu importe laquelle gagne — jamais un écran
+  noir qui dure.
+- **Vidéo depuis là** : même geste sur une vidéo, la lecture doit démarrer comme depuis le
+  haut du dossier.
+- **Remonter** : rescroller vers le haut, les vignettes déjà vues reviennent du cache disque
+  instantanément.
+- **Pendant une indexation** : refaire les trois premiers pendant que l'écran d'indexation
+  travaille. C'est le cas où l'acteur SQLite est le plus occupé.
+
 ## Recherche
 
 Onglet dédié, porté par `TabRole.search` : iOS le range où il range la recherche partout
