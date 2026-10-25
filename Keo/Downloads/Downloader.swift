@@ -118,7 +118,9 @@ struct DownloadBar: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(.bar)
+            // A card in the same floating family as the action bar, not a slab glued
+            // underneath it.
+            .background(.bar, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
     }
 }

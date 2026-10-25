@@ -958,6 +958,58 @@ xcrun devicectl device copy from --device <UDID> --domain-type systemCrashLogs \
   --source "Keo-….ips" --destination /tmp/
 ```
 
+## La barre d'actions du plein écran
+
+Cinq cercles identiques, dans l'ordre où les fonctionnalités avaient été écrites. Le cœur —
+l'action la plus fréquente, la seule avec un retour haptique — se retrouvait à l'extrémité la
+plus difficile à atteindre pour un pouce, et le menu d'export portait une flèche *vers le bas*
+alors que la moitié de son contenu est « Partager ».
+
+**Le principe retenu : grouper par ce que l'action touche, puis ordonner par poids — la plus
+lourde là où l'œil commence, la plus légère là où le pouce se repose.**
+
+| | Action | Pourquoi là |
+|---|---|---|
+| 1 | Enregistrer / Partager | Déplace des octets hors du NAS : lent, délibéré, quitte l'app. Le plus loin du pouce au repos. |
+| 2 | Note | La plus rare des trois écritures d'index, donc le créneau intérieur le moins bon. |
+| 3 | Collection | Fréquence moyenne, position moyenne, collée au cœur parce que « mettre en favori / ranger » est un même geste mental. |
+| 4 | Favori | La plus fréquente, un tap, réversible : la meilleure position. |
+| — | Live | Détaché, dans sa propre bulle. Il ne modifie pas ce qui est enregistré mais ce qui est à l'écran — ce n'est pas la même famille. |
+
+Keo a ici un avantage qu'aucune galerie n'a : **ni Modifier ni Supprimer**, puisque le NAS est
+en lecture seule. Tout le problème du « destructif à l'extrémité » disparaît, et la barre peut
+s'organiser uniquement par poids et fréquence.
+
+### Ce qui change visuellement
+
+Une seule capsule pour les quatre, au lieu de cinq fonds séparés — c'est l'idiome des îlots de
+barre d'outils d'iOS 26, et c'est la vraie réponse à « pas très joli » : cinq objets flottants
+plus un trou fantôme se lisent comme du désordre, une capsule et une bulle se lisent comme deux
+objets. Verre liquide sur iOS 26, même géométrie en matériau en dessous.
+
+**La teinte ne sert qu'à l'état**, jamais à l'identité : le cœur plein, la note présente, le
+live en cours. Le glyphe de la note ne change plus (`text.quote` contre `text.quote.rtl` est
+indistinguable à cette taille), et celui du live non plus — `livephoto.slash` veut dire
+« effet Live désactivé » dans Photos, un autre verbe, et l'emprunter pour dire « arrêter »
+enseignerait la mauvaise chose.
+
+### Le créneau conditionnel ne décale plus rien
+
+La bulle Live est une **superposition**, pas un frère de la capsule : une superposition est
+positionnée, pas disposée contre ses voisins, donc son apparition ne peut pas déplacer la
+capsule. La garantie passe d'une discipline qu'il faut penser — le créneau fantôme en
+`Color.clear` qu'elle remplace — à une propriété de la géométrie.
+
+`maxWidth: 560` est toute la stratégie iPad : inerte sur iPhone, et sur une tablette la grappe
+reste un objet compact au centre plutôt que cinq glyphes éparpillés sur mille points.
+
+### Deux bugs corrigés au passage
+
+- **La barre entière disparaissait pendant un téléchargement**, donc le cœur avec. Seul le
+  bouton d'export est désactivé maintenant : l'état se montre sur le contrôle qui l'a causé.
+- **La barre de progression ne s'effaçait pas** avec le glissement de fermeture, ce qui laissait
+  une bande opaque sous une photo déjà en train de rétrécir vers sa vignette.
+
 ## Transition de zoom grille ↔ photo
 
 La photo sort de sa vignette et y retourne, au lieu d'un fondu au noir : `matchedTransitionSource`

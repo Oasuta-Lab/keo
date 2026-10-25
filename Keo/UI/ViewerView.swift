@@ -24,6 +24,7 @@ struct ViewerView: View {
     /// Lives here and not in the page: the control that drives it sits in the bottom
     /// bar, which the page does not own.
     @State private var livePlaying = false
+    @Namespace private var glassSpace
     /// Counts taps, not the flag: paging also rewrites `favourite`, and swiping between a
     /// favourite and a plain photo must not buzz.
     @State private var favouriteTaps = 0
@@ -63,9 +64,15 @@ struct ViewerView: View {
         .overlay(alignment: .top) { chrome.opacity(1 - progress) }
         .overlay(alignment: .bottom) {
             VStack(spacing: 10) {
-                if !downloader.isRunning { actions.opacity(1 - progress) }
                 DownloadBar(downloader: downloader)
+                    .frame(maxWidth: 420)
+                actionBar
             }
+            // The whole stack fades with the dismiss drag. The progress bar used to be
+            // exempt, which left an opaque strip hanging under a photo already shrinking
+            // towards its grid cell, and broke the hand-off to the zoom transition.
+            .opacity(1 - progress)
+            .padding(.bottom, 4)
         }
         .sheet(item: $downloader.share) { payload in
             ShareSheet(urls: payload.urls)
@@ -174,63 +181,119 @@ struct ViewerView: View {
 
     /// Bottom: everything you actually do, within thumb reach.
     ///
-    /// Five slots of equal width rather than a fixed spacing, and the fifth stays empty on a
-    /// photo with no video. Laying the fifth out only when it exists would slide the heart
-    /// out from under the thumb as you page from a Live Photo to an ordinary one.
-    private var actions: some View {
+    /// Four actions in one capsule, and the Live control detached in its own bubble. The
+    /// previous row of five identical circles read as clutter and its order was simply the
+    /// order the features were built in — which put the heart, the most frequent action and
+    /// the only one with a haptic, at the hardest reach for a thumb.
+    ///
+    /// Weight falls from left to right. Slot one moves bytes off the NAS: slow, deliberate,
+    /// leaves the app, so it sits where the eye starts and the thumb arrives last. Slots two
+    /// to four all write to Keo's own index — note, collection, favourite — and rise in
+    /// frequency towards the thumb. Live is in none of those families: it changes what is on
+    /// screen, not what is recorded, so it is not in the group at all.
+    private var actionBar: some View {
+        Group {
+            if #available(iOS 26.0, *) {
+                GlassEffectContainer(spacing: 20) { barRow(morphing: true) }
+            } else {
+                barRow(morphing: false)
+            }
+        }
+        // Inert on an iPhone. On an iPad it is the whole strategy: the cluster stays a
+        // compact bottom-centre object instead of five glyphs scattered across 1 000 points,
+        // and the Live bubble stays beside it rather than a hand-span away.
+        .frame(maxWidth: 560)
+    }
+
+    private var hasLive: Bool {
+        guard let current else { return false }
+        return companions[current.id] != nil
+    }
+
+    private func barRow(morphing: Bool) -> some View {
+        cluster
+            .modifier(BarSurface(shape: AnyShape(Capsule()), morphing: morphing,
+                                 id: "cluster", in: glassSpace))
+            .frame(maxWidth: .infinity)
+            // An overlay is positioned, not laid out against its siblings, so the bubble
+            // appearing cannot move the capsule. The no-shift rule stops being a discipline
+            // someone has to remember — the ghost `Color.clear` slot it replaces — and
+            // becomes a property of the geometry.
+            .overlay(alignment: .trailing) {
+                if hasLive {
+                    liveButton
+                        .modifier(BarSurface(shape: AnyShape(Circle()), morphing: morphing,
+                                             id: "live", in: glassSpace))
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
+            }
+            .animation(.snappy(duration: 0.25), value: hasLive)
+            .padding(.horizontal, 16)
+    }
+
+    private var cluster: some View {
         HStack(spacing: 0) {
-          Group {
-            Button { toggleFavourite() } label: {
-                Glyph(favourite ? "heart.fill" : "heart", large: true)
-                    .foregroundStyle(favourite ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
-            }
-            .accessibilityLabel("Favori")
-            .accessibilityValue(favourite ? "Oui" : "Non")
-
-            Button { choosingCollection = true } label: { Glyph("square.stack", large: true) }
-                .accessibilityLabel("Ajouter à une collection")
-
-            Button { annotating = current } label: {
-                Glyph(hasNote ? "text.quote.rtl" : "text.quote", large: true)
-                    .foregroundStyle(hasNote ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
-            }
-            .accessibilityLabel("Note")
-            .accessibilityValue(hasNote ? "Présente" : "Aucune")
-
             Menu {
                 if let current {
+                    Button("Partager", systemImage: "square.and.arrow.up") {
+                        downloader.save([current], from: client, to: .share)
+                    }
                     if current.isMedia {
                         Button("Enregistrer dans Photos", systemImage: "photo.badge.arrow.down") {
                             downloader.save([current], from: client, to: .photos)
                         }
                     }
-                    Button("Partager", systemImage: "square.and.arrow.up") {
-                        downloader.save([current], from: client, to: .share)
-                    }
                 }
             } label: {
-                Glyph("square.and.arrow.down", large: true)
+                // Up, not down: the glyph has to cover "Partager" as well, and the up arrow
+                // is the iOS convention for "this leaves the app". A download arrow promised
+                // one of the two items and hid the other.
+                ActionGlyph("square.and.arrow.up")
             }
-            .accessibilityLabel("Enregistrer ou partager")
             .disabled(downloader.isRunning)
+            .accessibilityLabel("Enregistrer ou partager")
 
-            if let current, companions[current.id] != nil {
-                Button { livePlaying.toggle() } label: {
-                    Glyph(livePlaying ? "livephoto.slash" : "livephoto", large: true)
-                        .foregroundStyle(livePlaying ? AnyShapeStyle(.tint)
-                                                     : AnyShapeStyle(.white))
-                }
-                .accessibilityLabel(livePlaying ? "Arrêter la vidéo live" : "Jouer la vidéo live")
-            } else {
-                // Holds the slot open so the four others never move.
-                Color.clear
+            Button { annotating = current } label: {
+                // One glyph in both states. `text.quote` against `text.quote.rtl` is an
+                // illegible distinction at this size; the tint says it, as it does for the
+                // heart. State is colour, identity is shape, everywhere in this bar.
+                ActionGlyph("text.quote", on: hasNote)
             }
-          }
-          .frame(maxWidth: .infinity)
+            .accessibilityLabel("Note")
+            .accessibilityValue(hasNote ? "Présente" : "Aucune")
+
+            Button { choosingCollection = true } label: {
+                ActionGlyph("square.stack")
+            }
+            .accessibilityLabel("Ajouter à une collection")
+
+            Button { toggleFavourite() } label: {
+                ActionGlyph(favourite ? "heart.fill" : "heart", on: favourite)
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .accessibilityLabel("Favori")
+            .accessibilityValue(favourite ? "Oui" : "Non")
         }
+        .padding(.horizontal, 6)
         .disabled(current == nil)
-        .padding(.horizontal, 8)
-        .padding(.bottom, 6)
+    }
+
+    /// Never `livephoto.slash`: in Photos that glyph means "Live effect disabled", a
+    /// different verb, and borrowing it to mean "stop" teaches the wrong thing. The identity
+    /// stays constant and the running state is drawn — tinted, with the ring shimmering.
+    private var liveButton: some View {
+        Button { livePlaying.toggle() } label: {
+            Image(systemName: "livephoto")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(livePlaying ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
+                .symbolEffect(.variableColor.iterative, isActive: livePlaying)
+                // One dip as you page onto a Live Photo. That is the announcement the
+                // deleted "LIVE" pill used to make, without a second thing on screen.
+                .symbolEffect(.bounce, value: currentID)
+                .frame(width: 56, height: 56)
+                .contentShape(Circle())
+        }
+        .accessibilityLabel(livePlaying ? "Arrêter la vidéo live" : "Jouer la vidéo live")
     }
 
     // MARK: Swipe to dismiss
@@ -259,6 +322,53 @@ struct ViewerView: View {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { drag = .zero }
                 }
             }
+    }
+}
+
+/// A bare monochrome glyph in a hit slot wider than it looks. Tint carries state, shape
+/// carries identity, and the surface belongs to the group rather than to each button —
+/// per-button glass is what made five circles read as clutter.
+private struct ActionGlyph: View {
+    let name: String
+    var on = false
+
+    init(_ name: String, on: Bool = false) {
+        self.name = name
+        self.on = on
+    }
+
+    var body: some View {
+        Image(systemName: name)
+            .font(.title3.weight(.medium))
+            .foregroundStyle(on ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
+            .frame(width: 48, height: 56)
+            .contentShape(Rectangle())
+    }
+}
+
+/// Liquid Glass on iOS 26, the same geometry in material below it. `glassEffectID` lets the
+/// Live bubble morph out of the capsule instead of popping into existence.
+private struct BarSurface: ViewModifier {
+    let shape: AnyShape
+    let morphing: Bool
+    let id: String
+    let space: Namespace.ID
+
+    init(shape: AnyShape, morphing: Bool, id: String, in space: Namespace.ID) {
+        self.shape = shape
+        self.morphing = morphing
+        self.id = id
+        self.space = space
+    }
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), morphing {
+            content
+                .glassEffect(.regular.interactive(), in: shape)
+                .glassEffectID(id, in: space)
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+        }
     }
 }
 
