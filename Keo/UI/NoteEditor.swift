@@ -83,16 +83,41 @@ struct NoteEditor: View {
     }
 }
 
-/// The mark an annotated item carries in a grid or on a tile. Small on purpose: it says
-/// "there is something here", it does not compete with the photo.
-struct NoteBadge: View {
+/// What a thumbnail says about itself without being opened: it is a favourite, it is in a
+/// collection, it carries a note, it is a Live Photo.
+///
+/// One row rather than four separate overlays, and nothing at all when none applies — four
+/// badges on a 110 pt cell would bury the photo they are meant to annotate.
+struct Badges: View {
+    var noted = false
+    var favourite = false
+    var collected = false
+    var live = false
+
+    private var marks: [(symbol: String, label: String)] {
+        var all: [(String, String)] = []
+        if live { all.append(("livephoto", "Photo live")) }
+        if favourite { all.append(("heart.fill", "Favori")) }
+        if collected { all.append(("square.stack.fill", "Dans une collection")) }
+        if noted { all.append(("text.quote", "Contient une note")) }
+        return all
+    }
+
     var body: some View {
-        Image(systemName: "text.quote")
-            .font(.system(size: 10, weight: .semibold))
+        if !marks.isEmpty {
+            HStack(spacing: 3) {
+                ForEach(marks, id: \.symbol) { mark in
+                    Image(systemName: mark.symbol)
+                        .font(.system(size: 9, weight: .semibold))
+                        .accessibilityLabel(mark.label)
+                }
+            }
             .foregroundStyle(.white)
-            .padding(4)
-            .background(.black.opacity(0.45), in: Circle())
+            .padding(.horizontal, 5)
+            .padding(.vertical, 3)
+            .background(.black.opacity(0.45), in: Capsule())
             .padding(5)
-            .accessibilityLabel("Contient une note")
+            .allowsHitTesting(false)
+        }
     }
 }

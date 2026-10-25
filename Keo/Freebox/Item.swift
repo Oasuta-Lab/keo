@@ -148,6 +148,9 @@ struct FolderContents: Sendable {
     let folders: [Item]
     let media: [Item]
     let documents: [Item]
+    /// The `.MOV` half of a Live Photo, keyed by the still it belongs to. Kept out of `media`
+    /// so the grid shows one tile per moment, and kept here so the viewer can still play it.
+    let companions: [Item.ID: Item]
 
     static let empty = FolderContents(folders: [], media: [], documents: [])
 
@@ -164,18 +167,30 @@ struct FolderContents: Sendable {
                 return copy
             }
         }
-        return FolderContents(folders: folders, media: enrich(media), documents: enrich(documents))
+        return FolderContents(folders: folders, media: enrich(media),
+                              documents: enrich(documents), companions: companions)
             .reordered(by: order)
     }
     var selectableCount: Int { media.count + documents.count }
     /// Grid order, so a selection can be replayed in the order the user sees.
     var selectable: [Item] { media + documents }
 
-    init(folders: [Item], media: [Item], documents: [Item]) {
+    init(folders: [Item], media: [Item], documents: [Item],
+         companions: [Item.ID: Item] = [:]) {
         self.folders = folders
         self.media = media
         self.documents = documents
+        self.companions = companions
     }
+
+    /// The video half of a Live Photo, if this still has one.
+    func companion(of item: Item) -> Item? { companions[item.id] }
+
+    /// Everything the index must know about, companions included. Hiding a file from the grid
+    /// must never hide it from the index: the sweep would delete it, and the viewer would
+    /// have no video left to play. It is also the real weight of the folder — a Live Photo's
+    /// `.MOV` occupies the NAS whether or not it has a tile.
+    var filed: [Item] { media + Array(companions.values) + documents }
 
     /// Reorders in place rather than refetching: changing the sort is not a network question.
     /// Folders stay alphabetical — a NAS folder's mtime says when it was last written to,
@@ -183,7 +198,8 @@ struct FolderContents: Sendable {
     func reordered(by order: ItemOrder) -> FolderContents {
         FolderContents(folders: folders,
                        media: media.sorted(by: order.precedes),
-                       documents: documents.sorted(by: order.precedes))
+                       documents: documents.sorted(by: order.precedes),
+                       companions: companions)
     }
 
     init(_ items: [Item], order: ItemOrder = .newest) {
@@ -200,8 +216,13 @@ struct FolderContents: Sendable {
             case .other: documents.append(item)
             }
         }
+        // A Live Photo's video is folded into its still rather than shown next to it: the
+        // pairing iOS held in PHAsset metadata is lost when the files land on a NAS, and
+        // without this the grid shows every iPhone photo twice.
+        let (visible, companions) = LivePhotos.pair(media)
         self.init(folders: folders.sorted(by: ItemOrder.name.precedes),
-                  media: media.sorted(by: order.precedes),
-                  documents: documents.sorted(by: order.precedes))
+                  media: visible.sorted(by: order.precedes),
+                  documents: documents.sorted(by: order.precedes),
+                  companions: companions)
     }
 }

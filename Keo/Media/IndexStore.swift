@@ -54,12 +54,15 @@ actor IndexStore {
         try exec("PRAGMA foreign_keys = ON")
         try exec("PRAGMA busy_timeout = 3000")
         registerFold()
+        registerStem()
         try exec(Self.schema)
         // Older databases predate the per-folder tallies; adding them is harmless if present.
         try? exec("ALTER TABLE folder ADD COLUMN media_count INTEGER")
         try? exec("ALTER TABLE folder ADD COLUMN bytes INTEGER")
         try? exec("ALTER TABLE file ADD COLUMN read INTEGER NOT NULL DEFAULT 0")
         try? exec("ALTER TABLE file ADD COLUMN kind INTEGER NOT NULL DEFAULT 3")
+        // 0 until proven otherwise: a file wrongly hidden is a file lost.
+        try? exec("ALTER TABLE file ADD COLUMN live INTEGER NOT NULL DEFAULT 0")
         // Rows written before the column existed were all read ones.
         try? exec("UPDATE file SET read = 1 WHERE read = 0 AND gen >= 0 AND capture IS NOT NULL")
 
@@ -72,6 +75,7 @@ actor IndexStore {
         ready = true
         retryDatelessAfterReaderChange()
         relistAfterListingChange()
+        markLivePairsEverywhere()
         repairKinds()
         migrateFromJSON(in: folder)
     }
@@ -396,7 +400,7 @@ actor IndexStore {
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
         try prepare("""
-            SELECT name, size, capture, kind FROM file WHERE folder_id = ?
+            SELECT name, size, capture, kind FROM file WHERE folder_id = ? AND live = 0
             """, into: &statement)
         sqlite3_bind_int64(statement, 1, id)
 
@@ -749,6 +753,20 @@ actor IndexStore {
     func noteCount() throws -> Int {
         try open()
         return Int(try scalar("SELECT count(*) FROM note") ?? 0)
+    }
+
+    /// Paths that belong to at least one collection, for the grid's badges — one query for
+    /// a screenful rather than one per cell, the same shape as `notedPaths`.
+    func collectedPaths() throws -> Set<String> {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT DISTINCT path FROM collection_item", into: &statement)
+        var paths: Set<String> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let raw = sqlite3_column_text(statement, 0) { paths.insert(String(cString: raw)) }
+        }
+        return paths
     }
 
     func favouriteCount() throws -> Int {
@@ -1670,6 +1688,72 @@ actor IndexStore {
     }
 
 
+    // MARK: Live Photos
+
+    /// Marks the `.MOV` half of every Live Photo in one folder.
+    ///
+    /// Runs once the folder's listing is complete, because the question "is there a still of
+    /// the same stem next to it" can only be answered on the whole folder. A lone `.MOV`
+    /// stays unmarked and visible: that is every video not shot on an iPhone.
+    func markLivePairs(in folder: String) throws {
+        try open()
+        guard let id = try folderID(folder, create: false) else { return }
+        try exec("""
+            UPDATE file SET live = CASE WHEN kind = \(Item.Kind.video.code) AND EXISTS (
+                SELECT 1 FROM file still WHERE still.folder_id = file.folder_id
+                  AND still.kind = \(Item.Kind.image.code)
+                  AND stem(still.name) = stem(file.name)
+            ) THEN 1 ELSE 0 END
+            WHERE folder_id = \(id)
+            """)
+    }
+
+    /// The video that belongs to this still, when the index knows of one.
+    func companion(of still: Item, in folder: String) throws -> Item? {
+        try open()
+        guard let id = try folderID(folder, create: false) else { return nil }
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("""
+            SELECT name, size, capture FROM file
+            WHERE folder_id = ? AND live = 1 AND stem(name) = stem(?)
+            LIMIT 1
+            """, into: &statement)
+        sqlite3_bind_int64(statement, 1, id)
+        bind(statement, 2, still.name)
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let raw = sqlite3_column_text(statement, 0) else { return nil }
+        let name = String(cString: raw)
+        let capture = sqlite3_column_type(statement, 2) == SQLITE_NULL
+            ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 2))
+        return Item(path: folder + "/" + name, name: name, isDirectory: false,
+                    size: sqlite3_column_int64(statement, 1), modified: nil,
+                    mimeType: Item.Kind.video.mimeHint, captureDate: capture)
+    }
+
+    /// Bumped when the pairing rule changes. Marks every folder already indexed in one pass —
+    /// no listing, no network, nothing re-read from the NAS.
+    private static let liveVersion: Int64 = 1
+
+    private func markLivePairsEverywhere() {
+        guard let seen = try? value(forKey: "liveVersion") ?? 0,
+              seen < Self.liveVersion else { return }
+        do {
+            try exec("BEGIN IMMEDIATE")
+            try exec("""
+                UPDATE file SET live = CASE WHEN kind = \(Item.Kind.video.code) AND EXISTS (
+                    SELECT 1 FROM file still WHERE still.folder_id = file.folder_id
+                      AND still.kind = \(Item.Kind.image.code)
+                      AND stem(still.name) = stem(file.name)
+                ) THEN 1 ELSE 0 END
+                """)
+            try setValue(Self.liveVersion, forKey: "liveVersion")
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+        }
+    }
+
     // MARK: Search
 
     /// A file's full path, rebuilt from its folder row. Spelled once: it appears in every
@@ -1718,6 +1802,9 @@ actor IndexStore {
                             + "AND n.size = fi.size AND fold(n.body) LIKE ?1 ESCAPE '\\'))")
         }
         conditions.append("fi.kind IN (\(query.kinds.codes.map(String.init).joined(separator: ", ")))")
+        // The hidden half of a Live Photo is not a result: it has the same name as its still
+        // and would double every match.
+        conditions.append("fi.live = 0")
         if query.favouritesOnly {
             conditions.append("EXISTS (SELECT 1 FROM favourite f "
                             + "WHERE f.path = \(Self.filePath) AND f.size = fi.size)")
@@ -1933,6 +2020,21 @@ actor IndexStore {
                                    nil, fold, nil, nil, nil)
     }
 
+    /// `stem('IMG_4821.MOV')` is `img_4821`, which is how the two halves of a Live Photo
+    /// find each other. Same shape as `fold`, and the same reason: the rule must be one rule.
+    private func registerStem() {
+        let stem: @convention(c) (OpaquePointer?, Int32,
+                                  UnsafeMutablePointer<OpaquePointer?>?) -> Void = { ctx, n, args in
+            guard n == 1, let args, let raw = sqlite3_value_text(args[0]) else {
+                sqlite3_result_null(ctx)
+                return
+            }
+            sqlite3_result_text(ctx, LivePhotos.key(String(cString: raw)), -1, transientText)
+        }
+        sqlite3_create_function_v2(db, "stem", 1, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+                                   nil, stem, nil, nil, nil)
+    }
+
     private func exec(_ sql: String) throws {
         guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw Failure.write(message) }
     }
@@ -2053,7 +2155,8 @@ actor IndexStore {
         try prepare("""
             SELECT d.path, fi.name, fi.size, fi.capture, fi.kind
             FROM file fi JOIN folder d ON d.id = fi.folder_id
-            WHERE (\(scope)) AND fi.kind IN (\(Item.Kind.image.code), \(Item.Kind.video.code))
+            WHERE (\(scope)) AND fi.live = 0
+              AND fi.kind IN (\(Item.Kind.image.code), \(Item.Kind.video.code))
             ORDER BY fi.kind, fi.capture DESC, d.path, fi.name
             LIMIT ?3
             """, into: &statement)
@@ -2153,7 +2256,7 @@ actor IndexStore {
         try prepare("""
             SELECT folder.path, file.name, file.size, file.kind
             FROM file JOIN folder ON folder.id = file.folder_id
-            WHERE file.kind IN (1, 2)
+            WHERE file.kind IN (1, 2) AND file.live = 0
               AND (folder.path = ?2 OR \(Self.subtree("folder.path")))
             ORDER BY file.kind, file.capture DESC, folder.path, file.name
             LIMIT 1

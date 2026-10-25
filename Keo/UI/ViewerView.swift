@@ -6,6 +6,8 @@ import SwiftUI
 struct ViewerView: View {
     let client: FreeboxClient
     let items: [Item]
+    /// The hidden `.MOV` of each Live Photo, by the still it belongs to.
+    let companions: [Item.ID: Item]
     /// Reported back so the grid knows which cell to fly home to, and scrolls it into view.
     @Binding var anchor: Item.ID?
 
@@ -31,9 +33,11 @@ struct ViewerView: View {
     /// several times per pass; a linear scan of a 14 600-item folder does not fit in a frame.
     private let indexByID: [Item.ID: Int]
 
-    init(client: FreeboxClient, items: [Item], start: Item, anchor: Binding<Item.ID?>) {
+    init(client: FreeboxClient, items: [Item], companions: [Item.ID: Item] = [:],
+         start: Item, anchor: Binding<Item.ID?>) {
         self.client = client
         self.items = items
+        self.companions = companions
         _anchor = anchor
         indexByID = Dictionary(items.enumerated().map { ($0.element.id, $0.offset) },
                                uniquingKeysWith: { first, _ in first })
@@ -105,8 +109,8 @@ struct ViewerView: View {
         ScrollView(.horizontal) {
             LazyHStack(spacing: 0) {
                 ForEach(items) { item in
-                    Page(item: item, client: client, zoomed: $zoomed,
-                         onCaptureDate: { captured[item.id] = $0 })
+                    Page(item: item, client: client, live: companions[item.id],
+                         zoomed: $zoomed, onCaptureDate: { captured[item.id] = $0 })
                         .containerRelativeFrame(.horizontal)
                         .id(item.id)
                 }
@@ -257,6 +261,8 @@ private struct Glyph: View {
 private struct Page: View {
     let item: Item
     let client: FreeboxClient
+    /// The video half, when this still is a Live Photo.
+    let live: Item?
     @Binding var zoomed: Bool
     let onCaptureDate: (Date) -> Void
 
@@ -267,7 +273,8 @@ private struct Page: View {
         case .other:
             DocumentPage(item: item, client: client)
         default:
-            ImagePage(item: item, client: client, zoomed: $zoomed, onCaptureDate: onCaptureDate)
+            ImagePage(item: item, client: client, live: live, zoomed: $zoomed,
+                      onCaptureDate: onCaptureDate)
         }
     }
 }
@@ -275,24 +282,52 @@ private struct Page: View {
 private struct ImagePage: View {
     let item: Item
     let client: FreeboxClient
+    let live: Item?
     @Binding var zoomed: Bool
     let onCaptureDate: (Date) -> Void
 
     @State private var image: UIImage?
     @State private var sharp = false
     @State private var failed = false
+    @State private var playing = false
 
     var body: some View {
         ZStack {
             Color.black
             if let image {
                 ZoomableImage(image: image, zoomed: $zoomed)
+                    .opacity(playing ? 0 : 1)
+                if let live, playing {
+                    LivePlayback(item: live, client: client) { playing = false }
+                }
             } else if failed {
                 ContentUnavailableView("Image illisible", systemImage: "photo.badge.exclamationmark")
             } else {
                 ProgressView().tint(.white)
             }
         }
+        .overlay(alignment: .topLeading) {
+            // Says the gesture exists. Without it a Live Photo is indistinguishable from a
+            // still, and nobody presses a photo on the off-chance.
+            if live != nil, !playing {
+                Label("LIVE", systemImage: "livephoto")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.black.opacity(0.4), in: Capsule())
+                    .padding(12)
+                    .allowsHitTesting(false)
+            }
+        }
+        // Long press, like Photos — the gesture is already in everyone's fingers. Guarded on
+        // `zoomed` so it cannot fight the pinch gesture of the scroll view underneath.
+        .onLongPressGesture(minimumDuration: 0.3) {
+            guard live != nil, !zoomed else { return }
+            playing = true
+        }
+        .sensoryFeedback(.impact(flexibility: .soft), trigger: playing) { _, now in now }
+        .onChange(of: item.path) { _, _ in playing = false }
         .task(id: item.path) {
             // The grid thumbnail first so the page is never blank, then the real thing.
             if image == nil,
@@ -506,5 +541,59 @@ private struct QuickLookView: UIViewControllerRepresentable {
         func numberOfPreviewItems(in controller: QLPreviewController) -> Int { 1 }
         func previewController(_ controller: QLPreviewController,
                                previewItemAt index: Int) -> QLPreviewItem { url }
+    }
+}
+
+
+/// Plays the hidden half of a Live Photo once, then hands the still back.
+///
+/// Reuses `AuthenticatedAsset` for the same reason the video page does:
+/// `AVURLAssetHTTPHeaderFieldsKey` is undocumented and ignored, so the session token has to
+/// ride in through a resource loader or the box answers 403.
+private struct LivePlayback: View {
+    let item: Item
+    let client: FreeboxClient
+    let onEnd: () -> Void
+
+    @State private var source: AuthenticatedAsset?
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        ZStack {
+            if let player {
+                VideoPlayer(player: player)
+                    .allowsHitTesting(false)
+            } else {
+                ProgressView().tint(.white)
+            }
+        }
+        .task {
+            do {
+                let authenticated = AuthenticatedAsset(source: try await client
+                    .videoSource(item.path))
+                let player = AVPlayer(playerItem: AVPlayerItem(asset: authenticated.asset))
+                // Muted: a Live Photo is three seconds of ambient noise, and Photos plays
+                // them silently until you ask otherwise.
+                player.isMuted = true
+                source = authenticated
+                self.player = player
+                player.play()
+            } catch {
+                // A companion that will not load is not worth an error screen — the still is
+                // still on display behind, which is what the user came for.
+                onEnd()
+            }
+        }
+        .onDisappear { player?.pause() }
+        .task(id: player == nil) {
+            guard let player else { return }
+            // One pass, then back to the still, exactly like letting go in Photos.
+            for await _ in NotificationCenter.default.notifications(
+                named: AVPlayerItem.didPlayToEndTimeNotification) {
+                _ = player
+                onEnd()
+                break
+            }
+        }
     }
 }

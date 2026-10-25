@@ -62,6 +62,9 @@ struct BrowserView: View {
     @State private var goingTo: BrowserSource?
     /// Paths carrying a note, so a cell can be marked without one query per cell.
     @State private var noted: Set<String> = []
+    /// Marked on the tiles, like the notes. One query each per load, not per cell.
+    @State private var favouritePaths: Set<String> = []
+    @State private var collectedPaths: Set<String> = []
     @State private var annotating: Item?
     /// True when every selected item is already a favourite — the action then unfavourites.
     @State private var selectionIsFavourite = false
@@ -194,6 +197,7 @@ struct BrowserView: View {
         .fullScreenCover(item: $viewing) { item in
             ViewerView(client: client,
                        items: contents.media.isEmpty ? [item] : contents.media,
+                       companions: contents.companions,
                        start: item, anchor: $anchor)
                 .navigationTransition(.zoom(sourceID: anchor ?? item.id, in: zoom))
         }
@@ -274,7 +278,10 @@ struct BrowserView: View {
                           selected: selecting ? selection.contains(item) : nil,
                           lookahead: lookahead(after: item))
                         .overlay(alignment: .topLeading) {
-                            if noted.contains(item.path) { NoteBadge() }
+                            Badges(noted: noted.contains(item.path),
+                                   favourite: favouritePaths.contains(item.path),
+                                   collected: collectedPaths.contains(item.path),
+                                   live: contents.companions[item.id] != nil)
                         }
                 }
                 .buttonStyle(.plain)
@@ -317,6 +324,8 @@ struct BrowserView: View {
         collections = (try? await IndexStore.shared.collections()) ?? []
         pinned = Set((try? await IndexStore.shared.shortcuts())?.map(\.path) ?? [])
         noted = (try? await IndexStore.shared.notedPaths()) ?? []
+        favouritePaths = Set((try? await IndexStore.shared.favourites())?.map(\.path) ?? [])
+        collectedPaths = (try? await IndexStore.shared.collectedPaths()) ?? []
     }
 
     private func togglePin(_ folder: Item) {
@@ -827,8 +836,8 @@ private struct FolderTile: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                if noted { NoteBadge().frame(maxWidth: .infinity, maxHeight: .infinity,
-                                             alignment: .topLeading) }
+                Badges(noted: noted)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
                 if let count = stats?.mediaCount ?? folder.childCount, count > 0 {
                     Text(count, format: .number)

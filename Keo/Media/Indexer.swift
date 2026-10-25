@@ -384,19 +384,22 @@ final class Indexer: ObservableObject {
 
                 let completion = FolderStamp.Completion(
                     modified: folder.modified,
-                    childCount: contents.folders.count + contents.media.count
-                              + contents.documents.count,
+                    childCount: contents.folders.count + contents.filed.count,
+                    // What the grid shows: a Live Photo is one moment, not two files.
                     mediaCount: contents.media.count,
-                    // Everything the folder holds, documents included: the tile answers
-                    // "how heavy is this folder", not "how heavy are its photos".
-                    bytes: (contents.media + contents.documents)
-                        .reduce(Int64(0)) { $0 + $1.size }
+                    // Everything the folder holds, documents and hidden Live Photo videos
+                    // included: the tile answers "how heavy is this folder", not "how heavy
+                    // is what I can see".
+                    bytes: contents.filed.reduce(Int64(0)) { $0 + $1.size }
                 )
                 // Documents travel with the photos: they are what makes a folder openable
-                // from the cache and findable by name. They are recorded, never read.
-                await index(contents.media + contents.documents, in: folder.path,
+                // from the cache and findable by name. They are recorded, never read — and
+                // so are the hidden halves of Live Photos, whose date is the still's anyway.
+                await index(contents.filed, in: folder.path,
+                            unread: Set(contents.companions.values.map(\.id)),
                             generation: generation, stamp: completion,
                             client: client, progress: &progress)
+                try? await IndexStore.shared.markLivePairs(in: folder.path)
             }
 
             // Only a pass that truly saw everything may decide what has disappeared.
@@ -445,12 +448,14 @@ final class Indexer: ObservableObject {
     ///
     /// `files` is the whole listing, documents included. Only the media are read: there is no
     /// capture date to find in a PDF, and fetching its first kilobytes would buy nothing.
-    private func index(_ files: [Item], in folder: String, generation: Int64,
-                       stamp: FolderStamp.Completion?,
+    /// `unread` names the files to record without opening — the hidden half of a Live Photo,
+    /// whose capture date is the still's, so fetching it would be range requests for nothing.
+    private func index(_ files: [Item], in folder: String, unread skip: Set<Item.ID> = [],
+                       generation: Int64, stamp: FolderStamp.Completion?,
                        client: FreeboxClient, progress: inout Progress) async {
         guard let store = try? await IndexStore.shared.unread(files, in: folder) else { return }
-        var todo = store.filter(\.isMedia)
-        let filed = store.filter { !$0.isMedia }
+        var todo = store.filter { $0.isMedia && !skip.contains($0.id) }
+        let filed = store.filter { !$0.isMedia || skip.contains($0.id) }
         var discovered: [Item.ID: Date] = [:]
 
         // A folder renamed or moved keeps its photos: the same name and size elsewhere in the

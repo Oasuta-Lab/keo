@@ -360,6 +360,40 @@ l'autre.
 Les résultats passent par le même `BrowserView` que le reste (`BrowserSource.results`) : même
 grille, même visionneuse, même sélection, mêmes téléchargements.
 
+## Photos live
+
+Une photo live d'iPhone copiée sur un NAS arrive en deux fichiers ordinaires :
+`IMG_4821.HEIC` et `IMG_4821.MOV`, même racine, même dossier. L'appariement qu'iOS tenait
+dans les métadonnées `PHAsset` est perdu à la copie, et rien dans les fichiers ne dit qu'ils
+vont ensemble. Résultat : une bibliothèque qui paraît deux fois plus pleine qu'elle n'est, et
+un jumeau gris à côté de chaque photo.
+
+Keo les réunit sur la seule preuve qui reste, le nom. Le `.MOV` disparaît de la grille, et un
+appui long sur la photo le joue — muet, une fois, comme Photos. Une pastille « LIVE » le
+signale, sinon personne n'appuie sur une photo au cas où.
+
+**Un `.MOV` isolé reste une vidéo visible.** C'est tout ce qui n'a pas été pris à l'iPhone, et
+le masquer le perdrait.
+
+La règle vit dans `LivePhotos`, hors SwiftUI, parce qu'elle doit tenir à trois endroits — un
+listing frais venu de la box, un listing rejoué depuis l'index, et le `UPDATE` qui marque la
+base — et qu'une règle qui dérive entre eux montre la vidéo d'un côté et la cache de l'autre.
+Côté SQL c'est la même fonction, enregistrée sur la connexion sous le nom `stem`, comme
+`fold` pour les accents.
+
+### Ce qui est caché reste indexé
+
+Masquer un fichier de la grille ne doit jamais le masquer de l'index : le balayage
+l'effacerait, et la visionneuse n'aurait plus de vidéo à jouer. Les compagnons sont donc
+enregistrés — mais **jamais lus** : leur date de prise de vue est celle de la photo, aller la
+chercher coûterait des requêtes pour rien.
+
+Ils comptent aussi dans le **poids** du dossier, qui doit dire ce que le NAS occupe, pas ce
+qui est visible. Le compteur de médias, lui, compte les moments : une photo live, c'est un.
+
+La migration ne relit rien sur le NAS. Un seul `UPDATE` sur la table `file` marque tous les
+dossiers déjà indexés au premier lancement, gouverné par `liveVersion`.
+
 ## Notes
 
 Une note sur une photo, une vidéo ou un dossier. C'est la seule personnalisation dont le
