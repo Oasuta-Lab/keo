@@ -228,10 +228,10 @@ struct BrowserView: View {
             }
         }
         .navigationTitle(selecting ? selectionTitle : title)
-        // Sibling folders used to disagree about their own title size, so navigating made
-        // the grid jump. A NAS folder is a place and keeps a large title — it collapses on
-        // scroll anyway; results and local collections are lists and stay inline.
-        .navigationBarTitleDisplayMode(selecting || !source.isOnNAS ? .inline : .large)
+        // Inline everywhere now that the breadcrumb exists. A large title under a trail that
+        // already ends on the folder's name said the same thing twice, and left an empty band
+        // between the two — which is what the owner saw.
+        .navigationBarTitleDisplayMode(.inline)
         .modifier(PushTargets(client: client, declare: root))
         .navigationDestination(item: $goingTo) { destination in
             BrowserView(client: client, source: destination)
