@@ -753,6 +753,30 @@ parseur. N'écrit rien, ni sur le NAS ni dans l'index.
 Un seul passage ne suffit pas à conclure. La constante ne bouge que sur plusieurs passages
 indépendants qui disent la même chose.
 
+### Ce que quatre passages ont donné
+
+| parallel | 10:28 | 14:05 | 14:07 | 14:09 | rang moyen |
+|---|---|---|---|---|---|
+| 1 | 36,3 | 42,5 | 22,5 | 21,2 | 7,0 |
+| 2 | 52,5 | 43,7 | 40,4 | 30,6 | 5,75 |
+| 3 | 48,8 | 60,0 | 91,6 | 31,7 | 4,5 |
+| 4 | 63,2 | 64,6 | 64,6 | 50,4 | **2,5** |
+| 6 | 56,5 | 71,2 | 153,9 | 40,5 | 2,75 |
+| 8 | 70,7 | 59,4 | 164,4 | 42,2 | **2,5** |
+| 12 | 67,4 | 63,4 | 60,6 | 42,5 | 3,0 |
+
+Chaque niveau est classé **à l'intérieur de son propre passage**, pas comparé aux autres
+passages : le débit absolu varie d'un facteur deux d'un passage à l'autre, et une moyenne des
+débits bruts laisserait le passage de 14:07 décider pour les trois autres. Celui-là est à
+jeter — 153 et 164 f/s à 30 Mb/s, c'est du cache : lancé deux minutes après le précédent, sa
+fenêtre aléatoire a recouvert la sienne. C'est la limite résiduelle du banc, et elle se voit
+au débit absolu.
+
+Conclusion : `parallel = 3` est sous le plateau dans les quatre passages, battu à chaque fois
+par au moins deux valeurs plus hautes. Retenu **4** plutôt que 8, qui a le même rang moyen :
+l'écart est dans le bruit et le plus petit nombre laisse davantage de box aux vignettes,
+seul coût que le banc ne mesure pas.
+
 ## Transition de zoom grille ↔ photo
 
 La photo sort de sa vignette et y retourne, au lieu d'un fondu au noir : `matchedTransitionSource`

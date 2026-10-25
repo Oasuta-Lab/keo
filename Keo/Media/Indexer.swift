@@ -148,8 +148,12 @@ final class Indexer: ObservableObject {
 
     @AppStorage("lastIndexedAt") private var lastIndexedAt: Double = 0
 
-    /// Deliberately below the thumbnail pipeline's share: the user is looking at the grid.
-    private static let parallel = 3
+    /// Measured on the real box, four passes of `ReadBench` over 14 595 photos: 1 is last in
+    /// every pass, 2 and 3 sit below a plateau that runs from 4 to 12, and 4 ties for the best
+    /// rank. Picked over 8, which ties with it, because the gain is noise and the smaller
+    /// number leaves more of the box to the thumbnail pipeline — the user is looking at the
+    /// grid, and that is the one cost the bench cannot see.
+    private static let parallel = 4
     /// Measured on 120 photos from a real library: 4 KB found only 39 % of the dates, 16 KB
     /// 92 %, and 24 KB 99 % — for the same average transfer as 16 KB, since a miss costs a
     /// second request. Past 24 KB the curve is flat.
