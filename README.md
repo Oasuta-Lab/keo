@@ -552,9 +552,15 @@ Trois précautions, chacune apprise en lisant un résultat faux :
 
 - **Une tranche de fichiers par niveau.** Rejouer les mêmes fichiers d'un niveau à l'autre
   mesure le cache de la box, et chaque niveau paraît rapide dans l'ordre où il est passé.
-- **Pool mélangé.** La première version gardait l'ordre de la liste, donc relancer la mesure
-  retombait sur exactement les mêmes photos — le second passage a donné 243 f/s au lieu de 52,
-  avec une courbe qui ne fait plus que monter. C'était le cache, pas la box.
+- **Fenêtre contiguë, à un décalage tiré au sort.** La première version gardait l'ordre de la
+  liste depuis le début, donc relancer la mesure retombait sur exactement les mêmes photos —
+  le second passage a donné 243 f/s au lieu de 52, avec une courbe qui ne fait plus que
+  monter. C'était le cache, pas la box.
+- **Contiguë, et pas un mélange de tout le dossier.** La correction suivante mélangeait le
+  pool : tous les niveaux sont alors tombés à 30 f/s quelle que soit la concurrence. Des
+  lectures éparpillées sur huit mille photos sont dominées par les déplacements de tête du
+  disque de la box, ce qui n'est pas la charge réelle — l'indexeur lit un dossier dans l'ordre
+  de sa liste. Mesurer autre chose que la charge réelle donne un chiffre vrai et inutile.
 - **Ordre des niveaux tiré au sort.** Sinon une dérive du réseau pendant la mesure flatte
   systématiquement les niveaux passés en premier.
 

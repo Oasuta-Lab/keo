@@ -34,10 +34,16 @@ enum ReadBench {
     /// Each level gets its **own slice** of files. Replaying the same files would measure the
     /// box's cache and the levels would all look fast in the order they ran.
     ///
-    /// Two more defences against reading noise as signal. The pool is shuffled, so running the
-    /// bench twice samples different files instead of re-reading what the box just cached. And
-    /// the levels run in a random order, so a network that drifts during the measurement no
-    /// longer systematically flatters whichever level happened to go first.
+    /// Two more defences against reading noise as signal. The window into the folder starts at
+    /// a random offset, so running the bench twice samples different files instead of
+    /// re-reading what the box just cached. And the levels run in a random order, so a network
+    /// that drifts during the measurement no longer systematically flatters whichever level
+    /// happened to go first.
+    ///
+    /// The window is **contiguous**, not a shuffle of the whole folder. Shuffling made every
+    /// level land on 30 f/s whatever the concurrency: scattered reads across eight thousand
+    /// photos are seek-bound on the box's disk, which is not the workload. The indexer reads a
+    /// folder in listing order, so the measurement has to as well.
     static func run(folder: String, client: FreeboxClient,
                     levels: [Int] = [1, 2, 3, 4, 6, 8, 12],
                     perLevel: Int = 80) async -> [Run] {
@@ -51,14 +57,17 @@ enum ReadBench {
 
         // Photos only: a video's date costs a variable number of range requests, which would
         // measure the parser rather than the concurrency.
-        let pool = contents.media.filter { $0.kind == .image }.shuffled()
+        let ordered = contents.media.filter { $0.kind == .image }
         let needed = levels.count * perLevel
-        guard pool.count >= needed else {
-            trace("bench: \(folder) n'a que \(pool.count) photos, il en faut \(needed)")
+        guard ordered.count >= needed else {
+            trace("bench: \(folder) n'a que \(ordered.count) photos, il en faut \(needed)")
             return []
         }
 
-        trace("bench: \(folder), \(pool.count) photos, \(perLevel) par niveau, ordre tiré au sort")
+        let start = Int.random(in: 0...(ordered.count - needed))
+        let pool = Array(ordered[start..<(start + needed)])
+        trace("bench: \(folder), \(ordered.count) photos, fenêtre à \(start), "
+            + "\(perLevel) par niveau, ordre des niveaux tiré au sort")
         var runs: [Run] = []
         for (index, level) in levels.shuffled().enumerated() {
             let slice = Array(pool[(index * perLevel)..<((index + 1) * perLevel)])
