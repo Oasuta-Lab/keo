@@ -55,6 +55,14 @@ struct ConnectView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
+
+                    // The accepted trade-off, said once where the authorization is created.
+                    Text("L'autorisation suit le trousseau iCloud : tes autres appareils "
+                       + "n'auront pas à appuyer sur ✓. La Freebox n'en voit qu'une, elle se "
+                       + "retire donc pour tous à la fois.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 }
                 .padding(.horizontal, 32)
             }
