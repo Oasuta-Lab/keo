@@ -134,6 +134,16 @@ base plutôt que le demander.
   coïncident aujourd'hui, c'est tout. Le changer invalide l'autorisation : jeton refusé,
   `Store.reconnectIfPossible` le jette, et il faut réappuyer sur ✓ sur la face avant de la
   Freebox. Ne pas y toucher sans le dire.
+- **`navigationDestination` dans une vue qui se pousse elle-même.** `BrowserView` est
+  récursive : chaque instance redéclarait la destination des mêmes types, donc une pile de
+  trois niveaux en avait trois concurrentes. SwiftUI ne promet rien dans ce cas et reconstruit
+  la destination — l'état de la vue est détruit, la grille se recharge toutes les quelques
+  secondes et la position de lecture est perdue. Les destinations se déclarent **une fois, à
+  la racine de la pile** (`PushTargets`), les vues poussées en héritent.
+- **La date de modification n'est pas une date de prise de vue.** Sur un NAS c'est la date de
+  copie. Ne jamais la laisser alimenter le tri, les sections ou la timeline — elle y fait
+  remonter en tête des photos que personne n'a prises ce jour-là. Elle se dit sous la photo,
+  et nulle part ailleurs.
 - **Migration de schéma SQLite** : une colonne `NOT NULL DEFAULT 0` sur `kind` a transformé
   toutes les photos déjà indexées en dossiers. Vérifier ce que vaut la valeur par défaut dans
   l'énumération, pas seulement dans le SQL.
