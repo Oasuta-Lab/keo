@@ -2311,6 +2311,9 @@ actor IndexStore {
             "SELECT count(*) FROM folder WHERE mtime IS NOT NULL") ?? 0)
         summary.unreadFiles = Int(try scalar("SELECT count(*) FROM file WHERE read = 0") ?? 0)
         summary.fileCount = Int(try scalar("SELECT count(*) FROM file") ?? 0)
+        summary.bytes = try scalar("SELECT coalesce(sum(bytes), 0) FROM folder") ?? 0
+        summary.unweighed = Int(try scalar(
+            "SELECT count(*) FROM folder WHERE mtime IS NOT NULL AND bytes IS NULL") ?? 0)
         return summary
     }
 

@@ -34,6 +34,8 @@ struct BrowserView: View {
     /// Position of each photo in the flat media array, so a cell can find its prefetch
     /// window without rebuilding `Array(enumerated())` per section per frame.
     @State private var mediaIndex: [Item.ID: Int] = [:]
+    /// The period to land back on after the grid has been rebuilt under the reader.
+    @State private var restore: MediaSection.ID?
     @Namespace private var zoom
     /// The cell the viewer flies back to. It follows the paging, so closing on the
     /// twentieth photo returns to *that* cell and not to the one originally tapped.
@@ -151,6 +153,13 @@ struct BrowserView: View {
             .onPreferenceChange(SectionTopKey.self) { tops in
                 cursor.id = Self.topmost(of: tops)
             }
+            .onChange(of: restore) { _, target in
+                guard let target else { return }
+                // No animation: this is not a journey the reader asked for, it is staying
+                // where they were while the ground moved underneath.
+                proxy.scrollTo(target, anchor: .top)
+                restore = nil
+            }
             .overlay(alignment: .trailing) {
                 if sectioned, !selecting {
                     TimelineRail(sections: sections, cursor: cursor) { id in
@@ -221,11 +230,21 @@ struct BrowserView: View {
             .onDisappear { explainedIndexing = true }
         }
         // Dates discovered for this folder, whether by the open-folder scan or the full pass.
+        // Dates arrive in batches while a folder is being indexed, and applying them
+        // *re-sorts* the grid: by capture date, a photo that just learned it was taken in
+        // 2019 leaves the top and lands in the middle of the list. The reader was left
+        // somewhere else entirely, and the photos they were looking at were gone. The sort
+        // still happens — a half-sorted timeline would be worse — but the scroll lands back
+        // on the period they were reading.
         .onChange(of: indexer.resolution) { _, found in
             guard let found, found.folder == path else { return }
+            let looking = cursor.id
             contents = contents.applying(found.dates, order: order)
             rebuildSections()
             unindexed = 0
+            if sectioned, let looking, sections.contains(where: { $0.id == looking }) {
+                restore = looking
+            }
         }
         .alert("Téléchargement interrompu", isPresented: showingError) {
             Button("OK") { downloader.error = nil }
@@ -697,10 +716,14 @@ struct BrowserView: View {
     }
 
     private func rebuildSections() {
+        let looking = cursor.id
         sections = order == .name
             ? []
             : MediaGrouping.sections(from: contents.media, granularity: granularity)
-        cursor.id = sections.first?.id
+        // Keep the period the reader was on if it still exists. Resetting to the first
+        // section threw the rail's highlight back to the top every time a batch of dates
+        // landed — which, during an indexing pass, is every few seconds.
+        cursor.id = sections.contains { $0.id == looking } ? looking : sections.first?.id
         // `uniquingKeysWith` rather than `uniqueKeysWithValues`: nothing guarantees distinct
         // paths in a hand-assembled list, and a duplicate must not kill the grid over a
         // prefetch hint.

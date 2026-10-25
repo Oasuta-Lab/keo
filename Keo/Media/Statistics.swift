@@ -54,6 +54,11 @@ struct HomeSummary: Sendable {
     var indexedFolders = 0
     var unreadFiles = 0
     var fileCount = 0
+    /// Weight of everything the index has weighed. Not the disk's capacity — that lives on
+    /// the box, and this screen must mean something with the box switched off.
+    var bytes: Int64 = 0
+    /// Folders stamped without a weight: the total is a floor, not a figure.
+    var unweighed = 0
 
     var isEmpty: Bool { fileCount == 0 }
     /// Something is known, but not everything — the card says so rather than rounding up.

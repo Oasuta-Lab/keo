@@ -62,6 +62,16 @@ struct HomeView: View {
         }
         .navigationTitle("Keo")
         .modifier(DaySubtitle())
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Image("AppLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 28, height: 28)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .accessibilityHidden(true)
+            }
+        }
         .navigationDestination(item: $destination) { source in
             BrowserView(client: client, source: source)
         }
@@ -110,6 +120,14 @@ struct HomeView: View {
                                         cover: pinCovers[folder.path], client: client)
                             }
                             .buttonStyle(.plain)
+                            // Pinning happens in Parcourir by long press; unpinning had no
+                            // gesture at all from the shelf the pins actually live on.
+                            .contextMenu {
+                                Button("Désépingler", systemImage: "pin.slash",
+                                       role: .destructive) {
+                                    unpin(folder)
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal, 1)
@@ -175,6 +193,9 @@ struct HomeView: View {
                     LibraryRow(icon: "chart.bar", title: "Statistiques", detail: nil)
                 }
                 Divider().padding(.leading, 52)
+                LibraryRow(icon: "internaldrive", title: "Poids lu", detail: weightLabel,
+                           chevron: false)
+                Divider().padding(.leading, 52)
                 Menu {
                     Button("Déconnexion", systemImage: "rectangle.portrait.and.arrow.right",
                            role: .destructive) { store.signOut() }
@@ -186,6 +207,18 @@ struct HomeView: View {
             .background(.quaternary.opacity(0.4),
                         in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
+    }
+
+    /// Deliberately not a fill bar. A gauge needs a capacity, the capacity lives on the box,
+    /// and this screen has to mean something with the box switched off — a bar that is empty
+    /// two thirds of the day is worse than a number that is always true.
+    ///
+    /// « au moins » when some stamped folder has no weight: the total is a floor, not a
+    /// figure, and the index says which rather than quietly rounding up.
+    private var weightLabel: String {
+        guard let summary, summary.bytes > 0 else { return "—" }
+        let size = summary.bytes.formatted(.byteCount(style: .file))
+        return summary.unweighed > 0 ? "au moins \(size)" : size
     }
 
     private var indexingState: String {
@@ -203,6 +236,16 @@ struct HomeView: View {
     }
 
     // MARK: Work
+
+    private func unpin(_ folder: Item) {
+        Task {
+            try? await IndexStore.shared.setShortcut(folder, false)
+            await load()
+            undoer.record("« \(folder.name) » désépinglé") {
+                try? await IndexStore.shared.setShortcut(folder, true)
+            }
+        }
+    }
 
     private func load() async {
         summary = try? await IndexStore.shared.homeSummary()
