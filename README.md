@@ -65,7 +65,7 @@ Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copi
 | `Keo/Media/` | Pipeline de vignettes, décodage ImageIO, cache disque LRU, index des dates |
 | `Keo/Downloads/` | File d'attente, pellicule, feuille de partage |
 | `Keo/Sync/` | Miroir CloudKit de la personnalisation : identité des enregistrements, moteur |
-| `Keo/UI/` | Association, grille, visionneuse plein écran |
+| `Keo/UI/` | Association, grille, recherche, visionneuse plein écran |
 
 Les dépendances vont vers l'intérieur : `UI` → `Media`/`Downloads` → `Freebox`. Rien dans
 `Freebox` ne connaît SwiftUI.
@@ -203,6 +203,35 @@ dossier affiché double par la tête, puisque c'est lui que quelqu'un attend.
 Au-delà de **2 000 fichiers sans date**, un dossier ne se lit plus à l'ouverture : une pastille
 renvoie vers l'écran d'indexation (menu « … » → *Indexation de la bibliothèque*). L'indexation se met en
 pause en arrière-plan et reprend au retour.
+
+## Recherche
+
+Onglet dédié, et **une seule source : l'index local**. On n'interroge jamais la box.
+
+Le marché est explicite : la recherche répond en quelques millisecondes, elle marche box
+éteinte — et elle ne voit que ce qui a été indexé. Un dossier jamais parcouru n'apparaît pas.
+L'écran le dit (« la recherche porte sur les N dossiers déjà indexés »), avec un bouton vers
+l'analyse, plutôt que de laisser un « aucun résultat » mentir par omission.
+
+### Accents
+
+`LIKE` n'ignore la casse que pour l'ASCII : `Été` ne répondrait jamais à `ete`. On enregistre
+donc une fonction SQL `fold()` sur la connexion (`registerFold`), qui replie casse et
+diacritiques côté Swift. Le prix est un balayage de la table `file` au lieu d'un parcours
+d'index — quelques millisecondes à notre échelle. Le plafond est noté dans le code : si l'index
+grossit beaucoup, il faudra une colonne repliée et son index.
+
+Les jokers SQL `%` et `_` sont échappés : un fichier peut légitimement s'appeler `100%_brut`.
+
+### Dossiers
+
+Un dossier remonte sur **son nom**, jamais sur son chemin : chercher `Photos` ne doit pas
+retourner les deux cents sous-dossiers de `/Photos`. Un dossier qui matche remonte aussi ce
+qu'il contient. Les filtres de type et de période excluent les dossiers, qui n'ont ni l'un ni
+l'autre.
+
+Les résultats passent par le même `BrowserView` que le reste (`BrowserSource.results`) : même
+grille, même visionneuse, même sélection, mêmes téléchargements.
 
 ## Favoris, collections, raccourcis
 
@@ -458,11 +487,12 @@ rm -f /tmp/keocheck   # sinon un echec de compilation relance l'ancien binaire
 swiftc -swift-version 6 -D DEBUG Keo/Freebox/Item.swift Keo/Freebox/Transport.swift \
   Keo/Freebox/FreeboxClient.swift Keo/Downloads/DownloadJob.swift \
   Keo/Freebox/MediaSection.swift Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift \
-  Keo/Media/FolderStamp.swift Keo/Media/WalkOutcome.swift Keo/Media/IndexStore.swift \
+  Keo/Media/FolderStamp.swift Keo/Media/WalkOutcome.swift Keo/Media/SearchQuery.swift \
+  Keo/Media/IndexStore.swift \
   Keo/Media/VideoDate.swift Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift \
   Keo/Sync/SyncModel.swift \
   Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
-  Tests/sync.swift \
+  Tests/sync.swift Tests/search.swift \
   -o /tmp/keocheck && /tmp/keocheck
 ```
 

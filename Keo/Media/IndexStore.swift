@@ -53,6 +53,7 @@ actor IndexStore {
         try exec("PRAGMA synchronous = NORMAL")
         try exec("PRAGMA foreign_keys = ON")
         try exec("PRAGMA busy_timeout = 3000")
+        registerFold()
         try exec(Self.schema)
         // Older databases predate the per-folder tallies; adding them is harmless if present.
         try? exec("ALTER TABLE folder ADD COLUMN media_count INTEGER")
@@ -1498,6 +1499,115 @@ actor IndexStore {
         }
     }
 
+
+    // MARK: Search
+
+    /// Searches the index, never the box: instant, and it works with the NAS switched off.
+    ///
+    /// The trade-off to be honest about — only indexed folders can be found. A folder never
+    /// walked is invisible here, which is why the UI says so rather than showing an empty list.
+    func search(_ query: SearchQuery, limit: Int = 500) throws -> [Item] {
+        try open()
+        guard !query.isEmpty else { return [] }
+
+        var conditions: [String] = []
+        if !query.text.trimmingCharacters(in: .whitespaces).isEmpty {
+            conditions.append("(fold(fi.name) LIKE ?1 ESCAPE '\\' OR fold(d.path) LIKE ?1 ESCAPE '\\')")
+        }
+        switch query.kinds {
+        case .everything: conditions.append("fi.kind IN (1, 2)")
+        case .photos: conditions.append("fi.kind = 1")
+        case .videos: conditions.append("fi.kind = 2")
+        }
+        if query.favouritesOnly {
+            conditions.append("EXISTS (SELECT 1 FROM favourite f "
+                            + "WHERE f.path = d.path || '/' || fi.name AND f.size = fi.size)")
+        }
+        if let year = query.year {
+            conditions.append("fi.capture IS NOT NULL AND "
+                            + "CAST(strftime('%Y', fi.capture, 'unixepoch') AS INTEGER) = \(year)")
+        }
+
+        let sql = "SELECT d.path, fi.name, fi.size, fi.capture, fi.kind "
+                + "FROM file fi JOIN folder d ON d.id = fi.folder_id "
+                + "WHERE " + conditions.joined(separator: " AND ")
+                + " ORDER BY fi.capture IS NULL, fi.capture DESC, fi.name LIMIT \(limit)"
+
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare(sql, into: &statement)
+        if !query.text.trimmingCharacters(in: .whitespaces).isEmpty {
+            bind(statement, 1, SearchQuery.pattern(for: query.text))
+        }
+
+        var found: [Item] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let folder = sqlite3_column_text(statement, 0),
+                  let name = sqlite3_column_text(statement, 1) else { continue }
+            let capture = sqlite3_column_type(statement, 3) == SQLITE_NULL
+                ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))
+            found.append(Item(path: String(cString: folder) + "/" + String(cString: name),
+                              name: String(cString: name), isDirectory: false,
+                              size: sqlite3_column_int64(statement, 2), modified: nil,
+                              mimeType: Item.Kind(code: Int(sqlite3_column_int64(statement, 4)))?
+                                  .mimeHint,
+                              captureDate: capture))
+        }
+        return try matchingFolders(query) + found
+    }
+
+    /// Folders whose own name matches. Deliberately the name and not the whole path: searching
+    /// `Photos` should not return the two hundred folders that merely live under `/Photos`.
+    /// Skipped entirely when a media filter is on — a folder has no type and no capture date.
+    private func matchingFolders(_ query: SearchQuery, limit: Int = 100) throws -> [Item] {
+        let text = query.text.trimmingCharacters(in: .whitespaces)
+        guard !text.isEmpty, query.kinds == .everything,
+              !query.favouritesOnly, query.year == nil else { return [] }
+
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT path, child_count FROM folder "
+                  + "WHERE fold(path) LIKE ?1 ESCAPE '\\' ORDER BY path LIMIT ?2",
+                    into: &statement)
+        bind(statement, 1, SearchQuery.pattern(for: text))
+        sqlite3_bind_int64(statement, 2, Int64(limit) * 4)
+
+        let needle = SearchQuery.fold(text)
+        var found: [Item] = []
+        while sqlite3_step(statement) == SQLITE_ROW, found.count < limit {
+            guard let raw = sqlite3_column_text(statement, 0) else { continue }
+            let path = String(cString: raw)
+            let name = String(path.split(separator: "/").last ?? "")
+            guard SearchQuery.fold(name).contains(needle) else { continue }
+            let children = sqlite3_column_type(statement, 1) == SQLITE_NULL
+                ? nil : Int(sqlite3_column_int64(statement, 1))
+            found.append(Item(path: path, name: name, isDirectory: true, size: 0,
+                              modified: nil, mimeType: nil, childCount: children))
+        }
+        return found
+    }
+
+    /// Years the index actually knows about, newest first — the menu offers nothing empty.
+    func indexedYears() throws -> [Int] {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT DISTINCT CAST(strftime('%Y', capture, 'unixepoch') AS INTEGER) "
+                  + "FROM file WHERE capture IS NOT NULL ORDER BY 1 DESC", into: &statement)
+
+        var years: [Int] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            years.append(Int(sqlite3_column_int64(statement, 0)))
+        }
+        return years
+    }
+
+    /// Folders the index has read end to end — what search can actually see.
+    func indexedFolderCount() throws -> Int {
+        try open()
+        return Int(try scalar("SELECT count(*) FROM folder WHERE mtime IS NOT NULL") ?? 0)
+    }
+
     // MARK: Migration
 
     /// A first index already paid for must not be paid for twice.
@@ -1588,6 +1698,25 @@ actor IndexStore {
 
     private var message: String {
         db.flatMap { sqlite3_errmsg($0) }.map { String(cString: $0) } ?? "inconnu"
+    }
+
+    /// Teaches SQLite to compare text the way a French speaker types it.
+    ///
+    /// `LIKE` only ignores case for ASCII, so `Été` would never answer to `ete`. Folding at
+    /// query time costs a scan of the file table rather than an index seek — at a few hundred
+    /// thousand rows that is still a few milliseconds, and it keeps the schema unchanged.
+    // ponytail: full scan; add a stored folded column + index if the index ever outgrows it.
+    private func registerFold() {
+        let fold: @convention(c) (OpaquePointer?, Int32,
+                                  UnsafeMutablePointer<OpaquePointer?>?) -> Void = { ctx, n, args in
+            guard n == 1, let args, let raw = sqlite3_value_text(args[0]) else {
+                sqlite3_result_null(ctx)
+                return
+            }
+            sqlite3_result_text(ctx, SearchQuery.fold(String(cString: raw)), -1, transientText)
+        }
+        sqlite3_create_function_v2(db, "fold", 1, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+                                   nil, fold, nil, nil, nil)
     }
 
     private func exec(_ sql: String) throws {

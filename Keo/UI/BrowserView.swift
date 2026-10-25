@@ -212,13 +212,6 @@ struct BrowserView: View {
             }
             Button("Annuler", role: .cancel) {}
         }
-        .confirmationDialog("Ajouter à une collection", isPresented: $choosingCollection,
-                            titleVisibility: .visible) {
-            ForEach(collections) { collection in
-                Button(collection.name) { addSelection(to: collection) }
-            }
-            Button("Annuler", role: .cancel) {}
-        }
         .task {
             // A relaunch after iOS killed the app mid-index still has somewhere to pick up.
             if source.isRoot { indexer.resumeIfInterrupted(client: client) }
@@ -332,7 +325,7 @@ struct BrowserView: View {
                 try? await IndexStore.shared.setFavourite(doomed, false)
             case .collection(let id, _):
                 try? await IndexStore.shared.setMembership(doomed, in: id, false)
-            case .folder:
+            case .folder, .results:
                 break
             }
             missing = []
@@ -531,6 +524,13 @@ struct BrowserView: View {
             case .favourites: saved = try await IndexStore.shared.favourites()
             case .collection(let id, _): saved = try await IndexStore.shared.items(in: id)
             case .folder: saved = []
+            // Straight out of the index a moment ago: re-resolving would be pure waste.
+            case .results(_, let items):
+                contents = FolderContents(items, order: order)
+                rebuildSections()
+                error = nil
+                loaded = true
+                return
             }
             // A moved file is quietly repathed; only a genuinely absent one is set aside.
             let resolved = try await IndexStore.shared.resolve(saved)

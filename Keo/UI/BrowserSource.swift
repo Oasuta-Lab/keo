@@ -6,12 +6,16 @@ enum BrowserSource: Hashable, Identifiable {
     case folder(path: String, title: String)
     case favourites
     case collection(id: Int64, name: String)
+    /// Already-resolved items, handed over rather than fetched — search results.
+    case results(title: String, items: [Item])
 
     var id: String {
         switch self {
         case .folder(let path, _): return "folder:\(path)"
         case .favourites: return "favourites"
         case .collection(let id, _): return "collection:\(id)"
+        // Must change with the items, or the grid keeps the previous search.
+        case .results(_, let items): return "results:\(items.hashValue)"
         }
     }
 
@@ -20,6 +24,7 @@ enum BrowserSource: Hashable, Identifiable {
         case .folder(_, let title): return title
         case .favourites: return "Favoris"
         case .collection(_, let name): return name
+        case .results(let title, _): return title
         }
     }
 

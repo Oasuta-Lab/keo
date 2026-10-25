@@ -521,5 +521,6 @@ print("ok — lecture seule, envelope, chemins, classification, aperçus, dates 
 try await checkIndexStore()
 try await checkMigration()
 try await checkFavourites()
+try await checkSearch()
 try await checkVideoDate()
 try await checkSync()
