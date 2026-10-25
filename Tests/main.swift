@@ -193,8 +193,10 @@ func onDay(_ iso: String, _ name: String) -> Item {
     parser.locale = Locale(identifier: "en_US_POSIX")
     parser.timeZone = TimeZone(secondsFromGMT: 0)
     parser.dateFormat = "yyyy-MM-dd"
+    // Capture date, not mtime: the timeline only ever looks at when the shutter fired.
     return Item(path: "/a/\(name)", name: name, isDirectory: false, size: 0,
-                modified: parser.date(from: iso), mimeType: "image/jpeg")
+                modified: nil, mimeType: "image/jpeg",
+                captureDate: parser.date(from: iso))
 }
 
 let acrossMonths = MediaGrouping.sections(from: [
@@ -351,8 +353,11 @@ func copied(_ name: String) -> Item {
 }
 
 let bulk = FolderContents([copied("a.jpg"), copied("b.jpg"), copied("c.jpg")], order: .newest)
-assert(bulk.media.allSatisfy { $0.timelineDate == copyDay },
-       "sans EXIF, la timeline retombe sur la date de copie")
+assert(bulk.media.allSatisfy { $0.timelineDate == nil },
+       "sans EXIF, la timeline n'a pas de date — elle ne retombe pas sur la date de copie, "
+       + "qui ferait remonter en tête des photos que personne n'a prises ce jour-là")
+assert(bulk.media.allSatisfy { $0.modified == copyDay },
+       "le mtime reste disponible pour « Modifié le »")
 
 let discovered: [Item.ID: Date] = [
     "/a/a.jpg": Date(timeIntervalSince1970: 1_500_000_000),   // la plus ancienne
@@ -363,7 +368,7 @@ let resolved = bulk.applying(discovered, order: .newest)
 assert(resolved.media.map(\.name) == ["c.jpg", "b.jpg", "a.jpg"],
        "une fois les dates EXIF connues, l'ordre devient le vrai ordre chronologique")
 assert(resolved.media[0].captureDate != nil && resolved.media[0].timelineDate != copyDay,
-       "la date de prise de vue prime sur le mtime")
+       "la date de prise de vue est la seule que la timeline regarde")
 assert(resolved.media[0].modified == copyDay, "le mtime d'origine reste disponible")
 
 assert(bulk.applying([:], order: .newest).media.map(\.name) == bulk.media.map(\.name),
@@ -486,9 +491,10 @@ assert(PreviewPolicy.accepts(preview: size(300, 400),
 // MARK: - Tri
 
 func dated(_ name: String, _ day: Int?) -> Item {
+    // La date de prise de vue, la seule que le tri regarde.
     Item(path: "/a/\(name)", name: name, isDirectory: false, size: 0,
-         modified: day.map { Date(timeIntervalSince1970: TimeInterval($0) * 86_400) },
-         mimeType: "image/jpeg")
+         modified: nil, mimeType: "image/jpeg",
+         captureDate: day.map { Date(timeIntervalSince1970: TimeInterval($0) * 86_400) })
 }
 
 let shuffled = [dated("vieille.jpg", 10), dated("sans-date.jpg", nil),
@@ -504,6 +510,16 @@ assert(shuffled.sorted(by: ItemOrder.oldest.precedes).map(\.name)
 
 assert(shuffled.sorted(by: ItemOrder.name.precedes).map(\.name)
     == ["moyenne.jpg", "recente.jpg", "sans-date.jpg", "vieille.jpg"])
+
+// Une photo copiée hier mais prise on ne sait quand ne remonte pas en tête : la date de
+// copie n'est pas une date de prise de vue, et la confondre mettait des photos sans date
+// au-dessus de celles d'hier.
+let copiéeHier = Item(path: "/a/copiee.jpg", name: "copiee.jpg", isDirectory: false, size: 0,
+                      modified: Date(), mimeType: "image/jpeg")
+assert(copiéeHier.timelineDate == nil, "le mtime n'entre pas dans la timeline")
+assert([copiéeHier, dated("recente.jpg", 30)].sorted(by: ItemOrder.newest.precedes)
+    .map(\.name) == ["recente.jpg", "copiee.jpg"],
+       "une photo fraîchement copiée reste derrière une photo réellement datée")
 
 assert([dated("b.jpg", 5), dated("a.jpg", 5)].sorted(by: ItemOrder.newest.precedes).map(\.name)
     == ["a.jpg", "b.jpg"], "à date égale, on départage par nom")

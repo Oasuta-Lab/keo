@@ -24,8 +24,18 @@ struct Item: Identifiable, Hashable, Sendable {
     /// Number of entries inside, when the box reports it. Free: it is already in the listing.
     let childCount: Int?
 
-    /// What the timeline and the date sort actually use.
-    var timelineDate: Date? { captureDate ?? modified }
+    /// What the timeline and the date sort actually use — the capture date, and nothing else.
+    ///
+    /// It used to fall back on `modified`, which on a NAS is the day the file was *copied*.
+    /// A photo with no capture date therefore wore a recent date and climbed to the top of
+    /// the grid, above photos genuinely taken yesterday. Worse, it was inconsistent: a fresh
+    /// listing from the box carries that mtime and a replay from the index does not, so the
+    /// same photo changed place depending on which painted the grid.
+    ///
+    /// The modification date is a different truth, and it is already told honestly where it
+    /// belongs — « Modifié le », under the photo in the viewer. An undated photo belongs in
+    /// « sans date », not at the top of a timeline under a date nobody took it on.
+    var timelineDate: Date? { captureDate }
 
     var id: String { path }
 

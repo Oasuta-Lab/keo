@@ -252,6 +252,20 @@ Sans aucune date, rien ne s'affiche plutôt qu'une date inventée.
 C'est aussi la réponse à la limite du tri : en plein écran, la vraie date est connue. La
 grille, elle, ne peut pas trier là-dessus sans télécharger un bout de chaque fichier.
 
+## La date de copie n'entre pas dans la timeline
+
+`timelineDate` retombait sur `modified` quand la date de prise de vue manquait. Sur un NAS,
+`modified` est la date de **copie** : une photo sans date portait donc une date récente et
+remontait en tête du tri « plus récentes », au-dessus de photos réellement prises hier.
+
+Et c'était incohérent selon le chemin. Un listing frais de la box porte ce mtime, une relecture
+depuis l'index non — la même photo changeait de place suivant qui peignait la grille.
+
+La timeline ne regarde plus que la date de prise de vue. La date de modification reste
+disponible et reste dite honnêtement là où elle a un sens, sous la photo en plein écran
+(« Modifié le »). Une photo sans date appartient à « sans date », pas en haut d'une chronologie
+sous une date à laquelle personne ne l'a prise.
+
 ## Dates réelles plutôt que dates de copie
 
 Sur un NAS, la date de modification est souvent le jour où tout a été copié : tous les
