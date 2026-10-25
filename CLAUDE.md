@@ -111,6 +111,15 @@ base plutôt que le demander.
 
 ## 5. Pièges qui ont déjà coûté cher
 
+- **Les rapports de plantage sont sur l'appareil**, et ils donnent la réponse en une minute
+  là où le raisonnement donne une hypothèse :
+  ```sh
+  xcrun devicectl device info files --device <UDID> --domain-type systemCrashLogs | grep -i keo
+  xcrun devicectl device copy from --device <UDID> --domain-type systemCrashLogs \
+    --source "Keo-….ips" --destination /tmp/
+  ```
+  Le fichier `.ips` est deux objets JSON collés : métadonnées sur la première ligne, rapport
+  sur le reste.
 - **Cycle de vie de l'indexation** : trois correctifs plausibles et faux avant celui qui a
   marché. Ne rien y changer sur la foi d'un raisonnement — brancher la console de l'appareil
   d'abord et partir de ce qu'elle raconte. Voir README, « Lire les traces de l'appareil ».

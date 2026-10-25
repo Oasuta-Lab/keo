@@ -777,6 +777,28 @@ par au moins deux valeurs plus hautes. Retenu **4** plutôt que 8, qui a le mêm
 l'écart est dans le bruit et le plus petit nombre laisse davantage de box aux vignettes,
 seul coût que le banc ne mesure pas.
 
+## Enregistrer dans Photos : un piège de Swift 6
+
+`PHPhotoLibrary.performChanges` exécute son bloc sur sa propre file,
+`com.apple.PHPhotoLibrary.transaction.high`. Écrit comme méthode d'instance de `Downloader`,
+qui est `@MainActor`, le bloc héritait de cette isolation — et Swift 6 y insère alors un
+contrôle qui **piège** dès que Photos l'appelle : `dispatch_assert_queue_fail`, à chaque
+enregistrement.
+
+Le symptôme trompait : le plantage arrivait juste après avoir accordé l'accès à la
+photothèque, donc il avait l'air lié à l'autorisation. Il ne l'était pas — avant de
+l'accorder, le code n'atteignait simplement jamais cette ligne.
+
+La fonction est `nonisolated` et `static`, et ne reçoit que des valeurs `Sendable` : il n'y a
+rien là-dedans que l'acteur ait à protéger. Trouvé en lisant le vrai rapport de plantage de
+l'appareil, pas en raisonnant :
+
+```sh
+xcrun devicectl device info files --device <UDID> --domain-type systemCrashLogs | grep -i keo
+xcrun devicectl device copy from --device <UDID> --domain-type systemCrashLogs \
+  --source "Keo-….ips" --destination /tmp/
+```
+
 ## Transition de zoom grille ↔ photo
 
 La photo sort de sa vignette et y retourne, au lieu d'un fondu au noir : `matchedTransitionSource`

@@ -55,7 +55,9 @@ final class Downloader: ObservableObject {
                     Task { @MainActor in self?.job?.currentFraction = fraction }
                 }
                 switch destination {
-                case .photos: try await addToPhotos(file, item: item)
+                case .photos:
+                    try await Self.addToPhotos(file, named: item.name,
+                                               isVideo: item.kind == .video)
                 case .share: downloaded.append(file)
                 }
             } catch is CancellationError {
@@ -73,14 +75,21 @@ final class Downloader: ObservableObject {
         }
     }
 
-    private func addToPhotos(_ file: URL, item: Item) async throws {
+    /// `nonisolated` and `static`, and that is the whole point.
+    ///
+    /// `performChanges` runs its block on `com.apple.PHPhotoLibrary.transaction.high`. As an
+    /// instance method of this `@MainActor` class, the block inherited main-actor isolation,
+    /// so Swift 6 inserted an isolation check that trapped the moment Photos called it —
+    /// `dispatch_assert_queue_fail`, every single save. Nothing crosses in but `Sendable`
+    /// values, so there is nothing for the actor to protect here.
+    nonisolated private static func addToPhotos(_ file: URL, named name: String,
+                                                isVideo: Bool) async throws {
         try await PHPhotoLibrary.shared().performChanges {
             let request = PHAssetCreationRequest.forAsset()
             let options = PHAssetResourceCreationOptions()
             options.shouldMoveFile = true
-            options.originalFilename = item.name
-            request.addResource(with: item.kind == .video ? .video : .photo,
-                                fileURL: file, options: options)
+            options.originalFilename = name
+            request.addResource(with: isVideo ? .video : .photo, fileURL: file, options: options)
         }
     }
 }
