@@ -32,11 +32,13 @@ swiftc -swift-version 6 -D DEBUG \
   Keo/Freebox/Item.swift Keo/Freebox/MediaSection.swift Keo/Freebox/Transport.swift \
   Keo/Freebox/FreeboxClient.swift Keo/Downloads/DownloadJob.swift \
   Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift Keo/Media/FolderStamp.swift \
-  Keo/Media/WalkOutcome.swift Keo/Media/SearchQuery.swift Keo/Media/IndexStore.swift \
+  Keo/Media/WalkOutcome.swift Keo/Media/SearchQuery.swift Keo/Media/Statistics.swift \
+  Keo/Media/IndexStore.swift \
   Keo/Media/VideoDate.swift Keo/Sync/SyncModel.swift \
   Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift Keo/UI/BrowserSource.swift \
   Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
   Tests/sync.swift Tests/search.swift Tests/covers.swift Tests/notes.swift \
+  Tests/stats.swift \
   -o /tmp/keocheck && /tmp/keocheck
 ```
 
