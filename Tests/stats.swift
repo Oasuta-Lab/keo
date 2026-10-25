@@ -236,5 +236,24 @@ func checkRootIsNotItsOwnChild() async throws {
     let hasChildren = try await store.hasChildFolders("/")
     assert(hasChildren, "la racine a bien des sous-dossiers connus")
 
-    print("ok — la racine n'est pas son propre sous-dossier, et garde les siens")
+    // Le piège classique des plages par préfixe : « /A » et « /AB » sont voisins dans
+    // l'ordre des chaînes, et une borne haute mal calculée fait déborder l'un dans l'autre.
+    let sibling = IndexStore(directory: home.appendingPathComponent("voisins"))
+    try FileManager.default.createDirectory(at: home.appendingPathComponent("voisins"),
+                                            withIntermediateDirectories: true)
+    let gen = try await sibling.beginGeneration()
+    for path in ["/", "/A", "/A/photos", "/AB", "/AB/photos", "/A-bis"] {
+        try await sibling.commit([], in: path, generation: gen)
+    }
+    let underA = try await sibling.listing("/A").map(\.path)
+    assert(underA == ["/A/photos"],
+           "« /AB » et « /A-bis » ne sont pas sous « /A » — \(underA)")
+    let underAB = try await sibling.listing("/AB").map(\.path)
+    assert(underAB == ["/AB/photos"], "et réciproquement — \(underAB)")
+    let rootKids = try await sibling.listing("/").map(\.path).sorted()
+    assert(rootKids == ["/A", "/A-bis", "/AB"],
+           "la racine voit ses trois enfants directs et rien de plus profond — \(rootKids)")
+
+    print("ok — la racine n'est pas son propre sous-dossier, garde les siens, "
+        + "et les frères de même préfixe ne débordent pas")
 }

@@ -33,7 +33,7 @@ swiftc -swift-version 6 -D DEBUG \
   Keo/Freebox/FreeboxClient.swift Keo/Downloads/DownloadJob.swift \
   Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift Keo/Media/FolderStamp.swift \
   Keo/Media/WalkOutcome.swift Keo/Media/SearchQuery.swift Keo/Media/Statistics.swift \
-  Keo/Media/LivePhotos.swift \
+  Keo/Media/LivePhotos.swift Keo/Media/FolderExclusion.swift \
   Keo/Media/IndexStore.swift \
   Keo/Media/VideoDate.swift Keo/Media/WidgetManifest.swift Keo/Sync/SyncModel.swift \
   Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift Keo/UI/BrowserSource.swift \
@@ -41,6 +41,7 @@ swiftc -swift-version 6 -D DEBUG \
   Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
   Tests/sync.swift Tests/search.swift Tests/covers.swift Tests/notes.swift \
   Tests/stats.swift Tests/widget.swift Tests/links.swift Tests/live.swift Tests/dates.swift \
+  Tests/exclusions.swift \
   -o /tmp/keocheck && /tmp/keocheck
 ```
 

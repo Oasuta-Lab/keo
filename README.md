@@ -369,6 +369,86 @@ Au-delà de **2 000 fichiers sans date**, un dossier ne se lit plus à l'ouvertu
 renvoie vers l'écran d'indexation (menu « … » → *Indexation de la bibliothèque*). L'indexation se met en
 pause en arrière-plan et reprend au retour.
 
+### Les dossiers techniques ne sont pas parcourus
+
+Un NAS qui sert aussi de disque de travail contient des projets de développement, et un seul
+`node_modules` fait des dizaines de milliers de fichiers répartis sur des milliers de
+répertoires, dont pas un n'est une photo. Les parcourir coûtait des requêtes de listing à la
+box, des lignes dans SQLite, du balayage à chaque fin de passage, et gonflait tous les compteurs
+et tous les poids affichés sur les tuiles de dossier.
+
+`Keo/Media/FolderExclusion.swift` tient la règle. Pure et hors SwiftUI, comme `LivePhotos` et
+`WalkOutcome`, et pour la même raison : elle doit tenir à deux endroits — le parcours, qui ne
+doit pas descendre, et le nettoyage de ce que les versions précédentes ont déjà indexé. Une
+règle qui dérive entre les deux laisse des lignes que plus rien n'ira jamais supprimer.
+
+| Exclu | Pourquoi |
+|---|---|
+| `node_modules` | npm, et la raison d'être du fichier |
+| `__pycache__` | bytecode Python, souligné des deux côtés par l'interpréteur |
+| `venv` | environnement virtuel Python ; `.venv` relève de la règle du point |
+| `@eaDir` | la réserve de vignettes et d'index de Synology |
+| `#recycle` | la corbeille de Synology |
+| `$RECYCLE.BIN` | la corbeille de Windows, telle qu'elle apparaît sur un partage |
+| `System Volume Information` | métadonnées de volume Windows, écrites sur tout partage |
+| `lost+found` | ce que `fsck` recolle, jamais ce que quelqu'un a rangé |
+| tout nom commençant par `.` | `.git`, `.svn`, `.venv`, `.build`, `.gradle`, `.next`, `.tox`, `.Trash`, `.Spotlight-V100`, `.fseventsd`, `.DS_Store`, `._*` |
+
+La comparaison est **insensible à la casse** : un partage SMB l'est, donc `NODE_MODULES` et
+`node_modules` désignent le même répertoire. Même raisonnement que `LivePhotos.key`.
+
+La ligne sur le point mérite une note. `FreeboxClient.listPage` écarte déjà tout nom pointé
+avant que la règle soit consultée, donc elle n'enlève rien de plus au parcours. Ce qu'elle
+apporte : le nettoyage ci-dessous atteint les lignes qu'un ancien build a pu écrire, et la règle
+reste **la** réponse à « Keo indexe-t-il ce dossier ? » plutôt que la moitié d'une réponse
+répartie entre le transport et l'indexeur.
+
+### Ce que la règle n'exclut délibérément pas
+
+`build`, `dist`, `target`, `vendor`, `Pods`, `bin`, `obj`, `cache`, `tmp` — tous proposés, tous
+refusés. Ce sont des mots ordinaires : « Build » peut être un dossier de chantier photographié,
+« Vendor » un dossier de photos fournisseur. Les deux erreurs ne coûtent pas la même chose. Un
+dossier indexé à tort, c'est quelques requêtes perdues sur un répertoire d'artefacts qui pèse de
+toute façon mille fois moins qu'un `node_modules`. Un dossier exclu à tort, ce sont des photos
+que le propriétaire ne retrouvera jamais, **sans le moindre message**. La liste reste donc
+courte, et un nom n'y entre que si personne ne le donnerait à un dossier de photos.
+
+La correspondance est exacte, jamais un sous-texte : `node_modules copie` et `mon-node_modules`
+restent indexés. `Tests/exclusions.swift` épingle les deux sens.
+
+Les dossiers exclus **restent consultables dans Parcourir** : on peut entrer dedans, les
+fichiers s'affichent, ils se téléchargent. Seul l'index les ignore. Masquer serait une décision
+plus lourde que celle qui est demandée ici, et impossible à rattraper du doigt.
+
+### Pas d'écran de réglages
+
+Ni liste modifiable, ni interrupteur. Huit noms qui ne peuvent pas être des dossiers de
+photos, plus la règle du point, ne justifient pas un écran que personne n'ouvrira, et un réglage mal compris est exactement la
+façon dont on perd des photos en silence. Le seul mode d'échec réel — une règle devenue trop
+gourmande — est déjà visible : l'écran Indexation affiche **« Dossiers techniques exclus »**
+avec le compte du passage, et la ligne s'ouvre sur les dix premiers chemins écartés. Une liste
+d'exclusion silencieuse ressemble à un bug ; celle-ci se lit.
+
+### Nettoyer ce qui est déjà indexé
+
+Arrêter d'ajouter ne suffit pas : l'index du propriétaire contenait 4 799 dossiers et environ
+48 000 fichiers, détritus de développement compris. `exclusionVersion` dans `meta` suit l'idiome
+déjà en place (`listingVersion`, `liveVersion`, `readerVersion`) : au premier lancement qui voit
+un numéro plus récent, `IndexStore` balaie une fois la table `folder` et supprime toute ligne
+dont un composant du chemin est exclu. Les fichiers suivent par cascade (`ON DELETE CASCADE`,
+avec `PRAGMA foreign_keys = ON`).
+
+Ce que ça ne touche pas, et c'est structurel plutôt que déclaratif : **seule la table `folder`
+est visée**. Les favoris, les collections, les raccourcis et les notes sont clavetés sur le
+chemin et n'ont aucune clé étrangère vers `folder` — ils sont délibérément hors de la durée de
+vie de l'index. Un favori posé *à l'intérieur* d'un `node_modules`, un raccourci vers ce dossier,
+une note sur un de ses fichiers : tous survivent, et `Tests/exclusions.swift` le vérifie contre
+le vrai SQLite, nettoyage rejoué deux fois pour montrer que la passe est idempotente.
+
+Le filtre agit **avant** que le parcours descende, pas pendant : rien dans le cycle de vie de
+l'indexation ne change, un sous-arbre n'y entre simplement jamais. C'est ce qui rend ce
+changement sûr là où les autres pistes d'optimisation ne le sont pas.
+
 ## Recherche
 
 Onglet dédié, porté par `TabRole.search` : iOS le range où il range la recherche partout
@@ -1050,6 +1130,17 @@ par au moins deux valeurs plus hautes. Retenu **4** plutôt que 8, qui a le mêm
 l'écart est dans le bruit et le plus petit nombre laisse davantage de box aux vignettes,
 seul coût que le banc ne mesure pas.
 
+### Le banc reste
+
+La mesure est faite et le chiffre est dans le code. Le banc sert quand même, parce que le bon
+nombre est une propriété de la box et du réseau : il redeviendra faux le jour où la Freebox
+change, où le disque du NAS change, ou où la taille du préfixe lu passe de 24 Ko à autre chose —
+le coût par lecture décide de la concurrence optimale. Ce jour-là, ce qui manquerait n'est pas
+le chiffre, c'est la méthode : il a fallu **trois résultats faux** avant d'en obtenir un honnête,
+et ces trois leçons (une tranche de fichiers par niveau, fenêtre contiguë à décalage tiré au
+sort, ordre des niveaux tiré au sort) sont dans le code du banc, pas dans le tableau. 118 lignes
+qui ne compilent qu'en debug, contre deux heures et trois mesures fausses à refaire : il reste.
+
 ## Enregistrer dans Photos : un piège de Swift 6
 
 `PHPhotoLibrary.performChanges` exécute son bloc sur sa propre file,
@@ -1159,6 +1250,25 @@ scroll :
 La section active vit maintenant dans un `SectionCursor` observable que **seul le rail** lit :
 le corps de la grille ne s'y abonne plus, donc seul le rail s'invalide. Les positions sont
 pré-calculées une fois par chargement dans un dictionnaire, et la visionneuse en a un aussi.
+
+## Le périmètre d'un sous-arbre était un balayage
+
+`substr(path, 1, length(?1)) = ?1` enveloppe la colonne dans des appels de fonction, ce qui
+rend le prédicat inutilisable par l'index sur `path` : **chacun des sept appelants balayait la
+table entière**. Et `hasChildFolders` était appelé une fois par dossier du parcours — à
+4 799 dossiers, quelques millions de visites de lignes par passage, pour une question dont la
+réponse n'était lue que dans un cas sur deux.
+
+Deux corrections :
+
+- Le périmètre devient une **plage**, `path > ?1 AND path < ?2`, où `?2` est le préfixe dont
+  le dernier octet est incrémenté. `/Photos/` devient `/Photos0` ; à la racine `/` devient
+  `0`, ce qui tombe juste puisque `/` vaut 0x2F et `0` vaut 0x30. Les deux bornes cherchent
+  directement dans l'index.
+- `hasChildFolders` n'est plus interrogé que lorsque sa réponse peut changer quelque chose.
+
+Le piège des plages par préfixe — `/A` et `/AB` sont voisins dans l'ordre des chaînes — est
+épinglé dans `Tests/stats.swift`, à côté du cas de la racine.
 
 ## Tenue à l'échelle
 
@@ -1375,6 +1485,10 @@ Couvre la garantie de lecture seule, l'enveloppe `{success, result}`, l'encodage
 la classification des médias, l'éviction LRU, l'arithmétique de progression, et toute la
 partie pure de la synchronisation iCloud (`Tests/sync.swift`) — le moteur CloudKit lui-même ne
 se teste qu'à la main, voir plus haut.
+
+`Tests/exclusions.swift` épingle la règle d'exclusion dans les deux sens — ce qui doit sortir de
+l'index, ce qui ne doit surtout pas en sortir, la casse — puis rejoue le nettoyage contre le vrai
+SQLite et vérifie que favoris, notes, raccourcis et collections en sortent intacts.
 
 `Tests/widget.swift` couvre le manifeste du widget et, contre le vrai SQLite, la sélection des
 douze couvertures d'un dossier épinglé : tout le sous-arbre, les plus récentes d'abord, les

@@ -577,5 +577,6 @@ try await checkSync()
 try await checkFolderCovers()
 try await checkStatistics()
 try await checkRootIsNotItsOwnChild()
+try await checkFolderExclusion()
 
 try await checkWidget()

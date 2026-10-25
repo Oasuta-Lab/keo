@@ -66,6 +66,7 @@ final class Indexer: ObservableObject {
         enum Trouble: Equatable, Sendable {
             case folderUnreachable   // could not even be listed
             case fileUnreadable      // listed, but its bytes would not come
+            case folderExcluded      // skipped on purpose, by `FolderExclusion`
         }
 
         var id: String { path }
@@ -80,6 +81,9 @@ final class Indexer: ObservableObject {
         var folder = "/"
         var foldersVisited = 0
         var foldersSkipped = 0
+        /// Never descended into, by rule. Silence here looks like a bug, and a count that
+        /// suddenly jumps is how the owner catches a list that has become too greedy.
+        var foldersExcluded = 0
         var mediaFound = 0
         var datesRead = 0
         var adopted = 0
@@ -166,6 +170,10 @@ final class Indexer: ObservableObject {
     private static let folderLimit = 5_000
     /// Consecutive unreachable folders before concluding the box is gone.
     private static let giveUpAfter = 3
+    /// Only the first few exclusions are detailed: `problems` is one capped list shared with
+    /// the real failures, and a thousand `node_modules` must not crowd out the one folder the
+    /// box could not list.
+    private static let excludedDetailed = 10
 
     private enum Job {
         case walk(root: String, client: FreeboxClient, scope: Scope?)
@@ -305,6 +313,7 @@ final class Indexer: ObservableObject {
         // resume — 14 618 media became 29 213 then 43 808 without a single new file.
         progress.foldersVisited = 0
         progress.foldersSkipped = 0
+        progress.foldersExcluded = 0
         progress.mediaFound = 0
         progress.unreachable = 0
         progress.problems.removeAll()
@@ -335,7 +344,12 @@ final class Indexer: ObservableObject {
                 let untouched = try await IndexStore.shared.isUnchanged(
                     folder.path, modified: folder.modified, childCount: folder.childCount
                 )
-                let hasChildren = try await IndexStore.shared.hasChildFolders(folder.path)
+                // Asked only when the answer can change anything. It used to run on every
+                // folder of the walk, and it scans: at 4 799 folders that was a few million
+                // row visits per pass, spent on a question nobody read.
+                let hasChildren = untouched
+                    ? try await IndexStore.shared.hasChildFolders(folder.path)
+                    : false
                 if untouched, !hasChildren {
                     try await IndexStore.shared.touchSubtree(folder.path, generation: generation)
                     progress.foldersSkipped += 1
@@ -370,9 +384,22 @@ final class Indexer: ObservableObject {
                     if consecutiveFailures >= Self.giveUpAfter { break }
                     continue
                 }
-                pending.append(contentsOf: contents.folders.map {
-                    ($0.path, $0.modified, $0.childCount)
-                })
+                for child in contents.folders {
+                    // Filtered here, before the queue: not descending is the entire saving,
+                    // and it is also what makes this change safe — the walk's lifecycle is
+                    // untouched, a subtree simply never enters it. The folder stays browsable,
+                    // it just has no index entry.
+                    guard !FolderExclusion.excludes(folder: child.name) else {
+                        progress.foldersExcluded += 1
+                        if progress.foldersExcluded <= Self.excludedDetailed {
+                            progress.note(Problem(path: child.path,
+                                                  reason: "Dossier technique, exclu de l'index",
+                                                  trouble: .folderExcluded))
+                        }
+                        continue
+                    }
+                    pending.append((child.path, child.modified, child.childCount))
+                }
                 progress.foldersVisited += 1
                 progress.mediaFound += contents.media.count
                 if contents.media.count > 50 {
@@ -409,7 +436,8 @@ final class Indexer: ObservableObject {
             )
             trace("walk end complete=\(complete) cancelled=\(Task.isCancelled) "
                 + "visited=\(visited) failures=\(listingFailures) "
-                + "pendingEmpty=\(pending.isEmpty) skipped=\(progress.foldersSkipped)")
+                + "pendingEmpty=\(pending.isEmpty) skipped=\(progress.foldersSkipped) "
+                + "excluded=\(progress.foldersExcluded)")
             if complete {
                 try await IndexStore.shared.sweepFolders(generation: generation)
                 lastIndexedAt = Date().timeIntervalSince1970

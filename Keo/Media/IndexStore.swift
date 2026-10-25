@@ -78,6 +78,9 @@ actor IndexStore {
         markLivePairsEverywhere()
         repairKinds()
         migrateFromJSON(in: folder)
+        // Last, deliberately: the JSON migration above re-inserts paths recorded by a build
+        // that had no exclusion rule at all, so the cleanup has to run after it.
+        dropExcludedAfterRuleChange()
     }
 
     private static let schema = """
@@ -372,7 +375,7 @@ actor IndexStore {
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
         try prepare("SELECT 1 FROM folder WHERE " + Self.subtree() + " LIMIT 1", into: &statement)
-        bind(statement, 1, Statistics.scopePrefix(folder))
+        bindSubtree(statement, folder, low: 1, high: 2)
         return sqlite3_step(statement) == SQLITE_ROW
     }
 
@@ -387,8 +390,32 @@ actor IndexStore {
     /// row matches its own prefix, and without it the root listed itself as one of its own
     /// subfolders — a tile you could tap into forever. Callers that do want the folder itself
     /// say so with an explicit `path = ?n OR` next to this.
-    private static func subtree(_ column: String = "path") -> String {
-        "length(\(column)) > length(?1) AND substr(\(column), 1, length(?1)) = ?1"
+    private static func subtree(_ column: String = "path",
+                               low: Int = 1, high: Int = 2) -> String {
+        // A range, not a `substr`. Wrapping the column in function calls makes the predicate
+        // unusable by the index on `path`, so every one of the seven call sites scanned the
+        // whole table — and `hasChildFolders` ran once per folder of the walk. `?1` is the
+        // prefix and `?2` its successor, so the bounds seek straight into the index.
+        "\(column) > ?\(low) AND \(column) < ?\(high)"
+    }
+
+    /// The smallest string strictly greater than every path under this prefix: the prefix
+    /// with its last byte incremented. `/Photos/` becomes `/Photos0`, and at the root `/`
+    /// becomes `0` — which is exactly right, since `/` is 0x2F and `0` is 0x30.
+    /// Binds both ends of a subtree range at once, so a call site cannot bind one and
+    /// forget the other — which would silently return nothing at all.
+    private func bindSubtree(_ statement: OpaquePointer?, _ folder: String,
+                             low: Int32, high: Int32) {
+        let prefix = Statistics.scopePrefix(folder)
+        bind(statement, low, prefix)
+        bind(statement, high, Self.upperBound(prefix))
+    }
+
+    private static func upperBound(_ prefix: String) -> String {
+        var bytes = Array(prefix.utf8)
+        guard let last = bytes.last else { return prefix }
+        bytes[bytes.count - 1] = last &+ 1
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     /// The folder as the last pass saw it. Lets the grid appear immediately, before the box
@@ -429,7 +456,7 @@ actor IndexStore {
         var children: OpaquePointer?
         defer { sqlite3_finalize(children) }
         try prepare("SELECT path FROM folder WHERE " + Self.subtree(), into: &children)
-        bind(children, 1, Statistics.scopePrefix(folder))
+        bindSubtree(children, folder, low: 1, high: 2)
         while sqlite3_step(children) == SQLITE_ROW {
             guard let raw = sqlite3_column_text(children, 0) else { continue }
             let path = String(cString: raw)
@@ -471,12 +498,12 @@ actor IndexStore {
         try open()
         try exec("BEGIN IMMEDIATE")
         do {
-            let scope = "path = ?3 OR " + Self.subtree()
+            let scope = "path = ?3 OR " + Self.subtree(low: 1, high: 4)
 
             var folders: OpaquePointer?
             defer { sqlite3_finalize(folders) }
             try prepare("UPDATE folder SET gen = ?2 WHERE " + scope, into: &folders)
-            bind(folders, 1, Statistics.scopePrefix(folder))
+            bindSubtree(folders, folder, low: 1, high: 4)
             sqlite3_bind_int64(folders, 2, generation)
             bind(folders, 3, folder)
             guard sqlite3_step(folders) == SQLITE_DONE else { throw Failure.write(message) }
@@ -570,6 +597,48 @@ actor IndexStore {
         }
     }
 
+    /// Bumped when `FolderExclusion` changes. What the walk no longer descends into must also
+    /// leave the index, or the counts, the weights, the statistics and the search keep showing
+    /// dev detritus indexed by an earlier version — the owner's index held 4 799 folders when
+    /// the rule was written. One scan of `folder`, once.
+    ///
+    /// Only `folder` rows are deleted; `file` follows by cascade. Favourites, collections,
+    /// shortcuts and notes are keyed on the path and hold no foreign key to `folder`: they are
+    /// deliberately outside the index's lifetime, and nothing here may reach them.
+    private static let exclusionVersion: Int64 = 1
+
+    private func dropExcludedAfterRuleChange() {
+        guard let seen = try? value(forKey: "exclusionVersion") ?? 0,
+              seen < Self.exclusionVersion else { return }
+        do {
+            let doomed = try excludedFolderIDs()
+            try exec("BEGIN IMMEDIATE")
+            // The ids come from the database, so interpolating them cannot inject anything —
+            // same reasoning as `sweepFolders`.
+            for id in doomed { try exec("DELETE FROM folder WHERE id = \(id)") }
+            try setValue(Self.exclusionVersion, forKey: "exclusionVersion")
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+        }
+    }
+
+    /// Collected before deleting anything: a statement cannot be stepped while the table it
+    /// reads is being emptied underneath it.
+    private func excludedFolderIDs() throws -> [Int64] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT id, path FROM folder", into: &statement)
+
+        var doomed: [Int64] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let raw = sqlite3_column_text(statement, 1),
+                  FolderExclusion.excludes(path: String(cString: raw)) else { continue }
+            doomed.append(sqlite3_column_int64(statement, 0))
+        }
+        return doomed
+    }
+
     /// Rows written before `kind` existed inherited 0, which means "folder" — so every photo
     /// already indexed came back from the cache as a folder you could tap into. The name is
     /// enough to work out what they really are.
@@ -622,6 +691,14 @@ actor IndexStore {
     func rewriteKindsAsUnknownForChecks() throws {
         try open()
         try exec("UPDATE file SET kind = 0")
+    }
+
+    /// Replays the one-pass cleanup on a database written before the exclusion rule existed.
+    /// `open()` runs it once and only once, which is exactly what a check cannot work with.
+    func replayExclusionCleanupForChecks() throws {
+        try open()
+        try setValue(0, forKey: "exclusionVersion")
+        dropExcludedAfterRuleChange()
     }
     #endif
 
@@ -2156,7 +2233,7 @@ actor IndexStore {
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
         // The shared spelling, which also behaves at the root — see `subtree(_:)`.
-        let scope = "d.path = ?2 OR " + Self.subtree("d.path")
+        let scope = "d.path = ?2 OR " + Self.subtree("d.path", low: 1, high: 4)
         try prepare("""
             SELECT d.path, fi.name, fi.size, fi.capture, fi.kind
             FROM file fi JOIN folder d ON d.id = fi.folder_id
@@ -2165,7 +2242,7 @@ actor IndexStore {
             ORDER BY fi.kind, fi.capture DESC, d.path, fi.name
             LIMIT ?3
             """, into: &statement)
-        bind(statement, 1, Statistics.scopePrefix(folder))
+        bindSubtree(statement, folder, low: 1, high: 4)
         bind(statement, 2, folder)
         sqlite3_bind_int64(statement, 3, Int64(limit))
 
@@ -2208,7 +2285,7 @@ actor IndexStore {
         try open()
         guard !folders.isEmpty else { return [:] }
 
-        let scope = "path = ?2 OR " + Self.subtree()
+        let scope = "path = ?2 OR " + Self.subtree(low: 1, high: 3)
 
         var totals: OpaquePointer?
         defer { sqlite3_finalize(totals) }
@@ -2223,7 +2300,7 @@ actor IndexStore {
         var found: [String: FolderStats] = [:]
         for folder in folders {
             sqlite3_reset(totals)
-            bind(totals, 1, Statistics.scopePrefix(folder))
+            bindSubtree(totals, folder, low: 1, high: 3)
             bind(totals, 2, folder)
             guard sqlite3_step(totals) == SQLITE_ROW,
                   sqlite3_column_type(totals, 0) != SQLITE_NULL else { continue }
@@ -2232,7 +2309,7 @@ actor IndexStore {
                 ? nil : sqlite3_column_int64(totals, 1)
 
             sqlite3_reset(span)
-            bind(span, 1, Statistics.scopePrefix(folder))
+            bindSubtree(span, folder, low: 1, high: 3)
             bind(span, 2, folder)
             var earliest: Date?
             var latest: Date?
@@ -2262,7 +2339,7 @@ actor IndexStore {
             SELECT folder.path, file.name, file.size, file.kind
             FROM file JOIN folder ON folder.id = file.folder_id
             WHERE file.kind IN (1, 2) AND file.live = 0
-              AND (folder.path = ?2 OR \(Self.subtree("folder.path")))
+              AND (folder.path = ?2 OR \(Self.subtree("folder.path", low: 1, high: 3)))
             ORDER BY file.kind, file.capture DESC, folder.path, file.name
             LIMIT 1
             """, into: &statement)
@@ -2270,7 +2347,7 @@ actor IndexStore {
         var found: [String: Item] = [:]
         for folder in folders {
             sqlite3_reset(statement)
-            bind(statement, 1, Statistics.scopePrefix(folder))
+            bindSubtree(statement, folder, low: 1, high: 3)
             bind(statement, 2, folder)
             guard sqlite3_step(statement) == SQLITE_ROW,
                   let rawFolder = sqlite3_column_text(statement, 0),
@@ -2451,12 +2528,13 @@ actor IndexStore {
                               ELSE substr(reste, 1, instr(reste, '/') - 1) END AS enfant,
                          bytes, media_count
                   FROM (SELECT substr(path, length(?1) + 1) AS reste, bytes, media_count
-                        FROM folder WHERE \(Self.subtree())))
+                        FROM folder WHERE \(Self.subtree(low: 1, high: 3))))
             WHERE enfant <> ''
             GROUP BY enfant ORDER BY 2 DESC LIMIT ?2
             """, into: &statement)
         bind(statement, 1, prefix)
         sqlite3_bind_int64(statement, 2, Int64(limit))
+        bind(statement, 3, Self.upperBound(prefix))
 
         var subtrees: [Subtree] = []
         while sqlite3_step(statement) == SQLITE_ROW {
