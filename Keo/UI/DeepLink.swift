@@ -10,6 +10,9 @@ import Foundation
 enum DeepLink: Equatable, Sendable {
     case folder(path: String)
     case day(Date)
+    /// The statistics screen. No parameter: it is the whole library, and the one screen that
+    /// prints the coverage widget's numbers next to the reserves a widget cannot carry.
+    case statistics
 
     init?(_ url: URL) {
         guard url.scheme == "keo",
@@ -29,6 +32,8 @@ enum DeepLink: Equatable, Sendable {
             guard let raw = query.first(where: { $0.name == "stamp" })?.value,
                   let seconds = TimeInterval(raw) else { return nil }
             self = .day(Date(timeIntervalSince1970: seconds))
+        case "stats":
+            self = .statistics
         default:
             return nil
         }

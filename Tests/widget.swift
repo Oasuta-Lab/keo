@@ -15,7 +15,9 @@ func checkWidget() async throws {
                   .init(path: "/NAS/Photos/Brut", name: "Brut", images: ["cc"],
                         mediaCount: nil, span: nil)],
         onThisDay: .init(images: ["d1", "d2"], years: [2016, 2009],
-                         label: "25 octobre", total: 23)
+                         label: "25 octobre", total: 23),
+        coverage: .init(knownFolders: 4_799, indexedFolders: 3_812, unreadFiles: 12_400,
+                        datelessFiles: 312, fileCount: 48_212)
     )
     let decoded = try JSONDecoder().decode(WidgetManifest.self,
                                            from: JSONEncoder().encode(manifest))
@@ -33,8 +35,76 @@ func checkWidget() async throws {
            "les années accompagnent les images, dans le même ordre")
     assert(decoded.onThisDay?.total == 23 && decoded.onThisDay?.label == "25 octobre")
 
+    assert(decoded.coverage.unreadFiles == 12_400 && decoded.coverage.datelessFiles == 312,
+           "les deux moitiés de « sans date » traversent le manifeste séparément")
+
     // Une version antérieure doit être refusée, pas décodée de travers.
-    assert(WidgetManifest.currentVersion == 2, "la version suit la forme du manifeste")
+    assert(WidgetManifest.currentVersion == 3, "la version suit la forme du manifeste")
+
+    // MARK: La couverture, et la seule chose qu'elle n'a pas le droit de dire
+
+    // Le cas réel : la marche n'a pas fini, et des dizaines de milliers de fichiers sont
+    // listés sans être lus. Les deux moitiés limitent, et c'est la plus basse qui gagne.
+    let partial = decoded.coverage
+    assert(partial.isPartial && !partial.isEmpty)
+    // 3 812 / 4 799 = 79 % de dossiers parcourus, 35 812 / 48 212 = 74 % de fichiers lus.
+    assert(abs(partial.fraction - 35_812.0 / 48_212.0) < 0.0001,
+           "c'est la moitié la moins avancée qui commande — \(partial.fraction)")
+
+    // Dossiers finis, fichiers pas lus : c'est la lecture qui doit tenir la barre.
+    let filesBehind = WidgetManifest.Coverage(knownFolders: 100, indexedFolders: 100,
+                                              unreadFiles: 500, fileCount: 1_000)
+    assert(abs(filesBehind.fraction - 0.5) < 0.0001,
+           "une barre pleine sur les dossiers promettrait une fin qui n'a pas eu lieu — "
+         + "\(filesBehind.fraction)")
+
+    // Et l'inverse : tout ce qui est listé est lu, mais la moitié des dossiers est inconnue.
+    let foldersBehind = WidgetManifest.Coverage(knownFolders: 100, indexedFolders: 50,
+                                                unreadFiles: 0, fileCount: 1_000)
+    assert(abs(foldersBehind.fraction - 0.5) < 0.0001,
+           "des fichiers tous lus ne disent rien des dossiers jamais listés — "
+         + "\(foldersBehind.fraction)")
+
+    // Le seul chiffre que ce widget existe pour ne pas imprimer.
+    let nearlyThere = WidgetManifest.Coverage(knownFolders: 1_000, indexedFolders: 1_000,
+                                              unreadFiles: 2, fileCount: 1_000)
+    assert(nearlyThere.percent == 99,
+           "99,8 % arrondi à 100 % pendant qu'il reste des fichiers à lire serait un "
+         + "mensonge — \(nearlyThere.percent)")
+
+    let fresh = WidgetManifest.Coverage()
+    assert(fresh.isEmpty && fresh.fraction == 0, "un index vide ne divise par rien")
+
+    // MARK: Les trois états, et l'ordre de leurs branches
+
+    assert(fresh.lines.headline == "Index vide")
+    assert(fresh.lines.detail == "Ouvre Keo pour le construire")
+
+    // Les séparateurs de milliers suivent la locale de la machine : on vérifie la phrase,
+    // pas sa ponctuation.
+    assert(partial.lines.headline.contains("dossiers sur"),
+           "la marche en cours annonce des dossiers — \(partial.lines.headline)")
+    assert(partial.lines.detail?.hasSuffix("fichiers pas encore lus") == true,
+           "et la vérité sur l'index en second — \(partial.lines.detail ?? "rien")")
+    assert(partial.lines.detail?.contains("sans date") == false,
+           "« sans date » n'a aucun sens tant que la bibliothèque n'est pas lue : personne "
+         + "n'a encore regardé ces fichiers")
+
+    assert(filesBehind.lines.headline.hasSuffix("fichiers pas encore lus"),
+           "dossiers finis : c'est la lecture qui fait le titre — \(filesBehind.lines.headline)")
+
+    // Terminé, avec son résidu — et surtout sans le total, qui flatte sans rien apprendre.
+    let done = WidgetManifest.Coverage(knownFolders: 4_799, indexedFolders: 4_799,
+                                       unreadFiles: 0, datelessFiles: 312, fileCount: 48_212)
+    assert(!done.isPartial && done.percent == 100)
+    assert(done.lines.headline == "Bibliothèque à jour")
+    assert(done.lines.detail == "312 fichiers sans date",
+           "le résidu est ce qu'un index fini a encore à dire, et le total — qui flatte sans "
+         + "rien apprendre — ne revient pas par la fenêtre — \(done.lines.detail ?? "rien")")
+
+    let spotless = WidgetManifest.Coverage(knownFolders: 10, indexedFolders: 10,
+                                           unreadFiles: 0, datelessFiles: 0, fileCount: 500)
+    assert(spotless.lines.detail == nil, "rien à ajouter, donc rien d'ajouté")
 
     // Un nom de fichier du NAS ne peut pas sortir du conteneur une fois haché.
     let traversal = WidgetManifest.key(for: "/NAS/../../etc/passwd")
@@ -103,6 +173,24 @@ func checkWidget() async throws {
     let unknown = try await store.recentMedia(under: "/NAS/Jamais vu", limit: 12)
     assert(unknown.isEmpty, "un dossier inconnu ne rend rien plutôt que tout")
 
+    // MARK: La couverture lue dans la vraie base
+
+    // L'index posé plus haut : trois dossiers, dont aucun n'a de tampon de complétion, et un
+    // fichier vu dans un listing sans jamais être ouvert.
+    try await store.commit([], in: pinned + "/2023", generation: generation,
+                           present: [media("jamais-lue.jpg", in: pinned + "/2023",
+                                           mime: "image/jpeg")])
+    let live = try await store.widgetCoverage()
+    assert(live.knownFolders > 0 && live.indexedFolders == 0,
+           "aucun dossier n'a été fini ici : la marche est à zéro — "
+         + "\(live.indexedFolders)/\(live.knownFolders)")
+    assert(live.unreadFiles == 1, "exactement le fichier listé sans être lu — \(live.unreadFiles)")
+    assert(live.datelessFiles == 1,
+           "et exactement la photo lue qui ne porte pas de date : « sans date » compte les "
+         + "fichiers ouverts, « pas encore lues » ceux qui ne l'ont pas été — \(live.datelessFiles)")
+    assert(live.isPartial && !live.isEmpty)
+    assert(live.fraction == 0, "sans un seul dossier fini, la barre ne dessine rien")
+
     // MARK: L'étranglement
 
     var claimed = try await store.claimWidgetRender(signature: pinned, interval: 3_600)
@@ -115,5 +203,6 @@ func checkWidget() async throws {
     claimed = try await store.claimWidgetRender(signature: pinned + "\n/NAS/Vidéos", interval: 0)
     assert(claimed, "l'intervalle écoulé, on rend à nouveau")
 
-    print("ok — widget : manifeste, chemins aplatis, sélection des douze, étranglement")
+    print("ok — widget : manifeste, chemins aplatis, sélection des douze, couverture, "
+        + "ses trois états, étranglement")
 }

@@ -883,7 +883,7 @@ premier épinglage.
 `widgetAccentedRenderingMode(.fullColor)` est obligatoire : sans lui le mode teinté de l'écran
 d'accueil aplatit les photos en silhouettes blanches. Pour un widget photo, c'est un bug.
 
-### Les trois widgets, et ce que montre chaque taille
+### Les quatre widgets, et ce que montre chaque taille
 
 Une photo nue ne dit pas de quel dossier elle vient — « on voit juste la dernière photo du
 dossier plutôt que le nom du dossier ». Chaque taille porte donc son texte, sur un dégradé
@@ -915,6 +915,106 @@ jour ne se choisit pas, c'est aujourd'hui. Trois états plutôt qu'un :
 - un manifeste qui ne date pas d'aujourd'hui — passé minuit, ses souvenirs sont ceux d'hier :
   « Ouvre Keo pour les photos d'aujourd'hui », plutôt que les photos d'hier sous la date
   d'hier. La timeline s'arrête donc à minuit, puisque c'est à minuit que la réponse change.
+
+Le quatrième, **« Index Keo »**, n'est pas un widget photo et ne vit que sur l'écran
+verrouillé — la section suivante dit pourquoi.
+
+### « Index Keo » : le seul chiffre qui bouge
+
+Le brief tenait en une phrase : « un widget de statistiques peut être sympa ». La recherche
+qui a produit l'écran de statistiques était pourtant franchement hostile aux chiffres de
+vanité, avec une règle simple — *chaque chiffre affiché est un appui vers une grille ou un
+dossier ; un chiffre sur lequel on ne peut rien faire ne sort pas*. Un widget ne se tape pas
+vers une grille, il ne sait qu'ouvrir un lien. « 48 212 fichiers » sur l'écran d'accueil
+serait exactement la décoration que cette recherche refuse.
+
+**Ce qui a été écarté, et pourquoi :**
+
+- **Les totaux** — nombre de fichiers, poids, étendue, première photo. Déjà rejetés dans
+  l'app (« il ne survit que comme dénominateur du bandeau : seul, il flatte sans rien
+  apprendre »), et un widget ne les rend pas meilleurs.
+- **« ~23 Go récupérables · 1 940 doublons probables »**, pourtant la piste la plus
+  séduisante. Deux raisons de la refuser. D'abord, l'honnêteté de ce chiffre *est* sa réserve
+  — « même nom et même taille, ce n'est pas une empreinte », quatre lignes de pied de section
+  dans l'app. Un petit widget a de la place pour le nombre et aucune pour la réserve, et un
+  chiffre dont on a retiré la réserve est précisément un chiffre qu'il ne faut pas croire.
+  Ensuite, Keo n'écrira jamais sur le NAS : l'« action » se résume à aller regarder une liste
+  puis à supprimer ailleurs. Une corvée affichée tous les jours sans moyen de l'exécuter
+  n'est pas de l'actionnable, c'est du mobilier culpabilisant.
+- **Le jour le plus photographié, l'année qui ressort.** Ce sont des records historiques : ils
+  ne changent plus. Et la seule chose qui change tous les jours dans Keo a déjà son widget,
+  « Ce jour-là », qui le fait avec des photos.
+
+**Ce qui reste, et c'est le seul :** la couverture de l'index. Une bibliothèque de quinze ans
+bouge de fractions de pour-cent par mois ; l'index, lui, avance de milliers de fichiers entre
+deux coups d'œil, et son avancée demande quelque chose — ouvrir Keo et le laisser tourner.
+C'est aussi le seul chiffre de l'app qui a une **fin** : le jour où tout est lu, la
+complication le dit et le propriétaire la retire. Un widget de totaux n'a jamais eu ce
+moment-là, parce qu'il n'a jamais eu de travail.
+
+**Écran verrouillé seulement**, deux familles : `accessoryCircular` et `accessoryRectangular`.
+Trois raisons, toutes assumées :
+
+1. **C'est de la machinerie.** « La machinerie visible partout est la maladie qui fait
+   qu'Immich ressemble à une console d'administration » — c'est l'argument qui a sorti
+   l'indexation du menu de tri de chaque dossier. Une tuile d'indexation sur l'écran
+   d'accueil, à côté de « Ce jour-là », referait exactement cette erreur. Une complication
+   d'écran verrouillé est le seul emplacement du système où un voyant d'état est le contenu
+   attendu.
+2. **`systemSmall` et au-delà n'ont rien à mettre dans leurs pixels.** Deux lignes de texte
+   dans 158 × 158 pt, c'est 80 % de vide — qu'il faudrait meubler avec un chiffre de vanité.
+3. **`accessoryInline` est refusé** : une seule chaîne tronquée à côté de l'horloge, sans
+   place pour le mot qui rend le nombre honnête. « 12 400 » sans « pas encore lus » ne veut
+   rien dire.
+
+**Ce qu'il dit**, dans les mots que la carte Bibliothèque emploie déjà, et jamais fusionnés :
+
+| État | Titre | Détail |
+|---|---|---|
+| Rien d'indexé | « Index vide » | « Ouvre Keo pour le construire » |
+| Marche en cours | « 3 812 dossiers sur 4 799 » | « 12 400 fichiers pas encore lus » |
+| Dossiers finis, lecture non | « 12 400 fichiers pas encore lus » | « Tous les dossiers sont parcourus » |
+| Terminé | « Bibliothèque à jour » | « 312 fichiers sans date » |
+
+**« Pas encore lus » et « sans date » ne se croisent jamais**, et ce n'est pas une question de
+place : le second n'est même pas *connaissable* tant que la marche n'est pas finie. L'ordre
+des branches de `Coverage.lines` est donc la règle d'honnêteté elle-même, ce qui est la raison
+pour laquelle ces phrases vivent dans `WidgetManifest.swift` plutôt que dans la vue —
+`Tests/widget.swift` les tient.
+
+**La barre est la moitié la moins avancée.** Deux fractions indépendantes : les dossiers
+parcourus, et les fichiers lus. Une barre pleine sur les dossiers pendant que des fichiers
+restent à lire promettrait une fin qui n'a pas eu lieu ; dans l'autre sens, des fichiers tous
+lus ne disent rien des dossiers jamais listés. Le minimum des deux n'atteint 1 que lorsque les
+deux y sont. Le pourcentage est **arrondi vers le bas** : « 100 % » affiché alors qu'il reste
+deux fichiers à lire est le seul chiffre que ce widget existe pour ne pas imprimer. Et il peut
+**reculer**, parce que `knownFolders` grossit au fur et à mesure que la marche découvre des
+dossiers — c'est vrai, et l'écran de statistiques dit déjà la même chose en toutes lettres.
+
+**L'appui ouvre les statistiques**, pas l'indexation. Un widget porte un nombre, jamais la
+réserve qui le rend honnête ; son appui atterrit donc là où ces réserves sont imprimées — et
+le bandeau de couverture, en haut de cet écran, porte justement le bouton « Continuer
+l'indexation… ». C'est la destination `keo://stats`, nouvelle, parsée par `DeepLink` et
+présentée en feuille par-dessus l'onglet courant : les statistiques sont le même écran quel
+que soit l'onglet ouvert, et les empiler sous la pile en cours les enterrerait.
+
+**Ce n'est pas une barre de progression en temps réel, et ça ne prétend pas l'être.**
+`Indexer` s'arrête sur `didEnterBackgroundNotification` : l'index n'avance que pendant que
+l'app est ouverte. Le widget répond « où j'en étais hier soir », pas « où j'en suis à la
+seconde ». C'est exactement la question que « j'en suis où ? » pose.
+
+Conséquence côté app : la couverture est écrite **avant** les deux garde-fous de
+`WidgetRenderer.refresh` — le `guard !indexing` et l'étranglement horaire. Aucun des deux ne
+s'applique à cinq scalaires lus dans SQLite local : ni box, ni second lecteur, ni vignette. Le
+`guard !indexing`, surtout, gèlerait la couverture pendant toute la session qu'elle décrit.
+L'écriture est sautée quand rien n'a bougé, parce qu'un rechargement fait rendre à l'extension
+toute sa timeline et le faire pour réafficher le même nombre est du travail pour rien. Et le
+champ `stamped` est **conservé** lors de cette écriture partielle, jamais rafraîchi : c'est lui
+qui dit à « Ce jour-là » que ses souvenirs sont d'aujourd'hui.
+
+**Mémoire** : aucune photo, donc rien à décoder et rien à retenir dans l'archive. Une entrée,
+cinq entiers — de l'ordre du kilo-octet contre les trente mégaoctets de l'extension. C'est la
+raison pour laquelle la discussion de la section suivante ne le concerne pas.
 
 ### Longueur de la timeline : une décision de mémoire
 
@@ -954,7 +1054,8 @@ et la façon de les poser n'est pas la même partout :
   widget, puisqu'il n'en montre qu'un ;
 - **raccourcis** : un `Link(destination:)` **par tuile**. `widgetURL` ne sait poser qu'une
   destination globale, et toutes les tuiles ouvriraient le même dossier — l'erreur qui ne se
-  voit qu'en appuyant sur la deuxième.
+  voit qu'en appuyant sur la deuxième ;
+- **Index Keo** : `widgetURL(_:)` vers `keo://stats`, la seule destination sans paramètre.
 
 ### Récupérer le conteneur partagé depuis l'appareil
 
@@ -1027,8 +1128,38 @@ Rien de tout ceci ne se simule : il faut l'appareil, un widget posé, et de la p
 - **Mode teinté.** Passer l'écran d'accueil en teinté : les photos restent en couleur. Si
   elles deviennent des silhouettes blanches, un `widgetAccentedRenderingMode(.fullColor)` a
   sauté — il y en a un, dans `Photo`.
-- **Galerie de widgets.** Les **trois** widgets doivent apparaître avec leurs descriptions,
-  et « Raccourcis Keo » **sans** la taille petite.
+- **Galerie de widgets.** Les **quatre** widgets doivent apparaître avec leurs descriptions,
+  « Raccourcis Keo » **sans** la taille petite, et « Index Keo » **uniquement** dans la section
+  écran verrouillé — s'il apparaît en petit, moyen ou grand, une famille a été ajoutée par
+  erreur et la tuile de machinerie est de retour sur l'écran d'accueil.
+- **« Index Keo », cercle.** Poser la complication circulaire sur l'écran verrouillé : un
+  anneau rempli à la fraction, le pourcentage lisible au centre. Vérifier qu'il n'affiche
+  **pas** « 100 % » tant que la carte Bibliothèque annonce encore des fichiers à lire — le
+  pourcentage est arrondi vers le bas exprès, et c'est le seul mensonge possible ici.
+- **« Index Keo », rectangle.** La complication rectangulaire doit tenir sur trois lignes sans
+  troncature au milieu d'un mot : titre, barre, détail. Comparer les deux phrases avec la
+  ligne « Indexation » de la carte Bibliothèque dans l'app : elles doivent raconter la même
+  chose.
+- **Les deux moitiés de « sans date » ne se croisent pas.** Sur un index **incomplet**, le
+  widget ne doit jamais prononcer « sans date » — personne n'a encore regardé ces fichiers.
+  Sur un index **terminé**, il ne doit plus prononcer « pas encore lus ». C'est la règle
+  d'honnêteté de l'écran de statistiques, portée telle quelle sur l'écran verrouillé.
+- **La barre pendant une vraie indexation.** Lancer l'indexation, laisser tourner, quitter
+  l'app, regarder l'écran verrouillé : le chiffre doit avoir avancé par rapport à la veille.
+  Il ne bougera **pas** pendant qu'on le regarde — `Indexer` s'arrête au passage en arrière-
+  plan — et c'est le comportement attendu, pas un gel.
+- **La barre peut reculer.** Sur une bibliothèque où la marche découvre encore des dossiers,
+  le pourcentage peut descendre d'un coup d'œil à l'autre. C'est juste : le dénominateur,
+  ce sont les dossiers que l'index **connaît**.
+- **L'appui sur « Index Keo ».** Keo doit ouvrir les statistiques en feuille, quel que soit
+  l'onglet affiché, avec le bandeau de couverture et son bouton « Continuer l'indexation… »
+  en haut. Pas la racine du NAS, pas l'écran d'indexation nu.
+- **Avant le premier lancement de Keo.** Poser « Index Keo » sur une installation neuve sans
+  jamais ouvrir l'app : « Ouvre Keo », jamais « 0 % » ni une case cassée.
+- **Index jamais commencé.** Associer la box sans lancer l'indexation : « Index vide · Ouvre
+  Keo pour le construire ».
+- **Mode avion.** Comme les trois autres : aucun message qui ressemble de près ou de loin à
+  une erreur réseau. Le widget ne lit qu'un fichier.
 - **Numéro de build.** Après installation, vérifier que l'app démarre : iOS refuse une app
   dont l'extension ne porte pas la version de l'hôte, et l'échec se produit à l'installation,
   jamais à la compilation.
@@ -1378,6 +1509,10 @@ ouvre la journée, un sous-arbre ouvre le dossier, un groupe de doublons ouvre s
 emplacements réels, un gros fichier ouvre le dossier qui le contient. Un chiffre qu'on ne peut
 pas aller vérifier est un chiffre qu'il ne faut pas croire.
 
+Cette règle est aussi ce qui a décidé le contenu du widget « Index Keo » : un widget ne se
+tape pas vers une grille, donc un seul chiffre de cet écran pouvait y monter. Voir
+« Widget », section « Index Keo ».
+
 ### La racine n'est pas un dossier comme les autres
 
 L'idiome de portée utilisé partout dans `IndexStore` était
@@ -1492,7 +1627,10 @@ SQLite et vérifie que favoris, notes, raccourcis et collections en sortent inta
 
 `Tests/widget.swift` couvre le manifeste du widget et, contre le vrai SQLite, la sélection des
 douze couvertures d'un dossier épinglé : tout le sous-arbre, les plus récentes d'abord, les
-vidéos après les photos, les voisins au nom proche exclus.
+vidéos après les photos, les voisins au nom proche exclus. Il tient aussi la couverture de
+l'index — la fraction qui suit la moitié la moins avancée, le pourcentage arrondi vers le bas,
+et l'ordre des branches de `Coverage.lines`, qui est la règle « sans date » / « pas encore
+lues » elle-même.
 
 ## Pièges de l'API Freebox, vérifiés sur la box
 

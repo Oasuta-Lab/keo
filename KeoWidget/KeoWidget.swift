@@ -11,6 +11,7 @@ struct KeoWidgetBundle: WidgetBundle {
         KeoWidget()
         OnThisDayWidget()
         ShortcutsWidget()
+        CoverageWidget()
     }
 }
 

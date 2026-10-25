@@ -23,9 +23,19 @@ enum WidgetRenderer {
     static let perMemory = 12
 
     static func refresh(client: FreeboxClient, indexing: Bool) async {
+        guard let directory = WidgetManifest.directory else { return }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        protect(directory)
+
+        // Ahead of both gates below, on purpose. Neither reason for them applies to five
+        // scalars read from local SQLite — no box, no second reader, no thumbnail — and the
+        // `indexing` gate in particular would freeze the coverage for the whole session it
+        // is meant to describe.
+        guard let coverage = await stampCoverage(into: directory) else { return }
+
         // The NAS reader is deliberately a single serial worker. A second one here would
         // bring back the doubled traffic that collapsing DateScan and Indexer removed.
-        guard !indexing, let directory = WidgetManifest.directory else { return }
+        guard !indexing else { return }
 
         let pinned = (try? await IndexStore.shared.shortcuts()) ?? []
         let signature = pinned.map(\.path).joined(separator: "\n")
@@ -33,9 +43,6 @@ enum WidgetRenderer {
                                                               interval: interval)) == true else {
             return
         }
-
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        protect(directory)
 
         var folders: [WidgetManifest.Folder] = []
         var rendered = 0
@@ -82,7 +89,8 @@ enum WidgetRenderer {
                                     + [WidgetManifest.fileName, WidgetManifest.dayKey]))
 
         let manifest = WidgetManifest(version: WidgetManifest.currentVersion,
-                                      stamped: Date(), folders: folders, onThisDay: memory)
+                                      stamped: Date(), folders: folders, onThisDay: memory,
+                                      coverage: coverage)
         guard let encoded = try? JSONEncoder().encode(manifest) else { return }
         let file = directory.appendingPathComponent(WidgetManifest.fileName)
         try? encoded.write(to: file, options: .atomic)
@@ -91,6 +99,33 @@ enum WidgetRenderer {
 
         trace("widget \(directory.path) folders=\(folders.count) rendered=\(rendered)")
         WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    /// Puts the current coverage into the manifest without touching a single photo, and says
+    /// what it wrote so the full render below can reuse it.
+    ///
+    /// Skipped when nothing moved: a reload makes the extension render and archive its whole
+    /// timeline, and doing that to print the same number is work for nothing.
+    private static func stampCoverage(into directory: URL) async -> WidgetManifest.Coverage? {
+        guard let coverage = try? await IndexStore.shared.widgetCoverage() else { return nil }
+        let file = directory.appendingPathComponent(WidgetManifest.fileName)
+        let existing = (try? Data(contentsOf: file))
+            .flatMap { try? JSONDecoder().decode(WidgetManifest.self, from: $0) }
+        guard existing?.coverage != coverage else { return coverage }
+
+        // `stamped` is kept, never refreshed: it is what tells « Ce jour-là » its memories
+        // are today's. Dating a photo-less manifest today would make it announce "rien ce
+        // jour-là" on a library that has simply never been rendered.
+        let merged = WidgetManifest(version: WidgetManifest.currentVersion,
+                                    stamped: existing?.stamped ?? .distantPast,
+                                    folders: existing?.folders ?? [],
+                                    onThisDay: existing?.onThisDay,
+                                    coverage: coverage)
+        guard let encoded = try? JSONEncoder().encode(merged) else { return coverage }
+        try? encoded.write(to: file, options: .atomic)
+        protect(file)
+        WidgetCenter.shared.reloadAllTimelines()
+        return coverage
     }
 
     /// Photos taken on this calendar day in years gone by.

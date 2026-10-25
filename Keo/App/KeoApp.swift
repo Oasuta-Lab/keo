@@ -60,6 +60,9 @@ private struct Shelf: View {
     @State private var homePath = NavigationPath()
     @State private var favouritesPath = NavigationPath()
     @State private var collectionsPath = NavigationPath()
+    /// A sheet rather than a push: the statistics are the same screen whichever tab is open,
+    /// and pushing them would bury them under whatever stack happened to be in front.
+    @State private var showingStats = false
 
     var body: some View {
         TabView(selection: selection) {
@@ -109,6 +112,7 @@ private struct Shelf: View {
         .overlay(alignment: .bottom) {
             UndoBanner().padding(.bottom, 8)
         }
+        .sheet(isPresented: $showingStats) { StatsView(client: client) }
         .onChange(of: link) { _, now in
             guard let now else { return }
             open(now)
@@ -133,6 +137,8 @@ private struct Shelf: View {
         case .day(let day):
             place = .search
             searchSeed = SearchQuery(period: .between(day, day))
+        case .statistics:
+            showingStats = true
         }
     }
 

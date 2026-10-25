@@ -26,6 +26,16 @@ func checkDeepLinks() {
         assertionFailure("l'URL de jour ne s'est pas relue : \(dayURL)")
     }
 
+    // --- les statistiques, sans paramètre -----------------------------------------------------
+    guard let statsURL = WidgetManifest.statistics else {
+        assertionFailure("l'URL des statistiques n'a pas été fabriquée")
+        return
+    }
+    assert(statsURL.absoluteString == "keo://stats", "obtenu \(statsURL.absoluteString)")
+    assert(DeepLink(statsURL) == .statistics,
+           "le widget de couverture n'a qu'une destination, et c'est l'écran qui imprime "
+         + "les réserves qu'il ne peut pas porter — \(statsURL)")
+
     // --- ce qui doit être refusé --------------------------------------------------------------
     assert(DeepLink(URL(string: "https://example.com/folder?path=/x")!) == nil,
            "un autre schéma n'ouvre rien")
@@ -36,6 +46,8 @@ func checkDeepLinks() {
            "un chemin relatif n'a pas de sens ici, et ouvrirait la racine sous un autre nom")
     assert(DeepLink(URL(string: "keo://day?stamp=hier")!) == nil, "une date illisible, rien")
     assert(DeepLink(URL(string: "keo://day")!) == nil, "sans date, rien")
+    assert(DeepLink(URL(string: "https://example.com/stats")!) == nil,
+           "les statistiques non plus ne s'ouvrent pas depuis le web")
 
     // --- le titre affiché en haut de l'écran ---------------------------------------------------
     assert(DeepLink.title(for: "/NAS/Perso/Photos") == "Photos")
