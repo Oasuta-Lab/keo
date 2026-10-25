@@ -21,6 +21,9 @@ struct ViewerView: View {
     @State private var favourite = false
     @State private var hasNote = false
     @State private var annotating: Item?
+    /// Lives here and not in the page: the control that drives it sits in the bottom
+    /// bar, which the page does not own.
+    @State private var livePlaying = false
     /// Counts taps, not the flag: paging also rewrites `favourite`, and swiping between a
     /// favourite and a plain photo must not buzz.
     @State private var favouriteTaps = 0
@@ -81,7 +84,11 @@ struct ViewerView: View {
         .task { collections = (try? await IndexStore.shared.collections()) ?? [] }
         // The heart reflects the photo on screen, so it has to follow the paging.
         // Paging moves the cell the grid will zoom back to.
-        .onChange(of: currentID) { _, now in anchor = now }
+        .onChange(of: currentID) { _, now in
+            anchor = now
+            // Paging away must not leave a video running behind the next photo.
+            livePlaying = false
+        }
         .task(id: currentID) {
             guard let current else { return }
             favourite = (try? await IndexStore.shared.isFavourite(current)) ?? false
@@ -110,6 +117,7 @@ struct ViewerView: View {
             LazyHStack(spacing: 0) {
                 ForEach(items) { item in
                     Page(item: item, client: client, live: companions[item.id],
+                         playing: item.id == currentID ? $livePlaying : .constant(false),
                          zoomed: $zoomed, onCaptureDate: { captured[item.id] = $0 })
                         .containerRelativeFrame(.horizontal)
                         .id(item.id)
@@ -165,8 +173,13 @@ struct ViewerView: View {
     }
 
     /// Bottom: everything you actually do, within thumb reach.
+    ///
+    /// Five slots of equal width rather than a fixed spacing, and the fifth stays empty on a
+    /// photo with no video. Laying the fifth out only when it exists would slide the heart
+    /// out from under the thumb as you page from a Live Photo to an ordinary one.
     private var actions: some View {
-        HStack(spacing: 34) {
+        HStack(spacing: 0) {
+          Group {
             Button { toggleFavourite() } label: {
                 Glyph(favourite ? "heart.fill" : "heart", large: true)
                     .foregroundStyle(favourite ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
@@ -200,8 +213,23 @@ struct ViewerView: View {
             }
             .accessibilityLabel("Enregistrer ou partager")
             .disabled(downloader.isRunning)
+
+            if let current, companions[current.id] != nil {
+                Button { livePlaying.toggle() } label: {
+                    Glyph(livePlaying ? "livephoto.slash" : "livephoto", large: true)
+                        .foregroundStyle(livePlaying ? AnyShapeStyle(.tint)
+                                                     : AnyShapeStyle(.white))
+                }
+                .accessibilityLabel(livePlaying ? "Arrêter la vidéo live" : "Jouer la vidéo live")
+            } else {
+                // Holds the slot open so the four others never move.
+                Color.clear
+            }
+          }
+          .frame(maxWidth: .infinity)
         }
         .disabled(current == nil)
+        .padding(.horizontal, 8)
         .padding(.bottom, 6)
     }
 
@@ -263,6 +291,7 @@ private struct Page: View {
     let client: FreeboxClient
     /// The video half, when this still is a Live Photo.
     let live: Item?
+    @Binding var playing: Bool
     @Binding var zoomed: Bool
     let onCaptureDate: (Date) -> Void
 
@@ -273,8 +302,8 @@ private struct Page: View {
         case .other:
             DocumentPage(item: item, client: client)
         default:
-            ImagePage(item: item, client: client, live: live, zoomed: $zoomed,
-                      onCaptureDate: onCaptureDate)
+            ImagePage(item: item, client: client, live: live, playing: $playing,
+                      zoomed: $zoomed, onCaptureDate: onCaptureDate)
         }
     }
 }
@@ -283,13 +312,13 @@ private struct ImagePage: View {
     let item: Item
     let client: FreeboxClient
     let live: Item?
+    @Binding var playing: Bool
     @Binding var zoomed: Bool
     let onCaptureDate: (Date) -> Void
 
     @State private var image: UIImage?
     @State private var sharp = false
     @State private var failed = false
-    @State private var playing = false
 
     var body: some View {
         ZStack {
@@ -307,28 +336,20 @@ private struct ImagePage: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            // The badge *is* the button. A long press felt like guesswork, and the bottom bar
-            // is already four 60 pt glyphs wide — a fifth would not fit on an iPhone. This
-            // puts the control where the eye already goes to learn the photo has a video.
-            if live != nil {
-                Button { playing.toggle() } label: {
-                    Label("LIVE", systemImage: playing ? "livephoto.slash" : "livephoto")
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(playing ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(.black.opacity(0.45), in: Capsule())
-                        // The capsule is smaller than a thumb; the hit region is not.
-                        .frame(minWidth: 44, minHeight: 44, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .padding(.leading, 10)
-                .accessibilityLabel(playing ? "Arrêter la vidéo live" : "Jouer la vidéo live")
+            // Information, not a control. The control is in the bottom bar, where the
+            // thumb is; this only says the photo has a video.
+            if live != nil, !playing {
+                Label("LIVE", systemImage: "livephoto")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.black.opacity(0.4), in: Capsule())
+                    .padding(12)
+                    .allowsHitTesting(false)
             }
         }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: playing) { _, now in now }
-        // Paging away must not leave a video running behind the next photo.
-        .onChange(of: item.path) { _, _ in playing = false }
         .task(id: item.path) {
             // The grid thumbnail first so the page is never blank, then the real thing.
             if image == nil,

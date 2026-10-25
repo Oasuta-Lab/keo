@@ -368,14 +368,19 @@ dans les métadonnées `PHAsset` est perdu à la copie, et rien dans les fichier
 vont ensemble. Résultat : une bibliothèque qui paraît deux fois plus pleine qu'elle n'est, et
 un jumeau gris à côté de chaque photo.
 
-Keo les réunit sur la seule preuve qui reste, le nom. Le `.MOV` disparaît de la grille, et une
-pastille « LIVE » en haut à gauche de la photo le joue — muet, une passe, retap pour arrêter.
+Keo les réunit sur la seule preuve qui reste, le nom. Le `.MOV` disparaît de la grille ; en
+plein écran, une pastille « LIVE » en haut à gauche dit que la photo en a une, et un bouton
+dans la barre du bas la joue — muet, une passe, retap pour arrêter.
 
-L'appui long, à la Photos, a été essayé et abandonné : le ressenti n'y était pas, on ne sait
-pas combien de temps tenir ni si quelque chose se passe. La pastille **est** le bouton, à
-l'endroit où l'œil va déjà pour apprendre que la photo a une vidéo ; sa zone tactile fait
-44 pt même si la capsule est plus petite. La barre du bas n'était pas une option : quatre
-glyphes de 60 pt y tiennent déjà toute la largeur d'un iPhone.
+Deux essais ont précédé ce bouton, et les deux ont échoué au doigt. **L'appui long**, à la
+Photos : on ne sait pas combien de temps tenir ni si quelque chose se passe. **La pastille
+elle-même comme bouton** : en haut à gauche, c'est l'angle le plus éloigné du pouce. D'où la
+règle déjà écrite dans le code — *« Bottom: everything you actually do, within thumb reach »*
+— appliquée aussi ici.
+
+La barre passe donc à **cinq emplacements de largeur égale** au lieu d'un espacement fixe, et
+le cinquième reste vide sur une photo sans vidéo. Ne le poser que lorsqu'il existe ferait
+glisser le cœur hors du pouce en passant d'une photo live à une photo ordinaire.
 
 **Un `.MOV` isolé reste une vidéo visible.** C'est tout ce qui n'a pas été pris à l'iPhone, et
 le masquer le perdrait.
