@@ -33,9 +33,14 @@ enum ReadBench {
 
     /// Each level gets its **own slice** of files. Replaying the same files would measure the
     /// box's cache and the levels would all look fast in the order they ran.
+    ///
+    /// Two more defences against reading noise as signal. The pool is shuffled, so running the
+    /// bench twice samples different files instead of re-reading what the box just cached. And
+    /// the levels run in a random order, so a network that drifts during the measurement no
+    /// longer systematically flatters whichever level happened to go first.
     static func run(folder: String, client: FreeboxClient,
                     levels: [Int] = [1, 2, 3, 4, 6, 8, 12],
-                    perLevel: Int = 40) async -> [Run] {
+                    perLevel: Int = 80) async -> [Run] {
         let contents: FolderContents
         do {
             contents = try await client.list(folder)
@@ -46,16 +51,16 @@ enum ReadBench {
 
         // Photos only: a video's date costs a variable number of range requests, which would
         // measure the parser rather than the concurrency.
-        let pool = contents.media.filter { $0.kind == .image }
+        let pool = contents.media.filter { $0.kind == .image }.shuffled()
         let needed = levels.count * perLevel
         guard pool.count >= needed else {
             trace("bench: \(folder) n'a que \(pool.count) photos, il en faut \(needed)")
             return []
         }
 
-        trace("bench: \(folder), \(pool.count) photos disponibles")
+        trace("bench: \(folder), \(pool.count) photos, \(perLevel) par niveau, ordre tiré au sort")
         var runs: [Run] = []
-        for (index, level) in levels.enumerated() {
+        for (index, level) in levels.shuffled().enumerated() {
             let slice = Array(pool[(index * perLevel)..<((index + 1) * perLevel)])
             let run = await measure(slice, parallel: level, client: client)
             trace("bench: " + run.line)
@@ -63,9 +68,11 @@ enum ReadBench {
             if Task.isCancelled { break }
         }
 
+        runs.sort { $0.parallel < $1.parallel }
         if let best = runs.max(by: { $0.filesPerSecond < $1.filesPerSecond }) {
             trace("bench: meilleur débit à parallel=\(best.parallel) "
-                  + String(format: "(%.1f f/s)", best.filesPerSecond))
+                  + String(format: "(%.1f f/s)", best.filesPerSecond)
+                  + " — à confirmer sur plusieurs passages")
         }
         return runs
     }
