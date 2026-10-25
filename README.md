@@ -1373,6 +1373,31 @@ Deux réponses, de la plus sûre à la plus récente :
   arrière-plan et au verrouillage, avec une jauge du système et un bouton d'annulation. C'est
   la réponse littérale à la demande, et elle n'existait pas avant iOS 26.
 
+### Ce que l'appareil a réellement montré
+
+Premier essai mesuré, traces à l'appui :
+
+```
+20:45:00.091  bgcontinued submitted folders=75
+20:45:00.158  bgcontinued began
+20:45:03.422  background: running=true continued=true
+20:45:03.422  background: tâche continue active, pas de halt
+20:45:05.521  bgcontinued progress 25/26
+20:45:20.972  bgcontinued progress 144/145
+```
+
+**Le mécanisme fonctionne** : l'app passe en arrière-plan, le `halt()` est sauté, et la
+progression monte de 25 à 144 dossiers sans l'app au premier plan. C'est observé, plus supposé.
+
+**La tenue sur la durée ne l'est pas.** Les traces s'arrêtent net dix-huit secondes après le
+passage en arrière-plan, sans ligne de fin : le système a repris le processus pendant le
+verrouillage. « Continue en arrière-plan » est acquis ; « sans interruption en veille » ne
+l'est pas, et il serait malhonnête de l'écrire ailleurs que mesuré.
+
+Ce qui a tenu, en revanche, est le plus important : **aucun `walk end`, donc aucune complétion
+déclarée, donc aucun balayage**. `resumeWanted` est resté vrai et la reprise au lancement
+suivant fonctionne. Le pire cas reste une pause, jamais une perte.
+
 ### La seule ligne touchée dans le cycle d'indexation
 
 L'observateur d'arrière-plan saute son `halt()` **uniquement si une tâche continue a réellement
