@@ -369,8 +369,9 @@ vont ensemble. Résultat : une bibliothèque qui paraît deux fois plus pleine q
 un jumeau gris à côté de chaque photo.
 
 Keo les réunit sur la seule preuve qui reste, le nom. Le `.MOV` disparaît de la grille ; en
-plein écran, une pastille « LIVE » en haut à gauche dit que la photo en a une, et un bouton
-dans la barre du bas la joue — muet, une passe, retap pour arrêter.
+plein écran, un bouton dans la barre du bas joue la vidéo — muet, une passe, retap pour
+arrêter. Sa seule présence dit que la photo en a une : la pastille « LIVE » en haut à gauche
+qui le disait avant a été retirée, elle était laide et redondante.
 
 Deux essais ont précédé ce bouton, et les deux ont échoué au doigt. **L'appui long**, à la
 Photos : on ne sait pas combien de temps tenir ni si quelque chose se passe. **La pastille

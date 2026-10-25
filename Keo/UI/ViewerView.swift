@@ -335,20 +335,6 @@ private struct ImagePage: View {
                 ProgressView().tint(.white)
             }
         }
-        .overlay(alignment: .topLeading) {
-            // Information, not a control. The control is in the bottom bar, where the
-            // thumb is; this only says the photo has a video.
-            if live != nil, !playing {
-                Label("LIVE", systemImage: "livephoto")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.black.opacity(0.4), in: Capsule())
-                    .padding(12)
-                    .allowsHitTesting(false)
-            }
-        }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: playing) { _, now in now }
         .task(id: item.path) {
             // The grid thumbnail first so the page is never blank, then the real thing.
