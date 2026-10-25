@@ -390,6 +390,7 @@ private extension SyncPayload {
                   added: record.encryptedValues["added"] as? Double,
                   collection: record.encryptedValues["collection"] as? String,
                   created: record.encryptedValues["created"] as? Double,
+                  body: record.encryptedValues["body"] as? String,
                   modified: modified)
     }
 
@@ -401,6 +402,7 @@ private extension SyncPayload {
         record.encryptedValues["added"] = added
         record.encryptedValues["collection"] = collection
         record.encryptedValues["created"] = created
+        record.encryptedValues["body"] = body
         record.encryptedValues["modified"] = modified
     }
 }

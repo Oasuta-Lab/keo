@@ -119,6 +119,18 @@ actor IndexStore {
       added REAL NOT NULL
     );
 
+    -- A note is the one piece of personalisation whose *content* changes, so unlike a
+    -- favourite it carries its own `modified`: presence no longer settles a conflict, the
+    -- text does. Keyed like a favourite so a note follows a file that moves.
+    CREATE TABLE IF NOT EXISTS note (
+      path     TEXT    NOT NULL,
+      name     TEXT    NOT NULL,
+      size     INTEGER NOT NULL,
+      body     TEXT    NOT NULL,
+      modified REAL    NOT NULL,
+      PRIMARY KEY (path, size)
+    ) WITHOUT ROWID;
+
     CREATE TABLE IF NOT EXISTS collection (
       id      INTEGER PRIMARY KEY,
       name    TEXT NOT NULL UNIQUE,
@@ -650,6 +662,81 @@ actor IndexStore {
         return try collect("SELECT path, name, size FROM favourite ORDER BY added DESC")
     }
 
+    // MARK: Notes
+
+    /// Writes a note, or removes it when the text comes back empty — an emptied note is a
+    /// deleted note, not a row holding an empty string that search would match on.
+    func setNote(_ body: String, on item: Item) throws {
+        try open()
+        let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        let identity = SyncIdentity.note(path: item.path, size: item.size)
+        let now = Date().timeIntervalSince1970
+
+        try exec("BEGIN IMMEDIATE")
+        do {
+            var statement: OpaquePointer?
+            defer { sqlite3_finalize(statement) }
+            if text.isEmpty {
+                try prepare("DELETE FROM note WHERE path = ? AND size = ?", into: &statement)
+                bind(statement, 1, item.path)
+                sqlite3_bind_int64(statement, 2, item.size)
+            } else {
+                try prepare("""
+                    INSERT INTO note (path, name, size, body, modified) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(path, size) DO UPDATE SET name = excluded.name,
+                        body = excluded.body, modified = excluded.modified
+                    """, into: &statement)
+                bind(statement, 1, item.path)
+                bind(statement, 2, item.name)
+                sqlite3_bind_int64(statement, 3, item.size)
+                bind(statement, 4, text)
+                sqlite3_bind_double(statement, 5, now)
+            }
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+
+            try journal(text.isEmpty ? .delete : .save, identity,
+                        payload: text.isEmpty ? nil
+                            : .note(path: item.path, name: item.name, size: item.size,
+                                    body: text, modified: now))
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+            throw error
+        }
+        notifyJournal()
+    }
+
+    func note(on item: Item) throws -> String? {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT body FROM note WHERE path = ? AND size = ?", into: &statement)
+        bind(statement, 1, item.path)
+        sqlite3_bind_int64(statement, 2, item.size)
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let raw = sqlite3_column_text(statement, 0) else { return nil }
+        return String(cString: raw)
+    }
+
+    /// One query for a whole screenful, so a grid can mark annotated items without asking
+    /// once per cell.
+    func notedPaths() throws -> Set<String> {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT path FROM note", into: &statement)
+        var paths: Set<String> = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let raw = sqlite3_column_text(statement, 0) { paths.insert(String(cString: raw)) }
+        }
+        return paths
+    }
+
+    func noteCount() throws -> Int {
+        try open()
+        return Int(try scalar("SELECT count(*) FROM note") ?? 0)
+    }
+
     func favouriteCount() throws -> Int {
         try open()
         return Int(try scalar("SELECT count(*) FROM favourite") ?? 0)
@@ -1112,6 +1199,16 @@ actor IndexStore {
             guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
         }
 
+        for row in try noteRows()
+        where doomed.contains(SyncIdentity.note(path: row.path, size: row.size).recordName) {
+            var statement: OpaquePointer?
+            defer { sqlite3_finalize(statement) }
+            try prepare("DELETE FROM note WHERE path = ? AND size = ?", into: &statement)
+            bind(statement, 1, row.path)
+            sqlite3_bind_int64(statement, 2, row.size)
+            guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+        }
+
         for folder in try shortcutPaths()
         where doomed.contains(SyncIdentity.shortcut(path: folder).recordName) {
             var statement: OpaquePointer?
@@ -1168,6 +1265,21 @@ actor IndexStore {
             bind(statement, 1, path)
             bind(statement, 2, payload.name ?? (path as NSString).lastPathComponent)
             sqlite3_bind_double(statement, 3, payload.added ?? payload.modified)
+        case .note(let path, let size):
+            // The only record here where last-writer-wins has real work to do: two devices
+            // can hold *different text* for the same note. The guard rides in the statement
+            // so an older edit arriving late cannot overwrite a newer one.
+            try prepare("""
+                INSERT INTO note (path, name, size, body, modified) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(path, size) DO UPDATE SET name = excluded.name,
+                    body = excluded.body, modified = excluded.modified
+                    WHERE excluded.modified > note.modified
+                """, into: &statement)
+            bind(statement, 1, path)
+            bind(statement, 2, payload.name ?? (path as NSString).lastPathComponent)
+            sqlite3_bind_int64(statement, 3, size)
+            bind(statement, 4, payload.body ?? "")
+            sqlite3_bind_double(statement, 5, payload.modified)
         case .collection(let name):
             try prepare("INSERT OR IGNORE INTO collection (name, created) VALUES (?, ?)",
                         into: &statement)
@@ -1233,6 +1345,13 @@ actor IndexStore {
             try journal(.save, .favourite(path: row.path, size: row.size),
                         payload: .favourite(path: row.path, name: row.name, size: row.size,
                                             added: row.added, modified: now))
+        }
+        for row in try noteRows() {
+            // Its own `modified`, not `now`: re-journalling must not make a stale note look
+            // newer than the same note edited elsewhere.
+            try journal(.save, .note(path: row.path, size: row.size),
+                        payload: .note(path: row.path, name: row.name, size: row.size,
+                                       body: row.body, modified: row.modified))
         }
         for row in try shortcutRows() {
             try journal(.save, .shortcut(path: row.path),
@@ -1316,6 +1435,23 @@ actor IndexStore {
                   let name = sqlite3_column_text(statement, 1) else { continue }
             rows.append((String(cString: path), String(cString: name),
                          sqlite3_column_int64(statement, 2), sqlite3_column_double(statement, 3)))
+        }
+        return rows
+    }
+
+    private func noteRows() throws -> [(path: String, name: String, size: Int64,
+                                       body: String, modified: Double)] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT path, name, size, body, modified FROM note", into: &statement)
+        var rows: [(String, String, Int64, String, Double)] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let path = sqlite3_column_text(statement, 0),
+                  let name = sqlite3_column_text(statement, 1),
+                  let body = sqlite3_column_text(statement, 3) else { continue }
+            rows.append((String(cString: path), String(cString: name),
+                         sqlite3_column_int64(statement, 2), String(cString: body),
+                         sqlite3_column_double(statement, 4)))
         }
         return rows
     }
@@ -1522,6 +1658,10 @@ actor IndexStore {
 
     // MARK: Search
 
+    /// A file's full path, rebuilt from its folder row. Spelled once: it appears in every
+    /// personalisation join below and a typo in one of them is a silently empty filter.
+    private static let filePath = "d.path || '/' || fi.name"
+
     /// Searches the index, never the box: instant, and it works with the NAS switched off.
     ///
     /// The trade-off to be honest about — only indexed folders can be found. A folder never
@@ -1531,13 +1671,22 @@ actor IndexStore {
         guard !query.isEmpty else { return [] }
 
         var conditions: [String] = []
+        // The note counts as part of the item's text: writing "facture EDF" on a photo is
+        // the only way to find it again, since its name is IMG_4821.
         if !query.text.trimmingCharacters(in: .whitespaces).isEmpty {
-            conditions.append("(fold(fi.name) LIKE ?1 ESCAPE '\\' OR fold(d.path) LIKE ?1 ESCAPE '\\')")
+            conditions.append("(fold(fi.name) LIKE ?1 ESCAPE '\\' "
+                            + "OR fold(d.path) LIKE ?1 ESCAPE '\\' "
+                            + "OR EXISTS (SELECT 1 FROM note n WHERE n.path = \(Self.filePath) "
+                            + "AND n.size = fi.size AND fold(n.body) LIKE ?1 ESCAPE '\\'))")
         }
         conditions.append("fi.kind IN (\(query.kinds.codes.map(String.init).joined(separator: ", ")))")
         if query.favouritesOnly {
             conditions.append("EXISTS (SELECT 1 FROM favourite f "
-                            + "WHERE f.path = d.path || '/' || fi.name AND f.size = fi.size)")
+                            + "WHERE f.path = \(Self.filePath) AND f.size = fi.size)")
+        }
+        if query.notedOnly {
+            conditions.append("EXISTS (SELECT 1 FROM note n "
+                            + "WHERE n.path = \(Self.filePath) AND n.size = fi.size)")
         }
         // A document has no capture date; a period narrows to what was actually shot.
         let window = query.period.range()
@@ -1582,14 +1731,16 @@ actor IndexStore {
     /// Skipped entirely when a media filter is on — a folder has no type and no capture date.
     private func matchingFolders(_ query: SearchQuery, limit: Int = 100) throws -> [Item] {
         let text = query.text.trimmingCharacters(in: .whitespaces)
-        guard !text.isEmpty, query.kinds == .everything,
-              !query.favouritesOnly, !query.period.isSet else { return [] }
+        guard !text.isEmpty, query.kinds == .everything, !query.favouritesOnly,
+              !query.notedOnly, !query.period.isSet else { return [] }
 
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
-        try prepare("SELECT path, child_count FROM folder "
-                  + "WHERE fold(path) LIKE ?1 ESCAPE '\\' ORDER BY path LIMIT ?2",
-                    into: &statement)
+        try prepare("SELECT path, child_count, "
+                  + "EXISTS (SELECT 1 FROM note n WHERE n.path = folder.path "
+                  + "AND fold(n.body) LIKE ?1 ESCAPE '\\') AS noted FROM folder "
+                  + "WHERE fold(path) LIKE ?1 ESCAPE '\\' OR noted "
+                  + "ORDER BY path LIMIT ?2", into: &statement)
         bind(statement, 1, SearchQuery.pattern(for: text))
         sqlite3_bind_int64(statement, 2, Int64(limit) * 4)
 
@@ -1599,7 +1750,10 @@ actor IndexStore {
             guard let raw = sqlite3_column_text(statement, 0) else { continue }
             let path = String(cString: raw)
             let name = String(path.split(separator: "/").last ?? "")
-            guard SearchQuery.fold(name).contains(needle) else { continue }
+            // The SQL prefilter matches anywhere in the path; only the folder's own name —
+            // or its note — should actually bring it back.
+            let noted = sqlite3_column_int64(statement, 2) == 1
+            guard noted || SearchQuery.fold(name).contains(needle) else { continue }
             let children = sqlite3_column_type(statement, 1) == SQLITE_NULL
                 ? nil : Int(sqlite3_column_int64(statement, 1))
             found.append(Item(path: path, name: name, isDirectory: true, size: 0,

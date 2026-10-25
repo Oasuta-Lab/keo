@@ -353,6 +353,33 @@ l'autre.
 Les résultats passent par le même `BrowserView` que le reste (`BrowserSource.results`) : même
 grille, même visionneuse, même sélection, mêmes téléchargements.
 
+## Notes
+
+Une note sur une photo, une vidéo ou un dossier. C'est la seule personnalisation dont le
+**contenu** change, et ça change tout pour la synchronisation : pour un favori, la présence
+suffit à trancher un conflit, donc `INSERT OR IGNORE` règle tout. Deux appareils peuvent en
+revanche détenir des *textes différents* pour la même note. La ligne porte donc son propre
+`modified`, et le gardien est dans l'instruction SQL elle-même :
+
+```sql
+ON CONFLICT(path, size) DO UPDATE SET body = excluded.body, modified = excluded.modified
+  WHERE excluded.modified > note.modified
+```
+
+Une édition plus ancienne qui arrive en retard ne peut pas écraser une plus récente. Le rejeu
+du journal réémet la date de la note, jamais celle du rejeu — sinon une note périmée passerait
+pour la plus fraîche.
+
+Une note vidée est une note **supprimée**, pas une ligne contenant `""` que la recherche
+remonterait sur n'importe quelle requête.
+
+Rien n'est écrit sur le NAS : un fichier d'accompagnement à côté de la photo serait une
+écriture, et c'est précisément ce que l'app ne fait jamais. Les notes vivent dans l'index,
+à côté des favoris, et passent par le même miroir CloudKit.
+
+La note fait partie du texte de l'élément pour la recherche : écrire « facture EDF » sur une
+photo est le seul moyen de retrouver un fichier qui s'appelle `IMG_4821.HEIC`.
+
 ## Favoris, collections, raccourcis
 
 Deux niveaux, parce qu'ils répondent à deux gestes différents :

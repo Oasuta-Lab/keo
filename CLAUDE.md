@@ -36,7 +36,7 @@ swiftc -swift-version 6 -D DEBUG \
   Keo/Media/VideoDate.swift Keo/Sync/SyncModel.swift \
   Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift Keo/UI/BrowserSource.swift \
   Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
-  Tests/sync.swift Tests/search.swift Tests/covers.swift \
+  Tests/sync.swift Tests/search.swift Tests/covers.swift Tests/notes.swift \
   -o /tmp/keocheck && /tmp/keocheck
 ```
 

@@ -16,6 +16,7 @@ enum SyncIdentity: Equatable, Sendable {
     case shortcut(path: String)
     case collection(name: String)
     case member(collection: String, path: String, size: Int64)
+    case note(path: String, size: Int64)
 
     /// NUL cannot appear in a path or a typed name, so the joined identity cannot collide.
     /// The prefix is only there so a record in the CloudKit dashboard says what it is.
@@ -30,6 +31,8 @@ enum SyncIdentity: Equatable, Sendable {
             prefix = "col"; joined = "collection\u{0}\(name)"
         case .member(let collection, let path, let size):
             prefix = "mem"; joined = "member\u{0}\(collection)\u{0}\(path)\u{0}\(size)"
+        case .note(let path, let size):
+            prefix = "not"; joined = "note\u{0}\(path)\u{0}\(size)"
         }
         let digest = SHA256.hash(data: Data(joined.utf8))
         return prefix + "-" + digest.map { String(format: "%02x", $0) }.joined()
@@ -47,6 +50,8 @@ struct SyncPayload: Codable, Equatable, Sendable {
     var added: Double?
     var collection: String?
     var created: Double?
+    /// A note's text. Optional so a journal written before notes existed still decodes.
+    var body: String?
     /// Wall-clock of the local write, the last-writer-wins stamp. Device clocks can drift;
     /// see `SyncConflict` for why that is survivable here.
     var modified: Double
@@ -54,24 +59,33 @@ struct SyncPayload: Codable, Equatable, Sendable {
     static func favourite(path: String, name: String, size: Int64,
                           added: Double, modified: Double) -> SyncPayload {
         SyncPayload(kind: "favourite", path: path, name: name, size: size, added: added,
-                    collection: nil, created: nil, modified: modified)
+                    collection: nil, created: nil, body: nil, modified: modified)
     }
 
     static func shortcut(path: String, name: String, added: Double,
                          modified: Double) -> SyncPayload {
         SyncPayload(kind: "shortcut", path: path, name: name, size: nil, added: added,
-                    collection: nil, created: nil, modified: modified)
+                    collection: nil, created: nil, body: nil, modified: modified)
     }
 
     static func collection(name: String, created: Double, modified: Double) -> SyncPayload {
         SyncPayload(kind: "collection", path: nil, name: name, size: nil, added: nil,
-                    collection: nil, created: created, modified: modified)
+                    collection: nil, created: created, body: nil, modified: modified)
     }
 
     static func member(collection: String, path: String, name: String, size: Int64,
                        added: Double, modified: Double) -> SyncPayload {
         SyncPayload(kind: "member", path: path, name: name, size: size, added: added,
-                    collection: collection, created: nil, modified: modified)
+                    collection: collection, created: nil, body: nil, modified: modified)
+    }
+
+    /// Unlike every other record here, a note carries content that changes. Presence is no
+    /// longer the whole story, so `modified` stops being a tie-breaker and becomes the thing
+    /// that decides which text wins.
+    static func note(path: String, name: String, size: Int64, body: String,
+                     modified: Double) -> SyncPayload {
+        SyncPayload(kind: "note", path: path, name: name, size: size, added: nil,
+                    collection: nil, created: nil, body: body, modified: modified)
     }
 
     /// Nil when the payload is incomplete for its kind — a record forged or truncated on the
@@ -90,6 +104,9 @@ struct SyncPayload: Codable, Equatable, Sendable {
         case "member":
             guard let collection, let path, let size else { return nil }
             return .member(collection: collection, path: path, size: size)
+        case "note":
+            guard let path, let size, body != nil else { return nil }
+            return .note(path: path, size: size)
         default:
             return nil
         }

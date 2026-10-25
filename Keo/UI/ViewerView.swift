@@ -15,6 +15,8 @@ struct ViewerView: View {
     /// Pinched in, the scroll view owns the pan — stay out of its way.
     @State private var zoomed = false
     @State private var favourite = false
+    @State private var hasNote = false
+    @State private var annotating: Item?
     @State private var collections: [IndexStore.Collection] = []
     @State private var choosingCollection = false
     /// Capture dates discovered while opening a file, keyed by path.
@@ -49,6 +51,9 @@ struct ViewerView: View {
         .sheet(item: $downloader.share) { payload in
             ShareSheet(urls: payload.urls)
         }
+        .sheet(item: $annotating) { item in
+            NoteEditor(item: item) { body in hasNote = !body.isEmpty }
+        }
         .confirmationDialog("Ajouter à une collection", isPresented: $choosingCollection,
                             titleVisibility: .visible) {
             ForEach(collections) { collection in
@@ -61,6 +66,7 @@ struct ViewerView: View {
         .task(id: currentID) {
             guard let current else { return }
             favourite = (try? await IndexStore.shared.isFavourite(current)) ?? false
+            hasNote = (try? await IndexStore.shared.note(on: current)) != nil
         }
         .statusBarHidden()
     }
@@ -146,6 +152,11 @@ struct ViewerView: View {
             }
 
             Button { choosingCollection = true } label: { Glyph("square.stack", large: true) }
+
+            Button { annotating = current } label: {
+                Glyph(hasNote ? "text.quote.rtl" : "text.quote", large: true)
+                    .foregroundStyle(hasNote ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
+            }
 
             Menu {
                 if let current {

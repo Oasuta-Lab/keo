@@ -49,6 +49,9 @@ struct BrowserView: View {
     @State private var pinned: Set<String> = []
     /// Set by « Aller au dossier » — a search result says nothing about where it lives.
     @State private var goingTo: BrowserSource?
+    /// Paths carrying a note, so a cell can be marked without one query per cell.
+    @State private var noted: Set<String> = []
+    @State private var annotating: Item?
     /// True when every selected item is already a favourite — the action then unfavourites.
     @State private var selectionIsFavourite = false
 
@@ -77,7 +80,8 @@ struct BrowserView: View {
                             ForEach(contents.folders) { folder in
                                 NavigationLink(value: folder) {
                                     FolderTile(folder: folder, stats: folderStats[folder.path],
-                                               cover: folderCovers[folder.path], client: client)
+                                               cover: folderCovers[folder.path], client: client,
+                                               noted: noted.contains(folder.path))
                                 }
                                 .buttonStyle(.plain)
                                 .disabled(selecting)
@@ -88,6 +92,7 @@ struct BrowserView: View {
                                            ? "star.slash" : "star") {
                                         togglePin(folder)
                                     }
+                                    noteAction(folder)
                                 }
                             }
                         }
@@ -115,7 +120,7 @@ struct BrowserView: View {
                                 selected: selecting ? selection.contains(document) : nil)
                         }
                         .buttonStyle(.plain)
-                        .contextMenu { locate(document) }
+                        .contextMenu { itemActions(document) }
                     }
                 }
             }
@@ -176,6 +181,11 @@ struct BrowserView: View {
         }
         .sheet(item: $downloader.share) { payload in
             ShareSheet(urls: payload.urls)
+        }
+        .sheet(item: $annotating) { item in
+            NoteEditor(item: item) { body in
+                if body.isEmpty { noted.remove(item.path) } else { noted.insert(item.path) }
+            }
         }
         .sheet(isPresented: $showingIndexing) {
             IndexingView(client: client)
@@ -243,12 +253,29 @@ struct BrowserView: View {
                     Thumb(item: item, client: client,
                           selected: selecting ? selection.contains(item) : nil,
                           lookahead: lookahead(after: offset + index))
+                        .overlay(alignment: .topLeading) {
+                            if noted.contains(item.path) { NoteBadge() }
+                        }
                 }
                 .buttonStyle(.plain)
-                .contextMenu { locate(item) }
+                .contextMenu { itemActions(item) }
             }
         }
         .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func itemActions(_ item: Item) -> some View {
+        noteAction(item)
+        locate(item)
+    }
+
+    @ViewBuilder
+    private func noteAction(_ item: Item) -> some View {
+        Button(noted.contains(item.path) ? "Modifier la note" : "Ajouter une note",
+               systemImage: noted.contains(item.path) ? "text.quote" : "square.and.pencil") {
+            annotating = item
+        }
     }
 
     /// Where an item actually lives. A result, a favourite or a collection member is shown
@@ -267,6 +294,7 @@ struct BrowserView: View {
     private func refreshLibrary() async {
         collections = (try? await IndexStore.shared.collections()) ?? []
         pinned = Set((try? await IndexStore.shared.shortcuts())?.map(\.path) ?? [])
+        noted = (try? await IndexStore.shared.notedPaths()) ?? []
     }
 
     private func togglePin(_ folder: Item) {
@@ -725,6 +753,7 @@ private struct FolderTile: View {
     /// A photo from inside, picked by the index. Absent until a pass has seen one.
     let cover: Item?
     let client: FreeboxClient
+    let noted: Bool
 
     @State private var image: UIImage?
 
@@ -747,6 +776,9 @@ private struct FolderTile: View {
                         }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                if noted { NoteBadge().frame(maxWidth: .infinity, maxHeight: .infinity,
+                                             alignment: .topLeading) }
 
                 if let count = stats?.mediaCount ?? folder.childCount, count > 0 {
                     Text(count, format: .number)

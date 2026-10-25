@@ -63,12 +63,13 @@ struct SearchQuery: Equatable, Hashable, Sendable {
     var text = ""
     var kinds: Kinds = .everything
     var favouritesOnly = false
+    var notedOnly = false
     var period: Period = .any
 
     /// Nothing typed and nothing filtered: show the prompt rather than the whole NAS.
     var isEmpty: Bool {
         text.trimmingCharacters(in: .whitespaces).isEmpty
-            && kinds == .everything && !favouritesOnly && !period.isSet
+            && kinds == .everything && !favouritesOnly && !notedOnly && !period.isSet
     }
 
     /// Case- and accent-insensitive. French folders are called `Été` and `Vidéos`; a search

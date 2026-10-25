@@ -32,7 +32,7 @@ struct SearchView: View {
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query.text,
                     placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: "Nom de fichier ou de dossier")
+                    prompt: "Nom de fichier, de dossier, ou note")
         .autocorrectionDisabled()
         .textInputAutocapitalization(.never)
         // One query per settled keystroke: typing eight letters runs one search, not eight.
@@ -71,6 +71,13 @@ struct SearchView: View {
                     query.favouritesOnly.toggle()
                 } label: {
                     Chip(label: "Favoris", icon: "heart", on: query.favouritesOnly)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    query.notedOnly.toggle()
+                } label: {
+                    Chip(label: "Notes", icon: "text.quote", on: query.notedOnly)
                 }
                 .buttonStyle(.plain)
 
