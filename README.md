@@ -380,6 +380,22 @@ Rien n'est écrit sur le NAS : un fichier d'accompagnement à côté de la photo
 La note fait partie du texte de l'élément pour la recherche : écrire « facture EDF » sur une
 photo est le seul moyen de retrouver un fichier qui s'appelle `IMG_4821.HEIC`.
 
+### Le piège de la racine
+
+Le périmètre d'un sous-arbre s'écrivait `substr(path, 1, length(?1) + 1) = ?1 || '/'`. À la
+racine, `?1` vaut `/` et l'expression cherche des chemins commençant par `//` — aucun. Deux
+bugs vivants en découlaient, découverts en écrivant les statistiques : `hasChildFolders("/")`
+répondait « aucun enfant » (ce qui autorise l'indexeur à sauter un dossier d'emblée), et
+`listing("/")` ne rendait aucun sous-dossier, donc la racine s'affichait vide tant que la box
+n'avait pas répondu.
+
+Le préfixe se calcule maintenant en Swift (`Statistics.scopePrefix`) et se lie en paramètre.
+Mais la correction évidente en réintroduit un autre dans l'autre sens : à la racine, `/`
+satisfait son propre préfixe, et la racine s'est mise à figurer **parmi ses propres
+sous-dossiers** — une tuile dans laquelle on entrait indéfiniment. D'où la garde de longueur,
+`length(path) > length(?1)`, qui rend « strictement à l'intérieur » vrai dans les deux cas.
+`Tests/stats.swift` épingle les trois comportements.
+
 ## Favoris, collections, raccourcis
 
 Deux niveaux, parce qu'ils répondent à deux gestes différents :
@@ -666,6 +682,91 @@ Contrepartie assumée : un fichier dont l'aperçu est refusé coûte un téléch
 premier affichage. Si la première descente dans un gros dossier devient trop lente, la suite
 est l'affichage progressif — petit aperçu tout de suite, remplacé par la bonne vignette.
 
+## Statistiques
+
+`StatsView`, dans le menu « … » de la racine. Tout est lu dans l'index local, jamais sur la
+box : l'écran s'ouvre instantanément et fonctionne NAS éteint. Une seule requête d'actrice au
+`.task`, le résultat est gardé tant que la feuille est ouverte — douze balayages de la table
+`file` ne se refont pas à chaque rendu.
+
+### L'honnêteté, et comment elle est tenue
+
+Des statistiques sur un index à moitié construit mentent. Quatre mécanismes évitent ça, et
+aucun n'est décoratif :
+
+- **Le bandeau de couverture**, affiché dès que l'index est partiel : « Statistiques calculées
+  sur les 3 812 dossiers indexés (sur 4 799 connus) · 12 400 fichiers jamais lus », avec le
+  bouton qui mène à l'indexation. Il dit la population sur laquelle tout le reste est calculé.
+  Le dénominateur, ce sont les dossiers que l'index **connaît** : un dossier jamais listé
+  n'existe nulle part, et aucun chiffre ne peut prétendre le compter.
+- **« Sans date » et « pas encore lues » ne fusionnent jamais.** Le premier est une vérité sur
+  les fichiers — ils ne portent aucune date de prise de vue. Le second est une vérité sur
+  l'index — personne n'a encore ouvert ces fichiers, ils en ont peut-être une. La colonne
+  `file.read` existe exactement pour distinguer les deux ; les additionner fabriquerait un
+  nombre qui ne décrit ni les uns ni les autres. Les deux lignes mènent d'ailleurs à des
+  endroits différents : la liste des fichiers concernés pour la première, l'écran d'indexation
+  pour la seconde.
+- **Un sous-arbre incomplet annonce un plancher.** `folder.bytes` n'est écrit qu'à la fin d'un
+  dossier lu de bout en bout. Un sous-arbre qui en contient d'autres, jamais pesés, affiche
+  donc « ≥ 123 Go · 4 dossiers pas encore pesés » et pas un total ferme ; sa barre ne dessine
+  que ce qui est réellement mesuré, parce qu'une barre inventerait une mesure.
+- **Deux totaux qui ne se réconcilient pas, assumés.** La phrase sous « Poids » additionne
+  `file.size`, c'est-à-dire tout ce qu'un listing a montré, lu ou non. Les barres additionnent
+  `folder.bytes`, c'est-à-dire les seuls dossiers finis. Les deux sont vraies, elles ne tombent
+  pas sur le même octet, et l'écran le dit plutôt que de maquiller l'écart.
+
+« Doublons probables » porte sa réserve dans son titre : **même nom et même taille**, ce n'est
+pas une empreinte. Deux photos différentes peuvent coïncider, et détecter autrement voudrait
+dire télécharger toute la bibliothèque. Le pied de section le répète avant de parler
+d'octets récupérables — et Keo, de toute façon, ne supprimera jamais rien sur la box.
+
+Enfin : **chaque ligne mène quelque part.** Une année ouvre la grille de l'année, un jour
+ouvre la journée, un sous-arbre ouvre le dossier, un groupe de doublons ouvre ses
+emplacements réels, un gros fichier ouvre le dossier qui le contient. Un chiffre qu'on ne peut
+pas aller vérifier est un chiffre qu'il ne faut pas croire.
+
+### La racine n'est pas un dossier comme les autres
+
+L'idiome de portée utilisé partout dans `IndexStore` était
+`substr(path, 1, length(?1) + 1) = ?1 || '/'`. À la racine, `?1` vaut `/` et l'expression
+cherche les chemins qui commencent par `//` : **aucun**. Vérifié sur la vraie base dans
+`Tests/stats.swift`, pas déduit.
+
+Ce n'était pas qu'un problème à venir pour les statistiques : `hasChildFolders("/")` répondait
+déjà « pas d'enfants » et `listing("/")` ne rendait aucun sous-dossier depuis le cache. Le
+préfixe est donc maintenant calculé en Swift (`Statistics.scopePrefix`, qui laisse `/`
+tranquille et ajoute la barre ailleurs) et lié comme paramètre, pour les cinq requêtes de
+sous-arbre à la fois — totaux de tuile, couvertures, listing, génération, poids.
+
+### Ce qui n'est délibérément pas calculé
+
+- **Le nombre total de fichiers en titre.** Il ne survit que comme dénominateur du bandeau :
+  seul, il flatte sans rien apprendre.
+- **La croissance du stockage dans le temps.** Elle reposerait sur `mtime`, qui sur un NAS est
+  la date de **copie**. Toute l'app existe parce que cette date ment.
+- **Appareil, objectif, ISO.** Le schéma n'a pas ces colonnes, et les ajouter voudrait dire
+  relire chaque photo sur le réseau.
+- **Carte des lieux, moyennes, séries, badges, camembert des types** — le camembert à trois
+  parts en dit moins que la phrase qui le remplace.
+- **Les plus vues** : rien ne compte les ouvertures, et l'ajouter serait un nouveau chemin
+  d'écriture que personne n'a demandé.
+- **Les doublons par empreinte** : il faudrait télécharger toute la bibliothèque.
+
+### Zéro nouvel index
+
+`file` est `WITHOUT ROWID` avec `PRIMARY KEY (folder_id, name, size)` : tout index secondaire
+recopie la clé primaire entière, nom compris — soit à peu près une seconde copie de la table
+sur le disque. Les requêtes de cet écran sont donc des balayages complets, assumés tant que
+rien ne se mesure lent sur l'appareil. `file_by_identity(name, size)`, qui existait déjà, sert
+au regroupement des doublons.
+
+### Reste à vérifier à la main, sur l'appareil
+
+- Le graphe « Chronologie » : la **tape sur une barre** ouvre bien l'année correspondante (le
+  test ne couvre que la requête, pas le geste). Chaque année a de toute façon sa ligne
+  tapable juste en dessous, qui elle est couverte.
+- Le rendu du bandeau et des barres de poids sur un index réel, à moitié construit.
+
 ## Lire les traces de l'appareil
 
 Le cycle de vie de l'indexation a coûté trois correctifs plausibles et faux. La quatrième
@@ -722,7 +823,10 @@ La géométrie du rail vit dans `RailLayout`, sans SwiftUI, précisément pour �
 `Tests/store.swift` exerce le **vrai SQLite** sur un répertoire temporaire : écriture, balayage
 des fichiers disparus, survie des sous-arbres ignorés, adoption après renommage, et migration
 depuis les anciens JSON. `Tests/covers.swift` y vérifie le classement des couvertures de
-dossier, qui ne se voit autrement qu'à l'œil sur l'appareil.
+dossier, qui ne se voit autrement qu'à l'œil sur l'appareil. `Tests/stats.swift` fait de même
+pour les statistiques : la portée à la racine, les sous-arbres pesés ou non, la séparation
+« sans date » / « jamais lue », et le regroupement des doublons — tous des `GROUP BY` dont une
+erreur ne se voit pas, puisqu'elle sort un chiffre plausible.
 
 Couvre la garantie de lecture seule, l'enveloppe `{success, result}`, l'encodage des chemins,
 la classification des médias, l'éviction LRU, l'arithmétique de progression, et toute la

@@ -29,6 +29,7 @@ struct BrowserView: View {
     @State private var activeSection: MediaSection.ID?
     @EnvironmentObject private var indexer: Indexer
     @State private var showingIndexing = false
+    @State private var showingStats = false
     @State private var showingInvitation = false
     /// Asked once; afterwards the chip and the menu are enough.
     @AppStorage("explainedIndexing") private var explainedIndexing = false
@@ -189,6 +190,9 @@ struct BrowserView: View {
         }
         .sheet(isPresented: $showingIndexing) {
             IndexingView(client: client)
+        }
+        .sheet(isPresented: $showingStats) {
+            StatsView(client: client)
         }
         .sheet(isPresented: $showingInvitation) {
             IndexingInvitation(client: client) {
@@ -440,6 +444,10 @@ struct BrowserView: View {
                     }
 
                     if source.isRoot {
+                        Button("Statistiques…", systemImage: "chart.bar") {
+                            showingStats = true
+                        }
+
                         Divider()
                         Button("Déconnexion", systemImage: "rectangle.portrait.and.arrow.right",
                                role: .destructive) { store.signOut() }

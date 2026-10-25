@@ -367,10 +367,24 @@ actor IndexStore {
         try open()
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
-        try prepare("SELECT 1 FROM folder WHERE substr(path, 1, length(?1) + 1) = ?1 || '/' "
-                  + "LIMIT 1", into: &statement)
-        bind(statement, 1, folder)
+        try prepare("SELECT 1 FROM folder WHERE " + Self.subtree() + " LIMIT 1", into: &statement)
+        bind(statement, 1, Statistics.scopePrefix(folder))
         return sqlite3_step(statement) == SQLITE_ROW
+    }
+
+    /// Everything strictly inside a folder, matched on a prefix rather than with `LIKE`: a
+    /// path may legitimately contain `%` or `_`.
+    ///
+    /// `?1` is the prefix, built by `Statistics.scopePrefix`, and never the folder path. The
+    /// root is `/`, where the obvious `?1 || '/'` spells `//` and prefixes nothing at all —
+    /// the root then came back childless, which `Tests/stats.swift` pins down.
+    ///
+    /// The length guard is what keeps "strictly inside" true once the prefix is `/`: the root
+    /// row matches its own prefix, and without it the root listed itself as one of its own
+    /// subfolders — a tile you could tap into forever. Callers that do want the folder itself
+    /// say so with an explicit `path = ?n OR` next to this.
+    private static func subtree(_ column: String = "path") -> String {
+        "length(\(column)) > length(?1) AND substr(\(column), 1, length(?1)) = ?1"
     }
 
     /// The folder as the last pass saw it. Lets the grid appear immediately, before the box
@@ -405,9 +419,8 @@ actor IndexStore {
 
         var children: OpaquePointer?
         defer { sqlite3_finalize(children) }
-        let scope = "substr(path, 1, length(?1) + 1) = ?1 || '/'"
-        try prepare("SELECT path FROM folder WHERE " + scope, into: &children)
-        bind(children, 1, folder)
+        try prepare("SELECT path FROM folder WHERE " + Self.subtree(), into: &children)
+        bind(children, 1, Statistics.scopePrefix(folder))
         while sqlite3_step(children) == SQLITE_ROW {
             guard let raw = sqlite3_column_text(children, 0) else { continue }
             let path = String(cString: raw)
@@ -449,14 +462,14 @@ actor IndexStore {
         try open()
         try exec("BEGIN IMMEDIATE")
         do {
-            // Prefix match rather than LIKE: a path may legitimately contain % or _.
-            let scope = "path = ?1 OR substr(path, 1, length(?1) + 1) = ?1 || '/'"
+            let scope = "path = ?3 OR " + Self.subtree()
 
             var folders: OpaquePointer?
             defer { sqlite3_finalize(folders) }
             try prepare("UPDATE folder SET gen = ?2 WHERE " + scope, into: &folders)
-            bind(folders, 1, folder)
+            bind(folders, 1, Statistics.scopePrefix(folder))
             sqlite3_bind_int64(folders, 2, generation)
+            bind(folders, 3, folder)
             guard sqlite3_step(folders) == SQLITE_DONE else { throw Failure.write(message) }
 
             var files: OpaquePointer?
@@ -464,8 +477,9 @@ actor IndexStore {
             let sql = "UPDATE file SET gen = ?2 WHERE folder_id IN "
                     + "(SELECT id FROM folder WHERE " + scope + ")"
             try prepare(sql, into: &files)
-            bind(files, 1, folder)
+            bind(files, 1, Statistics.scopePrefix(folder))
             sqlite3_bind_int64(files, 2, generation)
+            bind(files, 3, folder)
             guard sqlite3_step(files) == SQLITE_DONE else { throw Failure.write(message) }
 
             try exec("COMMIT")
@@ -1662,6 +1676,30 @@ actor IndexStore {
     /// personalisation join below and a typo in one of them is a silently empty filter.
     private static let filePath = "d.path || '/' || fi.name"
 
+    /// The five columns `items(from:)` expects, spelled once: every query that returns files
+    /// reads them positionally, so a reordered `SELECT` elsewhere would silently swap a size
+    /// for a date.
+    private static let fileColumns =
+        "SELECT d.path, fi.name, fi.size, fi.capture, fi.kind "
+        + "FROM file fi JOIN folder d ON d.id = fi.folder_id"
+
+    private func items(from statement: OpaquePointer?) -> [Item] {
+        var found: [Item] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let folder = sqlite3_column_text(statement, 0),
+                  let name = sqlite3_column_text(statement, 1) else { continue }
+            let capture = sqlite3_column_type(statement, 3) == SQLITE_NULL
+                ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))
+            found.append(Item(path: String(cString: folder) + "/" + String(cString: name),
+                              name: String(cString: name), isDirectory: false,
+                              size: sqlite3_column_int64(statement, 2), modified: nil,
+                              mimeType: Item.Kind(code: Int(sqlite3_column_int64(statement, 4)))?
+                                  .mimeHint,
+                              captureDate: capture))
+        }
+        return found
+    }
+
     /// Searches the index, never the box: instant, and it works with the NAS switched off.
     ///
     /// The trade-off to be honest about — only indexed folders can be found. A folder never
@@ -1694,9 +1732,8 @@ actor IndexStore {
             conditions.append("fi.capture IS NOT NULL AND fi.capture BETWEEN ?2 AND ?3")
         }
 
-        let sql = "SELECT d.path, fi.name, fi.size, fi.capture, fi.kind "
-                + "FROM file fi JOIN folder d ON d.id = fi.folder_id "
-                + "WHERE " + conditions.joined(separator: " AND ")
+        let sql = Self.fileColumns
+                + " WHERE " + conditions.joined(separator: " AND ")
                 + " ORDER BY fi.capture IS NULL, fi.capture DESC, fi.name LIMIT \(limit)"
 
         var statement: OpaquePointer?
@@ -1710,20 +1747,7 @@ actor IndexStore {
             sqlite3_bind_double(statement, 3, window.upperBound)
         }
 
-        var found: [Item] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
-            guard let folder = sqlite3_column_text(statement, 0),
-                  let name = sqlite3_column_text(statement, 1) else { continue }
-            let capture = sqlite3_column_type(statement, 3) == SQLITE_NULL
-                ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))
-            found.append(Item(path: String(cString: folder) + "/" + String(cString: name),
-                              name: String(cString: name), isDirectory: false,
-                              size: sqlite3_column_int64(statement, 2), modified: nil,
-                              mimeType: Item.Kind(code: Int(sqlite3_column_int64(statement, 4)))?
-                                  .mimeHint,
-                              captureDate: capture))
-        }
-        return try matchingFolders(query) + found
+        return try matchingFolders(query) + items(from: statement)
     }
 
     /// Folders whose own name matches. Deliberately the name and not the whole path: searching
@@ -2016,7 +2040,7 @@ actor IndexStore {
         try open()
         guard !folders.isEmpty else { return [:] }
 
-        let scope = "path = ?1 OR substr(path, 1, length(?1) + 1) = ?1 || '/'"
+        let scope = "path = ?2 OR " + Self.subtree()
 
         var totals: OpaquePointer?
         defer { sqlite3_finalize(totals) }
@@ -2031,7 +2055,8 @@ actor IndexStore {
         var found: [String: FolderStats] = [:]
         for folder in folders {
             sqlite3_reset(totals)
-            bind(totals, 1, folder)
+            bind(totals, 1, Statistics.scopePrefix(folder))
+            bind(totals, 2, folder)
             guard sqlite3_step(totals) == SQLITE_ROW,
                   sqlite3_column_type(totals, 0) != SQLITE_NULL else { continue }
             let count = Int(sqlite3_column_int64(totals, 0))
@@ -2039,7 +2064,8 @@ actor IndexStore {
                 ? nil : sqlite3_column_int64(totals, 1)
 
             sqlite3_reset(span)
-            bind(span, 1, folder)
+            bind(span, 1, Statistics.scopePrefix(folder))
+            bind(span, 2, folder)
             var earliest: Date?
             var latest: Date?
             if sqlite3_step(span) == SQLITE_ROW, sqlite3_column_type(span, 0) != SQLITE_NULL {
@@ -2068,7 +2094,7 @@ actor IndexStore {
             SELECT folder.path, file.name, file.size, file.kind
             FROM file JOIN folder ON folder.id = file.folder_id
             WHERE file.kind IN (1, 2)
-              AND (folder.path = ?1 OR substr(folder.path, 1, length(?1) + 1) = ?1 || '/')
+              AND (folder.path = ?2 OR \(Self.subtree("folder.path")))
             ORDER BY file.kind, file.capture DESC, folder.path, file.name
             LIMIT 1
             """, into: &statement)
@@ -2076,7 +2102,8 @@ actor IndexStore {
         var found: [String: Item] = [:]
         for folder in folders {
             sqlite3_reset(statement)
-            bind(statement, 1, folder)
+            bind(statement, 1, Statistics.scopePrefix(folder))
+            bind(statement, 2, folder)
             guard sqlite3_step(statement) == SQLITE_ROW,
                   let rawFolder = sqlite3_column_text(statement, 0),
                   let rawName = sqlite3_column_text(statement, 1) else { continue }
@@ -2092,4 +2119,261 @@ actor IndexStore {
         }
         return found
     }
+
+    // MARK: Statistics
+
+    /// Everything the statistics screen shows, in a single hop onto the actor.
+    ///
+    /// A dozen full scans of `file`, deliberately: the table is `WITHOUT ROWID` and its
+    /// primary key already carries the name, so a secondary index that would speed these up
+    /// costs roughly another copy of the table on disk. The screen reads this once and keeps
+    /// it for as long as it is open.
+    func statistics(under root: String, on today: Date = Date()) throws -> LibraryStats {
+        try open()
+        var stats = LibraryStats()
+
+        stats.knownFolders = Int(try scalar("SELECT count(*) FROM folder") ?? 0)
+        stats.indexedFolders = Int(try scalar(
+            "SELECT count(*) FROM folder WHERE mtime IS NOT NULL") ?? 0)
+        stats.unreadFiles = Int(try scalar("SELECT count(*) FROM file WHERE read = 0") ?? 0)
+
+        stats.years = try years()
+        (stats.datelessRead, stats.datelessUnread) = try datelessSplit()
+        if let first = try scalar("SELECT CAST(min(capture) AS INTEGER) FROM file "
+                                + "WHERE kind IN (1, 2) AND capture IS NOT NULL") {
+            stats.firstCapture = Date(timeIntervalSince1970: Double(first))
+        }
+        stats.gap = Statistics.longestGap(try captureMonths())
+
+        stats.kinds = try kindTallies()
+        stats.subtrees = try heaviestSubtrees(under: root)
+
+        stats.duplicates = try duplicateTotals()
+        stats.worstDuplicates = try worstDuplicates()
+
+        stats.biggest = try biggestFiles()
+        stats.busiestDays = try busiestDays()
+        stats.onThisDay = try onThisDay(today)
+        return stats
+    }
+
+    /// Local time, not UTC: a photo taken on 1 January at 00:30 belongs to the year the
+    /// calendar showed, and that is the year a tap on the bar will filter on.
+    private func years() throws -> [YearTally] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("""
+            SELECT CAST(strftime('%Y', capture, 'unixepoch', 'localtime') AS INTEGER) AS annee,
+                   sum(kind = 1), sum(kind = 2)
+            FROM file WHERE kind IN (1, 2) AND capture IS NOT NULL
+            GROUP BY annee ORDER BY annee
+            """, into: &statement)
+
+        var tallies: [YearTally] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            tallies.append(YearTally(year: Int(sqlite3_column_int64(statement, 0)),
+                                     photos: Int(sqlite3_column_int64(statement, 1)),
+                                     videos: Int(sqlite3_column_int64(statement, 2))))
+        }
+        return tallies
+    }
+
+    /// The two halves of "no date", which must never be added together: one says the file
+    /// carries no date, the other says nobody has looked yet.
+    private func datelessSplit() throws -> (read: Int, unread: Int) {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT sum(read = 1), sum(read = 0) FROM file "
+                  + "WHERE kind IN (1, 2) AND capture IS NULL", into: &statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return (0, 0) }
+        return (Int(sqlite3_column_int64(statement, 0)), Int(sqlite3_column_int64(statement, 1)))
+    }
+
+    /// Every month holding at least one photo, encoded so the gap is plain arithmetic.
+    private func captureMonths() throws -> [Int] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("""
+            SELECT DISTINCT CAST(strftime('%Y', capture, 'unixepoch', 'localtime') AS INTEGER) * 12
+                          + CAST(strftime('%m', capture, 'unixepoch', 'localtime') AS INTEGER) - 1
+            FROM file WHERE kind IN (1, 2) AND capture IS NOT NULL ORDER BY 1
+            """, into: &statement)
+
+        var months: [Int] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            months.append(Int(sqlite3_column_int64(statement, 0)))
+        }
+        return months
+    }
+
+    /// Sums `file.size`, everything a listing showed — unlike the subtree weights below,
+    /// which sum `folder.bytes` and so only count folders read end to end. Both are honest
+    /// and they do not reconcile to the byte; the screen says which is which.
+    private func kindTallies() throws -> [KindTally] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT kind, count(*), coalesce(sum(size), 0) FROM file "
+                  + "WHERE kind IN (1, 2, 3) GROUP BY kind ORDER BY kind", into: &statement)
+
+        var tallies: [KindTally] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let kind = Item.Kind(code: Int(sqlite3_column_int64(statement, 0)))
+            else { continue }
+            tallies.append(KindTally(kind: kind, count: Int(sqlite3_column_int64(statement, 1)),
+                                     bytes: sqlite3_column_int64(statement, 2)))
+        }
+        return tallies
+    }
+
+    /// The heaviest direct children of `root`, each summed over its whole subtree.
+    ///
+    /// Grouped in SQL on the first path segment after the prefix: pulling every folder row
+    /// back into Swift to split strings would be the same work done twice.
+    func heaviestSubtrees(under root: String, limit: Int = 12) throws -> [Subtree] {
+        try open()
+        let prefix = Statistics.scopePrefix(root)
+
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("""
+            SELECT enfant, coalesce(sum(bytes), 0), coalesce(sum(media_count), 0),
+                   count(*), sum(bytes IS NULL)
+            FROM (SELECT CASE WHEN instr(reste, '/') = 0 THEN reste
+                              ELSE substr(reste, 1, instr(reste, '/') - 1) END AS enfant,
+                         bytes, media_count
+                  FROM (SELECT substr(path, length(?1) + 1) AS reste, bytes, media_count
+                        FROM folder WHERE \(Self.subtree())))
+            WHERE enfant <> ''
+            GROUP BY enfant ORDER BY 2 DESC LIMIT ?2
+            """, into: &statement)
+        bind(statement, 1, prefix)
+        sqlite3_bind_int64(statement, 2, Int64(limit))
+
+        var subtrees: [Subtree] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let raw = sqlite3_column_text(statement, 0) else { continue }
+            let name = String(cString: raw)
+            subtrees.append(Subtree(name: name, path: prefix + name,
+                                    bytes: sqlite3_column_int64(statement, 1),
+                                    media: Int(sqlite3_column_int64(statement, 2)),
+                                    folders: Int(sqlite3_column_int64(statement, 3)),
+                                    unweighed: Int(sqlite3_column_int64(statement, 4))))
+        }
+        return subtrees
+    }
+
+    /// Same name and same size, in several folders. Not a hash, and the screen never claims
+    /// otherwise — two different shots can share a name and a byte count.
+    func duplicateTotals() throws -> DuplicateTotals {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("""
+            SELECT count(*), coalesce(sum(copies - 1), 0),
+                   coalesce(sum((copies - 1) * size), 0)
+            FROM (SELECT size, count(*) AS copies FROM file GROUP BY name, size
+                  HAVING copies > 1)
+            """, into: &statement)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return DuplicateTotals() }
+        return DuplicateTotals(groups: Int(sqlite3_column_int64(statement, 0)),
+                               extraFiles: Int(sqlite3_column_int64(statement, 1)),
+                               recoverableBytes: sqlite3_column_int64(statement, 2))
+    }
+
+    /// Ordered by what the copies actually cost, not by how many there are: forty copies of
+    /// a thumbnail matter less than two copies of a 4 Go film.
+    func worstDuplicates(limit: Int = 20) throws -> [DuplicateGroup] {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("""
+            SELECT name, size, count(*) AS copies FROM file GROUP BY name, size
+            HAVING copies > 1 ORDER BY (copies - 1) * size DESC, name LIMIT ?1
+            """, into: &statement)
+        sqlite3_bind_int64(statement, 1, Int64(limit))
+
+        var groups: [DuplicateGroup] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let raw = sqlite3_column_text(statement, 0) else { continue }
+            groups.append(DuplicateGroup(name: String(cString: raw),
+                                         size: sqlite3_column_int64(statement, 1),
+                                         copies: Int(sqlite3_column_int64(statement, 2))))
+        }
+        return groups
+    }
+
+    /// Where the copies of one group sit, so the user can go and look before deciding
+    /// anything — the app itself will never remove one.
+    func copies(of group: DuplicateGroup) throws -> [Item] {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare(Self.fileColumns + " WHERE fi.name = ?1 AND fi.size = ?2 ORDER BY d.path",
+                    into: &statement)
+        bind(statement, 1, group.name)
+        sqlite3_bind_int64(statement, 2, group.size)
+        return items(from: statement)
+    }
+
+    /// The media that were read end to end and still carry no date — not the ones nobody has
+    /// opened yet, which is a different sentence and a different list.
+    func datelessFiles(limit: Int = 500) throws -> [Item] {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare(Self.fileColumns + """
+             WHERE fi.kind IN (1, 2) AND fi.capture IS NULL AND fi.read = 1
+             ORDER BY d.path, fi.name LIMIT ?1
+            """, into: &statement)
+        sqlite3_bind_int64(statement, 1, Int64(limit))
+        return items(from: statement)
+    }
+
+    private func biggestFiles(limit: Int = 25) throws -> [Item] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        // The trailing path and name make the order total: two files of the same size must
+        // not swap places between two openings of the screen.
+        try prepare(Self.fileColumns + " ORDER BY fi.size DESC, d.path, fi.name LIMIT ?1",
+                    into: &statement)
+        sqlite3_bind_int64(statement, 1, Int64(limit))
+        return items(from: statement)
+    }
+
+    private func busiestDays(limit: Int = 15) throws -> [DayTally] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("""
+            SELECT date(capture, 'unixepoch', 'localtime') AS jour, count(*) FROM file
+            WHERE kind IN (1, 2) AND capture IS NOT NULL
+            GROUP BY jour ORDER BY 2 DESC, jour DESC LIMIT ?1
+            """, into: &statement)
+        sqlite3_bind_int64(statement, 1, Int64(limit))
+
+        var days: [DayTally] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let raw = sqlite3_column_text(statement, 0),
+                  let day = Statistics.day(String(cString: raw)) else { continue }
+            days.append(DayTally(day: day, count: Int(sqlite3_column_int64(statement, 1))))
+        }
+        return days
+    }
+
+    /// The same calendar day in earlier years. Bounded by the start of today so this
+    /// morning's own photos do not come back as a souvenir.
+    private func onThisDay(_ today: Date, limit: Int = 300) throws -> [Item] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare(Self.fileColumns + """
+             WHERE fi.kind IN (1, 2) AND fi.capture IS NOT NULL AND fi.capture < ?2
+               AND strftime('%m-%d', fi.capture, 'unixepoch', 'localtime') = ?1
+             ORDER BY fi.capture DESC, d.path, fi.name LIMIT ?3
+            """, into: &statement)
+        bind(statement, 1, Statistics.monthDay(today))
+        sqlite3_bind_double(statement, 2,
+                            Calendar.current.startOfDay(for: today).timeIntervalSince1970)
+        sqlite3_bind_int64(statement, 3, Int64(limit))
+        return items(from: statement)
+    }
+
 }
