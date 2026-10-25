@@ -524,7 +524,7 @@ private struct VideoPage: View {
                     // AVKit pose son propre scrubber en bas de ses limites, droit sous notre
                     // barre d'actions flottante. On lui réserve la place plutôt que de les
                     // laisser se superposer.
-                    .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 76) }
+                    .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 108) }
             } else if let failure {
                 ContentUnavailableView("Lecture impossible", systemImage: "play.slash",
                                        description: Text(failure))
