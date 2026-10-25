@@ -3,6 +3,10 @@
 Galerie photos/vidéos iOS native pour Freebox, via l'API Freebox OS.
 SwiftUI, Swift 6 en concurrence stricte, aucune dépendance externe.
 
+Ce fichier explique **pourquoi** le code est comme ça. `CLAUDE.md` dit **ce qui s'applique** :
+la règle de lecture seule, la commande de vérification, les conventions, et les pièges qui ont
+déjà coûté cher.
+
 ## Règle non négociable
 
 **Keo ne modifie jamais rien sur le NAS.** Pas de déplacement, pas de renommage, pas de
@@ -630,12 +634,7 @@ est l'affichage progressif — petit aperçu tout de suite, remplacé par la bon
 Le cycle de vie de l'indexation a coûté trois correctifs plausibles et faux. La quatrième
 tentative est partie de ce que l'appareil raconte, et a trouvé la cause en une fois.
 
-```sh
-xcrun devicectl device install app --device <UDID> <chemin>/Keo.app
-xcrun devicectl device process launch --device <UDID> \
-  --terminate-existing --console fr.yieldstudio.keo > /tmp/keo-console.log 2>&1 &
-grep -a "\[keo\]" /tmp/keo-console.log
-```
+Les commandes sont dans `CLAUDE.md`, section « Appareil ».
 
 `--console` relaie la sortie standard de l'app. `Indexer` trace, en build DEBUG uniquement,
 chaque point de bascule : réception de l'arrière-plan, `halt`, retour au premier plan, relance,
@@ -647,20 +646,7 @@ brancher la console d'abord.**
 
 ## Vérifier
 
-```sh
-rm -f /tmp/keocheck   # sinon un echec de compilation relance l'ancien binaire
-swiftc -swift-version 6 -D DEBUG Keo/Freebox/Item.swift Keo/Freebox/Transport.swift \
-  Keo/Freebox/FreeboxClient.swift Keo/Downloads/DownloadJob.swift \
-  Keo/Freebox/MediaSection.swift Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift \
-  Keo/Media/FolderStamp.swift Keo/Media/WalkOutcome.swift Keo/Media/SearchQuery.swift \
-  Keo/Media/IndexStore.swift \
-  Keo/Media/VideoDate.swift Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift \
-  Keo/UI/BrowserSource.swift \
-  Keo/Sync/SyncModel.swift \
-  Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
-  Tests/sync.swift Tests/search.swift Tests/covers.swift \
-  -o /tmp/keocheck && /tmp/keocheck
-```
+La commande est dans `CLAUDE.md`, section « Avant de dire que c'est fait ».
 
 La géométrie du rail vit dans `RailLayout`, sans SwiftUI, précisément pour être vérifiable.
 `Tests/store.swift` exerce le **vrai SQLite** sur un répertoire temporaire : écriture, balayage
