@@ -454,6 +454,32 @@ Les idées viennent de [Nuke](https://github.com/kean/Nuke) ; le fetch est maiso
 vignette Keo est une requête Range de 256 Ko plus un décodage d'aperçu embarqué, pas un
 téléchargement d'URL.
 
+## Couverture des tuiles de dossier
+
+Une tuile de dossier montre une photo de l'intérieur plutôt qu'un rectangle teinté. Le choix
+se fait **dans l'index SQLite**, sans rien demander à la box : les fichiers du sous-arbre y
+sont déjà, avec leur genre et leur date de prise de vue.
+
+La règle est `ORDER BY kind, capture DESC, path, name LIMIT 1`, lue dans cet ordre :
+
+- **Une image avant une vidéo**, même si la vidéo est plus récente. Une couverture vidéo coûte
+  une session AVFoundation ; une image coûte la sonde de 256 Ko que le pipeline fait de toute
+  façon.
+- **La capture la plus récente**, parce que la dernière chose qui s'est passée dans un dossier
+  dit mieux ce qu'il contient qu'une photo tirée au hasard. SQLite classe `NULL` en dernier en
+  `DESC` : une photo sans EXIF ne passe donc pas devant une photo datée.
+- **Le chemin puis le nom** terminent le classement. Sans eux, deux photos de même date
+  pourraient remonter dans un ordre différent d'une visite à l'autre et la tuile clignoterait.
+
+La portée est le sous-arbre, comme les totaux : un parent qui ne contient que des
+sous-dossiers emprunte la meilleure couverture du lot au lieu de rester vide.
+
+Le coût : une requête préparée, réutilisée pour tous les dossiers visibles, lancée après le
+premier rendu — jamais avant, la grille d'un dossier de 14 600 fichiers doit rester instantanée.
+La vignette est demandée à la **taille de grille habituelle**, pas à une taille réduite : elle
+partage alors son entrée de cache avec la cellule du dossier qu'on s'apprête à ouvrir, au lieu
+de télécharger deux fois la même photo. Un dossier sans média indexé garde son glyphe.
+
 ## Qualité des vignettes
 
 Trois défauts constatés sur de vrais fichiers, et ce qui les corrige :
@@ -505,14 +531,15 @@ swiftc -swift-version 6 -D DEBUG Keo/Freebox/Item.swift Keo/Freebox/Transport.sw
   Keo/Media/VideoDate.swift Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift \
   Keo/Sync/SyncModel.swift \
   Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
-  Tests/sync.swift Tests/search.swift \
+  Tests/sync.swift Tests/search.swift Tests/covers.swift \
   -o /tmp/keocheck && /tmp/keocheck
 ```
 
 La géométrie du rail vit dans `RailLayout`, sans SwiftUI, précisément pour être vérifiable.
 `Tests/store.swift` exerce le **vrai SQLite** sur un répertoire temporaire : écriture, balayage
 des fichiers disparus, survie des sous-arbres ignorés, adoption après renommage, et migration
-depuis les anciens JSON.
+depuis les anciens JSON. `Tests/covers.swift` y vérifie le classement des couvertures de
+dossier, qui ne se voit autrement qu'à l'œil sur l'appareil.
 
 Couvre la garantie de lecture seule, l'enveloppe `{success, result}`, l'encodage des chemins,
 la classification des médias, l'éviction LRU, l'arithmétique de progression, et toute la
