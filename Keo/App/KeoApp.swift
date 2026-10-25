@@ -71,6 +71,7 @@ private struct Shelf: View {
                 NavigationStack(path: $homePath) {
                     HomeView(client: client, boxName: boxName)
                 }
+                .environment(\.stackPath, $homePath)
             } label: {
                 Label("Accueil", systemImage: "house").environment(\.symbolVariants, .none)
             }
@@ -81,6 +82,7 @@ private struct Shelf: View {
                                 source: .folder(path: FreeboxClient.rootPath, title: boxName),
                                 boxName: boxName, root: true)
                 }
+                .environment(\.stackPath, $browsePath)
             } label: {
                 // A tab bar fills its symbols by default; outline reads lighter.
                 Label("Parcourir", systemImage: "folder").environment(\.symbolVariants, .none)
@@ -90,6 +92,7 @@ private struct Shelf: View {
                 NavigationStack(path: $favouritesPath) {
                     BrowserView(client: client, source: .favourites, root: true)
                 }
+                .environment(\.stackPath, $favouritesPath)
             } label: {
                 // A tab bar fills its symbols by default; outline reads lighter.
                 Label("Favoris", systemImage: "heart").environment(\.symbolVariants, .none)
@@ -99,6 +102,7 @@ private struct Shelf: View {
                 NavigationStack(path: $collectionsPath) {
                     CollectionsView(client: client)
                 }
+                .environment(\.stackPath, $collectionsPath)
             } label: {
                 // A tab bar fills its symbols by default; outline reads lighter.
                 Label("Collections", systemImage: "square.stack").environment(\.symbolVariants, .none)
@@ -108,6 +112,7 @@ private struct Shelf: View {
                 NavigationStack(path: $searchPath) {
                     SearchView(client: client, seed: $searchSeed)
                 }
+                .environment(\.stackPath, $searchPath)
             }
         }
         .modifier(MinimisingTabBar())

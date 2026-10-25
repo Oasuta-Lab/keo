@@ -70,11 +70,7 @@ struct ViewerView: View {
                 UndoBanner()
                 DownloadBar(downloader: downloader)
                     .frame(maxWidth: 420)
-                // Pas sur une vidéo : AVKit dessine son scrubber au bas de ses propres
-                // limites, exactement là où flotte cette barre. Leur réserver chacune une
-                // moitié de l'écran marchait en portrait et amputait la vidéo en paysage —
-                // alors le bas revient au lecteur, et les actions montent dans le bandeau.
-                if !showsVideoControls { actionBar }
+                actionBar
             }
             // The whole stack fades with the dismiss drag. The progress bar used to be
             // exempt, which left an opaque strip hanging under a photo already shrinking
@@ -209,13 +205,8 @@ struct ViewerView: View {
 
             Spacer(minLength: 0)
 
-            if showsVideoControls {
-                Menu { videoActions } label: { Glyph("ellipsis") }
-                    .accessibilityLabel("Actions")
-            } else {
-                // Balances the close button so the caption stays centred.
-                Glyph("xmark").opacity(0).allowsHitTesting(false)
-            }
+            // Balances the close button so the caption stays centred.
+            Glyph("xmark").opacity(0).allowsHitTesting(false)
         }
         .padding(.horizontal, 16)
     }
@@ -232,27 +223,6 @@ struct ViewerView: View {
     /// to four all write to Keo's own index — note, collection, favourite — and rise in
     /// frequency towards the thumb. Live is in none of those families: it changes what is on
     /// screen, not what is recorded, so it is not in the group at all.
-    /// The same four actions, as a menu, for the pages where the bar cannot live.
-    @ViewBuilder
-    private var videoActions: some View {
-        if let current {
-            Button(favourite ? "Retirer des favoris" : "Mettre en favori",
-                   systemImage: favourite ? "heart.slash" : "heart") { toggleFavourite() }
-            Button("Ajouter à une collection", systemImage: "square.stack") {
-                choosingCollection = true
-            }
-            Button(hasNote ? "Modifier la note" : "Ajouter une note",
-                   systemImage: "text.quote") { annotating = current }
-            Divider()
-            Button("Partager", systemImage: "square.and.arrow.up") {
-                downloader.save([current], from: client, to: .share)
-            }
-            Button("Enregistrer dans Photos", systemImage: "photo.badge.arrow.down") {
-                downloader.save([current], from: client, to: .photos)
-            }
-        }
-    }
-
     private var actionBar: some View {
         Group {
             if #available(iOS 26.0, *) {
@@ -266,9 +236,6 @@ struct ViewerView: View {
         // and the Live bubble stays beside it rather than a hand-span away.
         .frame(maxWidth: 560)
     }
-
-    /// True when AVKit owns the bottom of the screen.
-    private var showsVideoControls: Bool { current?.kind == .video }
 
     private var hasLive: Bool {
         guard let current else { return false }
@@ -553,7 +520,14 @@ private struct VideoPage: View {
         ZStack {
             Color.black
             if let player {
-                VideoPlayer(player: player)
+                PlayerSurface(player: player)
+                    .overlay(alignment: .bottom) {
+                        Transport(player: player)
+                            // Dessinée par-dessus, pas insérée : l'image garde toute la
+                            // fenêtre, en portrait comme en paysage.
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 84)
+                    }
             } else if let failure {
                 ContentUnavailableView("Lecture impossible", systemImage: "play.slash",
                                        description: Text(failure))
@@ -599,6 +573,94 @@ private struct VideoPage: View {
                 continue
             }
         }
+    }
+}
+
+/// AVKit, sans ses commandes.
+///
+/// Deux barres qui se disputent le bas de l'écran ne se règlent ni en les empilant — ça
+/// amputait la vidéo en paysage — ni en effaçant la nôtre, puisque AVKit dessine les siennes
+/// au-dessus de tout et masquait alors le bandeau du haut. Alors le lecteur se tait, et Keo
+/// garde une seule barre de commandes, la sienne, posée par-dessus l'image.
+private struct PlayerSurface: UIViewControllerRepresentable {
+    let player: AVPlayer
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let controller = AVPlayerViewController()
+        controller.player = player
+        controller.showsPlaybackControls = false
+        controller.videoGravity = .resizeAspect
+        controller.view.backgroundColor = .black
+        return controller
+    }
+
+    func updateUIViewController(_ controller: AVPlayerViewController, context: Context) {
+        if controller.player !== player { controller.player = player }
+    }
+}
+
+/// Lecture, position, durée. Le strict nécessaire, dans la même capsule que les actions.
+private struct Transport: View {
+    let player: AVPlayer
+
+    @State private var elapsed: Double = 0
+    @State private var total: Double = 0
+    @State private var playing = true
+    /// Pendant qu'un doigt tient la tête de lecture, l'horloge n'a pas son mot à dire.
+    @State private var scrubbing = false
+    @Namespace private var space
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button {
+                playing ? player.pause() : player.play()
+                playing.toggle()
+            } label: {
+                Image(systemName: playing ? "pause.fill" : "play.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 28)
+            }
+            .accessibilityLabel(playing ? "Pause" : "Lire")
+
+            Text(clock(elapsed))
+                .monospacedDigit()
+
+            Slider(value: $elapsed, in: 0...max(total, 0.1)) { holding in
+                scrubbing = holding
+                if !holding {
+                    player.seek(to: CMTime(seconds: elapsed, preferredTimescale: 600),
+                                toleranceBefore: .zero, toleranceAfter: .zero)
+                }
+            }
+
+            Text("-" + clock(max(total - elapsed, 0)))
+                .monospacedDigit()
+        }
+        .font(.caption)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .modifier(BarSurface(shape: AnyShape(Capsule()), morphing: true,
+                             id: "transport", in: space))
+        .task {
+            if let duration = try? await player.currentItem?.asset.load(.duration),
+               duration.isNumeric {
+                total = duration.seconds
+            }
+        }
+        .onReceive(Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()) { _ in
+            guard !scrubbing else { return }
+            elapsed = min(player.currentTime().seconds, max(total, 0.1))
+        }
+    }
+
+    private func clock(_ seconds: Double) -> String {
+        guard seconds.isFinite else { return "0:00" }
+        let whole = Int(seconds)
+        let (hours, minutes, rest) = (whole / 3600, whole / 60 % 60, whole % 60)
+        return hours > 0
+            ? String(format: "%d:%02d:%02d", hours, minutes, rest)
+            : String(format: "%d:%02d", minutes, rest)
     }
 }
 

@@ -18,6 +18,9 @@ struct BrowserView: View {
     private var path: String { source.folderPath ?? source.id }
     private var title: String { source.title }
 
+    /// Pushing and popping without owning the destination — see `StackPath`.
+    @Environment(\.stackPath) private var stackPath
+
     @EnvironmentObject private var store: Store
     @EnvironmentObject private var downloader: Downloader
     @EnvironmentObject private var sync: CloudSync
@@ -78,7 +81,6 @@ struct BrowserView: View {
     /// Paths of folders already pinned, so a tile's menu can say the right thing.
     @State private var pinned: Set<String> = []
     /// Set by « Aller au dossier » — a search result says nothing about where it lives.
-    @State private var goingTo: BrowserSource?
     /// Paths carrying a note, so a cell can be marked without one query per cell.
     @State private var noted: Set<String> = []
     /// Marked on the tiles, like the notes. One query each per load, not per cell.
@@ -233,9 +235,6 @@ struct BrowserView: View {
         // between the two — which is what the owner saw.
         .navigationBarTitleDisplayMode(.inline)
         .modifier(PushTargets(client: client, declare: root))
-        .navigationDestination(item: $goingTo) { destination in
-            BrowserView(client: client, source: destination)
-        }
         .fullScreenCover(item: $viewing) { item in
             ViewerView(client: client,
                        items: contents.media.isEmpty ? [item] : contents.media,
@@ -374,7 +373,7 @@ struct BrowserView: View {
     private func locate(_ item: Item) -> some View {
         if !source.isOnNAS, let parent = BrowserSource.parent(of: item) {
             Button("Aller dans « \(parent.title) »", systemImage: "folder") {
-                goingTo = parent
+                stackPath?.wrappedValue.append(parent)
             }
         }
     }
@@ -461,6 +460,23 @@ struct BrowserView: View {
         }
     }
 
+    /// A crumb is an ancestor, so reaching it shortens the stack rather than lengthening it.
+    ///
+    /// Pushing the parent on top of the child left the two in the stack twice over, and the
+    /// next folder opened from there had nowhere unambiguous to land. When the stack mirrors
+    /// the trail — browsing from the root, the only way to get a deep one — we pop exactly the
+    /// levels between. Arriving sideways, from a search result, there is nothing to pop: the
+    /// ancestor was never visited, so it is a push after all.
+    private func climb(to crumb: Breadcrumb.Crumb, at step: Int, of depth: Int) {
+        guard let stack = stackPath else { return }
+        let levels = depth - 1 - step
+        if stack.wrappedValue.count >= levels {
+            stack.wrappedValue.removeLast(levels)
+        } else {
+            stack.wrappedValue.append(BrowserSource.folder(path: crumb.path, title: crumb.name))
+        }
+    }
+
     /// Where you are, and a way back to any step of it.
     ///
     /// Scrolls rather than truncates: a NAS path can be eight folders deep, and an ellipsis
@@ -487,8 +503,7 @@ struct BrowserView: View {
                                     .id(crumb.id)
                             } else {
                                 Button(crumb.name) {
-                                    goingTo = .folder(path: crumb.path,
-                                                      title: step == 0 ? boxName : crumb.name)
+                                    climb(to: crumb, at: step, of: trail.count)
                                 }
                                 .font(.footnote)
                                 .lineLimit(1)
