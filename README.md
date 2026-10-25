@@ -1394,12 +1394,20 @@ La photo sort de sa vignette et y retourne, au lieu d'un fondu au noir : `matche
 sur chaque cellule, `navigationTransition(.zoom(sourceID:in:))` sur la visionneuse. API iOS 18,
 rien à conditionner puisque c'est la cible du projet.
 
-Deux détails sans lesquels ça ne marche qu'à moitié :
+Trois détails sans lesquels ça ne marche qu'à moitié :
 
 - **La cellule d'arrivée suit la pagination.** La visionneuse renvoie la photo courante, donc
   fermer sur la vingtième photo revient sur *celle-là*, pas sur celle qu'on avait touchée.
 - **La grille s'y repositionne avant que la transition joue.** Un zoom vers une cellule sortie
   de l'écran n'a nulle part où atterrir.
+- **La grille ne se re-trie pas sous la visionneuse.** Pendant l'indexation, les dates du
+  dossier peuvent arriver alors qu'une photo est en plein écran. Les appliquer re-triait une
+  grille que personne ne voyait, puis la fermeture recentrait sur la *nouvelle* position de la
+  photo — le lecteur refaisait surface au milieu d'autres dates, sans retrouver les siennes.
+  L'ancre `restore` du premier correctif ne couvrait pas ce chemin : elle jouait sous le
+  voile, et le recentrage de fermeture passait par-dessus. Les dates sont donc mises en
+  attente et appliquées à la fermeture, une fois la transition retombée, avec l'ancre
+  habituelle — un re-tri derrière une photo travaille pour un public de personne.
 
 Le geste de fermeture maison et la transition système veulent piloter la même animation : la
 photo est rendue à son cadre naturel avant `dismiss()`, sinon le zoom démarre d'une image déjà
@@ -1644,6 +1652,15 @@ vibrerait tout seul.
   échéant ; le rail est ignoré, les en-têtes de période servent de navigation ; en plein écran,
   les quatre boutons s'annoncent « Fermer », « Favori », « Ajouter à une collection »,
   « Enregistrer ou partager ».
+- **Dates pendant le plein écran** : sur un gros dossier jamais indexé, lancer l'indexation,
+  ouvrir une photo, attendre que le dossier finisse de passer (la pastille), puis fermer. La
+  grille doit montrer la période qu'on avait quittée, la photo d'origine visible, puis se
+  re-trier en restant sur cette période. Dans `trace.log` (build DEBUG), la séquence qui
+  confirme le mécanisme : `dates held …` pendant le plein écran, puis `viewer dismissed …
+  pending=N`, puis `dates applied … kept=true`. Ce qui le réfuterait : le bug reproduit **sans
+  aucune** ligne `dates held` — une ligne `load … covered=true` désignerait alors un
+  rechargement du listing derrière le voile, et `viewer dismissed … at=absent` une ancre
+  perdue plutôt qu'un re-tri.
 
 ## Vérifier
 

@@ -36,6 +36,11 @@ struct BrowserView: View {
     @State private var mediaIndex: [Item.ID: Int] = [:]
     /// The period to land back on after the grid has been rebuilt under the reader.
     @State private var restore: MediaSection.ID?
+    /// Capture dates that arrived while the viewer covered the grid. A re-sort behind the
+    /// cover is work for an audience of nobody — and it moved the grid out from under the
+    /// reader: dismissing then scrolled to the viewed photo's *new* position, surfacing
+    /// among other dates. Held here and folded in once the cover is gone.
+    @State private var pendingDates: [Item.ID: Date] = [:]
     @Namespace private var zoom
     /// The cell the viewer flies back to. It follows the paging, so closing on the
     /// twentieth photo returns to *that* cell and not to the one originally tapped.
@@ -146,7 +151,13 @@ struct BrowserView: View {
             // A zoom back to a cell that scrolled off screen has nowhere to land, so the
             // grid follows the paging before the transition plays.
             .onChange(of: viewing) { previous, now in
-                guard previous != nil, now == nil, let anchor else { return }
+                guard previous != nil, now == nil else { return }
+                // `at=absent` here with a grid that still lands on the wrong dates would
+                // refute the held-dates theory: it would mean the anchor itself was lost.
+                trace("viewer dismissed anchor=\(anchor ?? "nil") "
+                    + "at=\(anchor.flatMap { mediaIndex[$0] }.map(String.init) ?? "absent") "
+                    + "pending=\(pendingDates.count)")
+                guard let anchor else { return }
                 proxy.scrollTo(anchor, anchor: .center)
             }
             .coordinateSpace(name: Self.gridSpace)
@@ -155,6 +166,7 @@ struct BrowserView: View {
             }
             .onChange(of: restore) { _, target in
                 guard let target else { return }
+                trace("restore scroll to \(target)")
                 // No animation: this is not a journey the reader asked for, it is staying
                 // where they were while the ground moved underneath.
                 proxy.scrollTo(target, anchor: .top)
@@ -211,6 +223,9 @@ struct BrowserView: View {
                        companions: contents.companions,
                        start: item, anchor: $anchor)
                 .navigationTransition(.zoom(sourceID: anchor ?? item.id, in: zoom))
+                // Fires once the dismiss transition has landed: re-sorting mid-flight
+                // would move the very cell the photo is flying back to.
+                .onDisappear { applyPendingDates() }
         }
         .sheet(item: $downloader.share) { payload in
             ShareSheet(urls: payload.urls)
@@ -230,20 +245,19 @@ struct BrowserView: View {
             .onDisappear { explainedIndexing = true }
         }
         // Dates discovered for this folder, whether by the open-folder scan or the full pass.
-        // Dates arrive in batches while a folder is being indexed, and applying them
-        // *re-sorts* the grid: by capture date, a photo that just learned it was taken in
-        // 2019 leaves the top and lands in the middle of the list. The reader was left
-        // somewhere else entirely, and the photos they were looking at were gone. The sort
-        // still happens — a half-sorted timeline would be worse — but the scroll lands back
-        // on the period they were reading.
         .onChange(of: indexer.resolution) { _, found in
             guard let found, found.folder == path else { return }
-            let looking = cursor.id
-            contents = contents.applying(found.dates, order: order)
-            rebuildSections()
-            unindexed = 0
-            if sectioned, let looking, sections.contains(where: { $0.id == looking }) {
-                restore = looking
+            // Held, not applied, while the viewer covers the grid. Applying re-sorted a
+            // grid nobody could see, and dismissing then scrolled to the viewed photo's
+            // new position — the reader surfaced among other dates, with no way back.
+            // The `restore` anchor never covered that path: it fired under the cover,
+            // and the dismissal's anchor scroll overrode it.
+            pendingDates.merge(found.dates) { _, new in new }
+            if viewing == nil {
+                applyPendingDates()
+            } else {
+                trace("dates held folder=\(found.folder) +\(found.dates.count) "
+                    + "pending=\(pendingDates.count)")
             }
         }
         .alert("Téléchargement interrompu", isPresented: showingError) {
@@ -715,6 +729,25 @@ struct BrowserView: View {
         loaded = true
     }
 
+    /// Folds held capture dates into the grid. Applying them *re-sorts* it: a photo that
+    /// just learned it was taken in 2019 leaves the top and lands in the middle of the
+    /// list. The sort still happens — a half-sorted timeline would be worse — but the
+    /// scroll lands back on the period being read, when that period still exists.
+    private func applyPendingDates() {
+        guard !pendingDates.isEmpty else { return }
+        let looking = cursor.id
+        contents = contents.applying(pendingDates, order: order)
+        pendingDates = [:]
+        rebuildSections()
+        unindexed = 0
+        let kept = sectioned && looking.map { id in
+            sections.contains { $0.id == id }
+        } == true
+        if kept { restore = looking }
+        trace("dates applied sections=\(sections.count) "
+            + "looking=\(looking ?? "nil") kept=\(kept)")
+    }
+
     private func rebuildSections() {
         let looking = cursor.id
         sections = order == .name
@@ -732,6 +765,9 @@ struct BrowserView: View {
     }
 
     private func load() async {
+        // `covered=true` here would name a rival mechanism: the listing reloading — and
+        // re-sorting — behind the viewer, with no resolution involved at all.
+        trace("load folder=\(path) covered=\(viewing != nil) loaded=\(loaded)")
         // Local collections come straight from the index; there is nothing to ask the box.
         guard source.isOnNAS else {
             await loadLocal()
