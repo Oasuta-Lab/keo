@@ -1,7 +1,25 @@
 {
   "images" : [
     {
-      "filename" : "keo-icon-1024.png",
+      "filename" : "keo-light-1024.png",
+      "idiom" : "universal",
+      "platform" : "ios",
+      "size" : "1024x1024"
+    },
+    {
+      "appearances" : [
+        { "appearance" : "luminosity", "value" : "dark" }
+      ],
+      "filename" : "keo-dark-1024.png",
+      "idiom" : "universal",
+      "platform" : "ios",
+      "size" : "1024x1024"
+    },
+    {
+      "appearances" : [
+        { "appearance" : "luminosity", "value" : "tinted" }
+      ],
+      "filename" : "keo-tinted-1024.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"

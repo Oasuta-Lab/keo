@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="1024" height="1024">
+  <title>Keo</title>
+  <rect width="256" height="256" fill="#e9a178"/>
+  <rect x="56" y="58" width="54" height="136" rx="14" fill="#cf8154"/>
+  <g fill="#ffffff">
+    <rect x="64" y="66" width="38" height="24" rx="5"/>
+    <rect x="64" y="98" width="38" height="24" rx="5"/>
+    <rect x="64" y="130" width="38" height="24" rx="5"/>
+    <rect x="64" y="162" width="38" height="24" rx="5"/>
+  </g>
+  <path fill="#ffffff" d="M 176.81 68.81 L 128.81 116.81 A 13 13 0 0 0 128.81 135.19 L 176.81 183.19 A 13 13 0 0 0 195.19 164.81 L 156.38 126 L 195.19 87.19 A 13 13 0 0 0 176.81 68.81 Z"/>
+</svg>
