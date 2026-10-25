@@ -25,29 +25,33 @@ func checkNothingWritesToTheNAS() {
     let forbiddenRoutes = ["fs/mv", "fs/rm", "fs/rename", "fs/mkdir", "fs/copy", "fs/delete",
                            "fs/archive", "fs/extract", "fs/chmod", "fs/cp"]
 
-    let root = URL(fileURLWithPath: "Keo")
-    guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil)
-    else {
-        assertionFailure("sources introuvables — lance le check depuis la racine du dépôt")
-        return
-    }
-
+    // L'extension widget compte autant que l'app : un répertoire non parcouru rendrait la
+    // garantie déclarative au lieu de structurelle.
     var sourceCount = 0
     var postSites: [String] = []
 
-    for case let file as URL in walker where file.pathExtension == "swift" {
-        guard let raw = try? String(contentsOf: file, encoding: .utf8) else { continue }
-        let text = strippingComments(raw)
-        sourceCount += 1
-        let name = file.lastPathComponent
+    for root in ["Keo", "KeoWidget"] {
+        guard let walker = FileManager.default.enumerator(
+            at: URL(fileURLWithPath: root), includingPropertiesForKeys: nil)
+        else {
+            assertionFailure("\(root) introuvable — lance le check depuis la racine du dépôt")
+            return
+        }
 
-        for verb in forbiddenVerbs {
-            assert(!text.contains(verb), "\(name) emploie \(verb) : écriture possible sur le NAS")
+        for case let file as URL in walker where file.pathExtension == "swift" {
+            guard let raw = try? String(contentsOf: file, encoding: .utf8) else { continue }
+            let text = strippingComments(raw)
+            sourceCount += 1
+            let name = file.lastPathComponent
+
+            for verb in forbiddenVerbs {
+                assert(!text.contains(verb), "\(name) emploie \(verb) : écriture possible sur le NAS")
+            }
+            for route in forbiddenRoutes {
+                assert(!text.contains(route), "\(name) appelle \(route) : écriture possible sur le NAS")
+            }
+            if text.contains("httpMethod = \"POST\"") { postSites.append(name) }
         }
-        for route in forbiddenRoutes {
-            assert(!text.contains(route), "\(name) appelle \(route) : écriture possible sur le NAS")
-        }
-        if text.contains("httpMethod = \"POST\"") { postSites.append(name) }
     }
 
     assert(sourceCount > 5, "le scan n'a vu que \(sourceCount) fichiers, il a dû rater l'arbre")

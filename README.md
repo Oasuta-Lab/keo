@@ -43,6 +43,12 @@ le bas de l'écran, et n'apparaît pas dans les sous-dossiers ni en plein écran
 Sans git (build depuis une archive), le script sort sans rien faire et la valeur du dépôt est
 conservée.
 
+La phase est montée **sur les deux cibles**, Keo et KeoWidgetExtension. Le script travaille
+sur `$TARGET_BUILD_DIR/$INFOPLIST_PATH`, donc il tamponne le bundle de la cible qui l'exécute,
+sans rien changer d'autre. Ne la retirer d'aucune des deux : **iOS refuse d'installer une app
+dont l'extension ne porte pas le même `CFBundleVersion` que l'hôte**, et l'app partirait en
+build 42 avec un `.appex` resté à 1. L'échec est à l'installation, pas à la compilation.
+
 ## Identité
 
 Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copié dans
@@ -66,6 +72,7 @@ Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copi
 | `Keo/Downloads/` | File d'attente, pellicule, feuille de partage |
 | `Keo/Sync/` | Miroir CloudKit de la personnalisation : identité des enregistrements, moteur |
 | `Keo/UI/` | Association, grille, visionneuse plein écran |
+| `KeoWidget/` | L'extension WidgetKit. Ne lie que Foundation, SwiftUI, ImageIO et AppIntents |
 
 Les dépendances vont vers l'intérieur : `UI` → `Media`/`Downloads` → `Freebox`. Rien dans
 `Freebox` ne connaît SwiftUI.
@@ -312,18 +319,28 @@ Trois idées portent tout le reste :
 ### Configuration — ce que le propriétaire doit faire à la main
 
 Le dépôt contient déjà `Keo/Keo.entitlements` (CloudKit, conteneur
-`iCloud.fr.yieldstudio.keo`, `aps-environment`) et le mode background `remote-notification`.
-Le build **simulateur** passe tel quel. Pour un appareil, une fois, dans Xcode avec le compte
-de l'équipe ton équipe Apple :
+`iCloud.com.oasutalab.keo`, `aps-environment`, groupe d'app) et le mode background
+`remote-notification`. Le build **simulateur** passe tel quel. Pour un appareil, une fois,
+dans Xcode avec le compte de l'équipe ton équipe Apple :
 
 1. Cible Keo → *Signing & Capabilities* → vérifier que les capacités **iCloud → CloudKit**
-   (conteneur `iCloud.fr.yieldstudio.keo`) et **Push Notifications** apparaissent ; la
+   (conteneur `iCloud.com.oasutalab.keo`) et **Push Notifications** apparaissent ; la
    signature automatique enregistre alors l'App ID et crée le conteneur.
 2. Premier lancement en debug : le schéma (type `Personalisation`, champs chiffrés) se crée
    tout seul dans l'environnement **Development** au premier enregistrement.
 3. Avant toute distribution : [CloudKit Console](https://icloud.developer.apple.com) →
    conteneur → *Deploy Schema Changes* vers **Production**. Sans ce clic, une build
    TestFlight/App Store ne peut rien écrire.
+4. **Groupe d'app, pour le widget.** Cibles **Keo** *et* **KeoWidgetExtension** →
+   *Signing & Capabilities* → **App Groups** doit lister `group.com.oasutalab.keo`. Les deux
+   fichiers d'entitlements le déclarent déjà ; ce qui manque est son enregistrement côté App
+   ID, et c'est ce clic qui le fait.
+
+   `xcodebuild` ne sait pas le faire : en ligne de commande la build échoue sur
+   « *Provisioning profile … doesn't include the App Groups capability* » pour les deux
+   cibles, tant que Xcode n'a pas été ouvert une fois. Ce n'est pas un défaut du projet — la
+   compilation et l'assemblage passent (`CODE_SIGNING_ALLOWED=NO` le montre), seule la
+   signature attend ce passage par l'interface.
 
 ### Vérifier le reste à la main
 
