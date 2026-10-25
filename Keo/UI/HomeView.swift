@@ -86,9 +86,7 @@ struct HomeView: View {
         .navigationDestination(item: $destination) { source in
             BrowserView(client: client, source: source)
         }
-        .navigationDestination(for: BrowserSource.self) { source in
-            BrowserView(client: client, source: source)
-        }
+        .modifier(PushTargets(client: client, declare: true))
         .sheet(isPresented: $showingIndexing) { IndexingView(client: client) }
         .task { await load() }
         .onChange(of: undoer.revision) { _, _ in Task { await load() } }

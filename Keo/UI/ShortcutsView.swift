@@ -63,9 +63,7 @@ struct ShortcutsView: View {
             }
         }
         .navigationTitle("Épinglés")
-        .navigationDestination(for: BrowserSource.self) { destination in
-            BrowserView(client: client, source: destination)
-        }
+        .modifier(PushTargets(client: client, declare: true))
         .safeAreaInset(edge: .bottom, spacing: 0) { SyncFootnote() }
         .task { await reload() }
         // Pinning, or undoing one, can happen from another screen entirely.

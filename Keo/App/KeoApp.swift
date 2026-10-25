@@ -78,7 +78,8 @@ private struct Shelf: View {
             Tab(value: Place.browse) {
                 NavigationStack(path: $browsePath) {
                     BrowserView(client: client,
-                                source: .folder(path: FreeboxClient.rootPath, title: boxName))
+                                source: .folder(path: FreeboxClient.rootPath, title: boxName),
+                                root: true)
                 }
             } label: {
                 // A tab bar fills its symbols by default; outline reads lighter.
@@ -87,7 +88,7 @@ private struct Shelf: View {
 
             Tab(value: Place.favourites) {
                 NavigationStack(path: $favouritesPath) {
-                    BrowserView(client: client, source: .favourites)
+                    BrowserView(client: client, source: .favourites, root: true)
                 }
             } label: {
                 // A tab bar fills its symbols by default; outline reads lighter.

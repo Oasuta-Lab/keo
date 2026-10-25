@@ -3,6 +3,14 @@ import SwiftUI
 struct BrowserView: View {
     let client: FreeboxClient
     let source: BrowserSource
+    /// Only the view at the bottom of a navigation stack declares where pushes land.
+    ///
+    /// This view pushes *itself*, so every level used to redeclare `navigationDestination`
+    /// for the same two types. SwiftUI promises nothing when a stack holds several
+    /// destinations for one type, and what it did here was rebuild the destination — which
+    /// destroys its state. Measured: dismissing the viewer dropped the grid back to a cold
+    /// load, cache repaint and all, and the reader's position with it.
+    var root = false
 
     /// Convenience: most of the view still thinks in folder paths.
     private var path: String { source.folderPath ?? source.id }
@@ -217,12 +225,7 @@ struct BrowserView: View {
         // the grid jump. A NAS folder is a place and keeps a large title — it collapses on
         // scroll anyway; results and local collections are lists and stay inline.
         .navigationBarTitleDisplayMode(selecting || !source.isOnNAS ? .inline : .large)
-        .navigationDestination(for: BrowserSource.self) { destination in
-            BrowserView(client: client, source: destination)
-        }
-        .navigationDestination(for: Item.self) { folder in
-            BrowserView(client: client, source: .folder(folder))
-        }
+        .modifier(PushTargets(client: client, declare: root))
         .navigationDestination(item: $goingTo) { destination in
             BrowserView(client: client, source: destination)
         }
@@ -1023,6 +1026,26 @@ private struct FolderTile: View {
             stats.span,
         ].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
+
+/// Declared once per stack, at its root. A pushed `BrowserView` inherits them.
+struct PushTargets: ViewModifier {
+    let client: FreeboxClient
+    let declare: Bool
+
+    func body(content: Content) -> some View {
+        if declare {
+            content
+                .navigationDestination(for: BrowserSource.self) { destination in
+                    BrowserView(client: client, source: destination)
+                }
+                .navigationDestination(for: Item.self) { folder in
+                    BrowserView(client: client, source: .folder(folder))
+                }
+        } else {
+            content
+        }
     }
 }
 

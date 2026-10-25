@@ -55,9 +55,7 @@ struct CollectionsView: View {
             }
         }
         .navigationTitle("Collections")
-        .navigationDestination(for: BrowserSource.self) { destination in
-            BrowserView(client: client, source: destination)
-        }
+        .modifier(PushTargets(client: client, declare: true))
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button("Nouvelle collection", systemImage: "plus") { startCreating() }

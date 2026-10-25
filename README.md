@@ -1615,6 +1615,21 @@ recommence proprement en haut.
 Le scroll de retour ne se déclenche donc plus que si la pagination dans la visionneuse a
 quitté la cellule d'origine — le seul cas où il a quelque chose à rattraper.
 
+**Troisième théorie, et la vraie cause.** Le bug a survécu à ça aussi, et les traces ont enfin
+montré l'essentiel : `load folder=… loaded=false` **toutes les six secondes**. L'état de la
+vue repartait de zéro — elle était détruite et reconstruite, repeignant le cache de 14 593
+éléments puis le listing frais, emportant la position de lecture à chaque cycle.
+
+La cause est structurelle. `BrowserView` **se pousse elle-même**, et chaque instance
+redéclarait `navigationDestination` pour `BrowserSource` *et* pour `Item`. Trois niveaux de
+navigation, c'est trois déclarations concurrentes pour les mêmes types dans une même pile —
+cas où SwiftUI ne promet rien, et où ce qu'il fait est reconstruire la destination, donc
+détruire son état.
+
+Les destinations se déclarent maintenant **une seule fois, à la racine de chaque pile**, et
+les vues poussées en héritent. Les deux correctifs précédents restent : ils étaient justes
+chacun pour leur cas, ils ne traitaient simplement pas celui-là.
+
 ## Ce qui se réévalue pendant le scroll
 
 Trois choses se cumulaient sur la grille de 14 600 éléments, et toutes les trois pendant le

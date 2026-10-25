@@ -165,7 +165,9 @@ struct SearchView: View {
                 indexingButton
             }
         } else {
-            BrowserView(client: client, source: .results(title: resultsTitle, items: results))
+            BrowserView(client: client,
+                        source: .results(title: resultsTitle, items: results),
+                        root: true)
         }
     }
 
