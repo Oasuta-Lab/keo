@@ -52,9 +52,20 @@ func checkLivePhotos() async throws {
                            in: folder, generation: generation)
     try await store.markLivePairs(in: folder)
 
-    let listed = try await store.listing(folder).map(\.name).sorted()
-    assert(listed == ["IMG_4821.HEIC", "IMG_9999.HEIC", "Vacances.MOV"],
-           "le cache cache exactement ce que la grille cache — \(listed)")
+    // Le cache rend tout, y compris le compagnon : c'est `FolderContents` qui masque, et
+    // c'est le même code qui masque dans un listing frais venu de la box. Un dossier ouvert
+    // depuis le cache montre donc exactement ce qu'il montrera après la réponse de la box.
+    let cached = try await store.listing(folder)
+    assert(cached.map(\.name).sorted()
+           == ["IMG_4821.HEIC", "IMG_4821.MOV", "IMG_9999.HEIC", "Vacances.MOV"],
+           "le cache rend tout — \(cached.map(\.name))")
+
+    let painted = FolderContents(cached)
+    assert(painted.media.map(\.name).sorted()
+           == ["IMG_4821.HEIC", "IMG_9999.HEIC", "Vacances.MOV"],
+           "et la grille applique la règle — \(painted.media.map(\.name))")
+    assert(painted.companion(of: still)?.name == "IMG_4821.MOV",
+           "la pastille « live » et la lecture marchent donc aussi depuis le cache")
 
     let found = try await store.companion(of: still, in: folder)
     assert(found?.name == "IMG_4821.MOV", "la visionneuse retrouve la vidéo — \(found?.name ?? "rien")")
@@ -75,9 +86,11 @@ func checkLivePhotos() async throws {
                                                          mediaCount: 1, bytes: 2_000),
                            present: [live], sweep: true)
     try await store.markLivePairs(in: folder)
-    let orphan = try await store.listing(folder).map(\.name)
-    assert(orphan == ["IMG_4821.MOV"],
-           "sans sa photo, la vidéo redevient visible plutôt que de disparaître — \(orphan)")
+    let orphan = FolderContents(try await store.listing(folder))
+    assert(orphan.media.map(\.name) == ["IMG_4821.MOV"],
+           "sans sa photo, la vidéo redevient visible plutôt que de disparaître — "
+           + "\(orphan.media.map(\.name))")
+    assert(orphan.companions.isEmpty, "et plus rien n'est apparié")
 
     print("ok — photos live : appariement, .MOV isolé, cache, recherche, et retour en arrière")
 }

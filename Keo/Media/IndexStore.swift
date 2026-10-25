@@ -399,8 +399,13 @@ actor IndexStore {
 
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
+        // Companions included, deliberately. `FolderContents` is what hides them, and it is
+        // the same code that hides them in a fresh listing from the box — so a folder opened
+        // from the cache shows exactly what it shows once the box has answered, Live Photo
+        // badges and playable videos and all. The `live` column is for the queries that have
+        // no `FolderContents` to lean on: search, covers, counts.
         try prepare("""
-            SELECT name, size, capture, kind FROM file WHERE folder_id = ? AND live = 0
+            SELECT name, size, capture, kind FROM file WHERE folder_id = ?
             """, into: &statement)
         sqlite3_bind_int64(statement, 1, id)
 

@@ -381,6 +381,17 @@ base — et qu'une règle qui dérive entre eux montre la vidéo d'un côté et 
 Côté SQL c'est la même fonction, enregistrée sur la connexion sous le nom `stem`, comme
 `fold` pour les accents.
 
+### Le cache rend tout, la grille applique la règle
+
+`IndexStore.listing` renvoie le compagnon avec le reste, et c'est `FolderContents` qui le
+masque — le même code que pour un listing frais venu de la box. Filtrer en SQL paraissait plus
+propre, mais un dossier ouvert depuis le cache n'avait alors aucun `.MOV` à apparier : pas de
+pastille « live », pas de lecture au doigt, jusqu'à ce que la box réponde. Deux chemins, deux
+comportements, pour une règle censée être unique.
+
+La colonne `live` sert aux requêtes qui n'ont pas de `FolderContents` sur quoi s'appuyer : la
+recherche, les couvertures de tuiles, les photos du widget, les compteurs.
+
 ### Ce qui est caché reste indexé
 
 Masquer un fichier de la grille ne doit jamais le masquer de l'index : le balayage
