@@ -369,6 +369,125 @@ dans l'app : iOS fournit déjà l'interrupteur (Réglages → compte → iCloud 
 ramène simplement au comportement d'avant — tout local, rien de perdu, le journal attend. Le
 retirer du système pour le redonder dans l'app serait un deuxième endroit où se tromper.
 
+## Widget
+
+**L'app pré-rend, le widget ne fait qu'ouvrir des fichiers.** L'extension ne lie que
+Foundation, SwiftUI, ImageIO et AppIntents. Pas d'entitlement de trousseau, aucune socket,
+jamais de SQLite.
+
+L'autre option aurait été de partager l'index par App Group. Elle est écartée pour une raison
+simple : **l'index ne contient aucun pixel.** Il stocke `(folder_id, name, size, capture,
+read, kind, gen)` — des chemins et des dates. Le partager ferait migrer la base irremplaçable
+du propriétaire pour n'y gagner qu'un nom de fichier et un flou. Et `IndexStore.open()`
+exécute huit écritures avant son premier `SELECT` : quatre `ALTER TABLE`, un `UPDATE`, puis
+`retryDatelessAfterReaderChange`, `repairKinds` et `migrateFromJSON` — sans compter le
+`CREATE TABLE` du schéma. Une extension de 30 Mo que le système peut tuer en pleine
+transaction ne doit jamais faire tourner ça.
+
+Les seuls pixels qui existent sont des vignettes de 400 px dans `Caches/`, purgeable et évincé
+en LRU par l'app elle-même, et seulement pour les photos déjà défilées.
+
+### Pourquoi pas de réseau dans l'extension
+
+1. L'app est **LAN uniquement**, et le téléphone est hors du Wi-Fi de la maison les deux tiers
+   de la journée. Un widget réseau passerait sa vie à afficher un échec.
+2. Partager le jeton voudrait dire un `keychain-access-groups` et réécrire l'élément sous un
+   nouveau groupe. Perdre ce jeton coûte un déplacement physique devant la face avant de la
+   Freebox, et c'est déjà arrivé une fois. Par ailleurs `Keychain.service` vaut
+   `Bundle.main.bundleIdentifier`, soit `com.oasutalab.keo.KeoWidget` dans l'extension :
+   elle chercherait en silence dans le mauvais service.
+3. 30 Mo pour tout le processus, quand `ThumbnailPipeline.still()` peut retomber sur un
+   téléchargement de 40 Mo.
+4. `NSLocalNetworkUsageDescription` dans un `.appex` lève un **second** dialogue de
+   permission, attribué à quelque chose que le propriétaire ne voit pas.
+5. Une extension sans `FreeboxClient` ne peut pas écrire sur le NAS, même par accident.
+
+### Ce que l'app écrit
+
+Au premier plan, avec un client vivant, `WidgetRenderer` prend les douze captures les plus
+récentes du **sous-arbre** de chaque dossier épinglé, les passe par le pipeline de vignettes
+existant en 1200 px, et écrit le tout dans `group.com.oasutalab.keo/Widget/` :
+
+```
+Widget/widget.json                  le manifeste, écrit en atomique
+Widget/<sha256(chemin)>/<sha256(chemin du fichier)>
+```
+
+Les noms sont hachés parce qu'un chemin du NAS n'est pas un nom de fichier : il porte des
+slashes et pourrait porter des `..`. L'extension joint donc de l'hexadécimal plat, qui ne peut
+pas remonter hors du conteneur.
+
+- Protection `completeUntilFirstUserAuthentication`, **pas** `complete` : le widget se
+  rafraîchit téléphone verrouillé, et des fichiers illisibles le videraient à chaque fois.
+- Le rendu est **sauté entièrement pendant que l'`Indexer` tourne** — c'est volontairement un
+  lecteur série unique, un second ramènerait le trafic doublé qu'on avait justement supprimé.
+- Une fois par heure, **sauf si l'ensemble des épingles a changé** : épingler un dossier ne
+  doit pas attendre une heure pour s'afficher.
+- Les dossiers désépinglés et les photos sorties du top 12 sont retirés du conteneur au
+  passage ; sinon il grossirait indéfiniment.
+
+### La liste des dossiers
+
+Elle vient de la table **`shortcut`** — des dossiers que le propriétaire a déjà choisis par
+appui long sur leur tuile. Curée, typiquement moins de cinquante entrées, aucune nouvelle
+interface, et le coût du rendu est borné par construction. Si un dossier n'est pas proposé, la
+réponse tient en un appui long ; la feuille de réglages du widget le dit.
+
+La configuration passe par un `EntityQuery`, pas un `DynamicOptionsProvider` : le choix doit
+persister par une identité stable — le chemin Freebox — et être re-résolu quand la liste
+change. Un fournisseur d'options stocke la valeur au lieu d'une référence et rancit dès le
+premier épinglage.
+
+La timeline fait 48 entrées, une toutes les 30 minutes, sur 24 h, `.atEnd` : un rechargement
+de fond par jour pour un budget d'environ 40 à 70. `reloadAllTimelines()` depuis l'app au
+premier plan n'est pas budgété du tout, et c'est lui qui fait réellement la fraîcheur.
+
+`widgetAccentedRenderingMode(.fullColor)` est obligatoire : sans lui le mode teinté de l'écran
+d'accueil aplatit les photos en silhouettes blanches. Pour un widget photo, c'est un bug.
+
+### Récupérer le conteneur partagé depuis l'appareil
+
+Le conteneur de groupe n'est **pas** dans celui de l'app : il a son propre domaine.
+
+```sh
+xcrun devicectl device info files --device <UDID> \
+  --domain-type appGroupDataContainer --domain-identifier group.com.oasutalab.keo \
+  --username mobile
+xcrun devicectl device copy from --device <UDID> \
+  --domain-type appGroupDataContainer --domain-identifier group.com.oasutalab.keo \
+  --username mobile --source Widget --destination /tmp/keo-widget
+```
+
+Y vérifier `widget.json` (nombre de dossiers, noms d'images) et la taille des JPEG. L'app
+trace la même chose à chaque rendu, en build DEBUG :
+
+```sh
+grep -a "\[keo\] widget" /tmp/keo-console.log
+```
+
+### À vérifier à la main
+
+Rien de tout ceci ne se simule : il faut l'appareil, un widget posé, et de la patience.
+
+- **Écran verrouillé.** Poser le widget, verrouiller, attendre un rafraîchissement : la photo
+  reste visible. Si elle devient noire, la classe de protection est repassée à `complete`.
+- **Avant le premier déverrouillage après un redémarrage.** Redémarrer le téléphone et
+  regarder l'écran d'accueil **sans** déverrouiller : le widget doit afficher un état vide
+  propre, jamais une case cassée. C'est le seul moment où
+  `completeUntilFirstUserAuthentication` refuse réellement les fichiers.
+- **Mode avion.** Le widget doit continuer à tourner sur ses photos déjà rendues. S'il affiche
+  quoi que ce soit qui ressemble à une erreur réseau, c'est qu'il a appris à parler au NAS et
+  il faut l'en empêcher.
+- **Dossier désépinglé sous le widget.** Épingler un dossier, le choisir dans le widget,
+  rouvrir Keo et le désépingler, puis laisser l'app re-rendre : le widget doit annoncer « Ce
+  dossier n'est plus épinglé » et surtout **pas** les photos d'un autre dossier.
+- **Widget posé avant le premier lancement de Keo.** Sur une installation neuve, poser le
+  widget sans jamais ouvrir l'app : « Ouvre Keo pour remplir le widget », pas un crash.
+- **Rien d'épinglé.** Ouvrir Keo sans aucun raccourci : « Épingle un dossier dans Keo ».
+- **Numéro de build.** Après installation, vérifier que l'app démarre : iOS refuse une app
+  dont l'extension ne porte pas la version de l'hôte, et l'échec se produit à l'installation,
+  jamais à la compilation.
+
 ## Timeline
 
 Quand le tri est par date, la grille se regroupe et un rail apparaît à droite.

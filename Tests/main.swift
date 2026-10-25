@@ -61,6 +61,27 @@ func checkNothingWritesToTheNAS() {
 
 checkNothingWritesToTheNAS()
 
+// MARK: - Les deux copies du manifeste
+
+/// L'extension porte sa propre copie de `WidgetManifest`, parce que partager le fichier
+/// demanderait de le sortir du groupe synchronisé de l'app. Une copie qui dérive, c'est un
+/// widget qui décode dans le vide sans rien dire : les deux sont donc comparées à l'octet.
+func checkTheManifestCopiesMatch() {
+    let app = "Keo/Media/WidgetManifest.swift"
+    let widget = "KeoWidget/WidgetManifest.swift"
+    guard let inApp = try? Data(contentsOf: URL(fileURLWithPath: app)),
+          let inWidget = try? Data(contentsOf: URL(fileURLWithPath: widget)) else {
+        assertionFailure("copies du manifeste introuvables — lance le check depuis la racine")
+        return
+    }
+    assert(inApp == inWidget,
+           "\(app) et \(widget) ont divergé : le widget décoderait dans le vide")
+    assert(inApp.count > 200,
+           "le manifeste fait \(inApp.count) octets, le scan a dû lire le mauvais fichier")
+}
+
+checkTheManifestCopiesMatch()
+
 // MARK: - Envelope
 
 struct Entry: Decodable {
