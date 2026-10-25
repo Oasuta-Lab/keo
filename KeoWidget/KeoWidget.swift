@@ -1,3 +1,4 @@
+import AppIntents
 import ImageIO
 import SwiftUI
 import WidgetKit
@@ -13,11 +14,12 @@ struct KeoWidgetBundle: WidgetBundle {
 
 struct KeoWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "KeoWidget", provider: Provider()) { entry in
+        AppIntentConfiguration(kind: "KeoWidget", intent: SelectFolder.self,
+                               provider: Provider()) { entry in
             KeoWidgetView(entry: entry)
         }
         .configurationDisplayName("Keo")
-        .description("Les photos de vos dossiers épinglés.")
+        .description("Les photos d'un dossier épinglé.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
         // A photo has nothing to gain from a margin of wallpaper around it.
         .contentMarginsDisabled()
@@ -37,31 +39,42 @@ struct Entry: TimelineEntry {
     let message: String?
 }
 
-struct Provider: TimelineProvider {
+struct Provider: AppIntentTimelineProvider {
     func placeholder(in context: Context) -> Entry {
         Entry(date: Date(), file: nil, size: context.displaySize, message: nil)
     }
 
-    func getSnapshot(in context: Context, completion: @escaping (Entry) -> Void) {
-        completion(entries(in: context).first
-                   ?? Entry(date: Date(), file: nil, size: context.displaySize,
-                            message: WidgetStore.emptyMessage()))
-    }
-
-    func getTimeline(in context: Context, completion: @escaping (Timeline<Entry>) -> Void) {
-        completion(Timeline(entries: entries(in: context), policy: .atEnd))
+    func snapshot(for configuration: SelectFolder, in context: Context) async -> Entry {
+        entries(for: configuration, in: context)[0]
     }
 
     /// 48 entries, one every 30 minutes, covering a day — so one background reload per day
     /// against a budget of roughly 40 to 70. The app's `reloadAllTimelines()` from the
-    /// foreground is not budgeted at all, which is what actually keeps this fresh.
-    private func entries(in context: Context) -> [Entry] {
-        let folder = WidgetStore.manifest()?.folders.first
-        guard let folder, let home = WidgetStore.home(for: folder) else {
-            return [Entry(date: Date(), file: nil, size: context.displaySize,
-                          message: WidgetStore.emptyMessage())]
+    /// foreground is not budgeted at all, and is what actually keeps this fresh.
+    func timeline(for configuration: SelectFolder, in context: Context) async -> Timeline<Entry> {
+        Timeline(entries: entries(for: configuration, in: context), policy: .atEnd)
+    }
+
+    private func entries(for configuration: SelectFolder, in context: Context) -> [Entry] {
+        let size = context.displaySize
+
+        guard let manifest = WidgetStore.manifest() else {
+            return [WidgetStore.blank(size, "Ouvre Keo pour remplir le widget")]
         }
-        return WidgetStore.schedule(folder.images, in: home, size: context.displaySize)
+        guard !manifest.folders.isEmpty else {
+            return [WidgetStore.blank(size, "Épingle un dossier dans Keo")]
+        }
+        // Never configured — a widget dropped straight onto the Home Screen still has to
+        // show something rather than wait for someone to open its edit sheet.
+        guard let chosen = configuration.folder?.id else {
+            return WidgetStore.schedule(manifest.folders[0], size: size)
+        }
+        guard let folder = manifest.folders.first(where: { $0.path == chosen }) else {
+            // Unpinned since. Showing another folder's photos under the chosen folder's
+            // name would be worse than saying nothing.
+            return [WidgetStore.blank(size, "Ce dossier n'est plus épinglé")]
+        }
+        return WidgetStore.schedule(folder, size: size)
     }
 }
 
@@ -78,28 +91,22 @@ enum WidgetStore {
         return manifest
     }
 
-    static func home(for folder: WidgetManifest.Folder) -> URL? {
-        WidgetManifest.directory?.appendingPathComponent(WidgetManifest.key(for: folder.path),
-                                                         isDirectory: true)
+    static func blank(_ size: CGSize, _ message: String) -> Entry {
+        Entry(date: Date(), file: nil, size: size, message: message)
     }
 
-    /// Distinguishes "the app has never run" from "nothing is pinned": the second has a
-    /// one-gesture answer, and saying so is the whole point of the message.
-    static func emptyMessage() -> String {
-        guard let manifest = manifest() else { return "Ouvre Keo pour remplir le widget" }
-        return manifest.folders.isEmpty ? "Épingle un dossier dans Keo"
-                                        : "Ouvre Keo pour remplir le widget"
-    }
-
-    static func schedule(_ images: [String], in home: URL, size: CGSize) -> [Entry] {
+    static func schedule(_ folder: WidgetManifest.Folder, size: CGSize) -> [Entry] {
+        guard let directory = WidgetManifest.directory else {
+            return [blank(size, "Ouvre Keo pour remplir le widget")]
+        }
+        let home = directory.appendingPathComponent(WidgetManifest.key(for: folder.path),
+                                                    isDirectory: true)
         // The manifest only ever names flat hex, but it is read from a file: a name that
         // could climb out of the container must not be joined onto it.
-        let files = images
-            .filter { !$0.contains("/") && !$0.contains("..") && !$0.isEmpty }
+        let files = folder.images
+            .filter { !$0.isEmpty && !$0.contains("/") && !$0.contains("..") }
             .map { home.appendingPathComponent($0) }
-        guard !files.isEmpty else {
-            return [Entry(date: Date(), file: nil, size: size, message: emptyMessage())]
-        }
+        guard !files.isEmpty else { return [blank(size, "Ouvre Keo pour remplir le widget")] }
 
         let start = Date()
         return (0..<48).map { step in
