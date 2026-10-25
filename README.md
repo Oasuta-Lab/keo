@@ -630,12 +630,81 @@ persister par une identité stable — le chemin Freebox — et être re-résolu
 change. Un fournisseur d'options stocke la valeur au lieu d'une référence et rancit dès le
 premier épinglage.
 
-La timeline fait 48 entrées, une toutes les 30 minutes, sur 24 h, `.atEnd` : un rechargement
-de fond par jour pour un budget d'environ 40 à 70. `reloadAllTimelines()` depuis l'app au
-premier plan n'est pas budgété du tout, et c'est lui qui fait réellement la fraîcheur.
-
 `widgetAccentedRenderingMode(.fullColor)` est obligatoire : sans lui le mode teinté de l'écran
 d'accueil aplatit les photos en silhouettes blanches. Pour un widget photo, c'est un bug.
+
+### Les trois widgets, et ce que montre chaque taille
+
+Une photo nue ne dit pas de quel dossier elle vient — « on voit juste la dernière photo du
+dossier plutôt que le nom du dossier ». Chaque taille porte donc son texte, sur un dégradé
+sombre en bas de l'image : pas une ombre, qui disparaîtrait sur un ciel blanc.
+
+| Taille | **Keo** (un dossier) | **Ce jour-là** | **Raccourcis Keo** |
+|---|---|---|---|
+| Petit | Une photo, le nom par-dessus. Pas de place pour autre chose | Une photo, « il y a 7 ans », la date | *non proposé : une tuile seule, c'est déjà le widget de dossier* |
+| Moyen | Une photo, le nom et la ligne de contexte | Trois photos côte à côte, chacune son « il y a N ans » | Trois tuiles : photo la plus récente du dossier, son nom |
+| Grand | Mosaïque : une vedette, trois en bandeau | Vedette plus bandeau, chaque cellule datée | Deux rangs de trois tuiles |
+
+La ligne de contexte est « 14 595 photos · 2009 – 2024 ». Ses deux moitiés sont optionnelles
+dans le manifeste, et **omises** quand elles manquent : sur un dossier que l'index n'a pas
+fini, le compte est réellement inconnu, et retomber sur le nombre d'images donnerait douze —
+les couvertures pré-rendues, pas le dossier. Jamais de zéro, jamais d'estimation.
+
+Mosaïque = une vedette plus un bandeau, et non une grille fixe, parce que le bandeau
+raccourcit tout seul quand le dossier offre moins de photos : quatre cellules, puis trois,
+puis deux, puis la vedette seule. Une grille aurait dû répéter une photo pour rester carrée.
+
+**« Ce jour-là »** est le seul des trois dont le contenu est différent demain, donc le seul
+qui donne une raison de regarder l'écran d'accueil. Il n'a pas d'intent de configuration : un
+jour ne se choisit pas, c'est aujourd'hui. Trois états plutôt qu'un :
+
+- des photos, avec « il y a N ans » **calculé** à partir de l'année — stocker la phrase
+  ferait dire « il y a 7 ans » en janvier à un widget archivé le 31 décembre ;
+- rien aujourd'hui, ce qui est le cas de la plupart des jours d'une photothèque modeste :
+  « Rien ce jour-là dans les années passées », dit platement, pas déguisé en erreur ;
+- un manifeste qui ne date pas d'aujourd'hui — passé minuit, ses souvenirs sont ceux d'hier :
+  « Ouvre Keo pour les photos d'aujourd'hui », plutôt que les photos d'hier sous la date
+  d'hier. La timeline s'arrête donc à minuit, puisque c'est à minuit que la réponse change.
+
+### Longueur de la timeline : une décision de mémoire
+
+La timeline fait **4 entrées espacées de 6 h** : un rechargement de fond par jour, pour un
+budget d'environ 40 à 70. `reloadAllTimelines()` depuis l'app au premier plan n'est pas
+budgété du tout, et c'est lui qui fait réellement la fraîcheur — le nombre d'entrées n'y a
+jamais rien changé.
+
+Le nombre est contraint par la mémoire, pas par la fraîcheur. WidgetKit rend et archive
+**toutes** les entrées d'une timeline en une passe, dans l'extension, et chaque entrée
+archivée retient la photo que sa vue a décodée. Couvrir un grand widget coûte environ 5 Mo de
+pixels quelle que soit la découpe. Les 48 entrées d'une demi-heure demandaient donc bien plus
+de cent mégaoctets à une extension qui en a trente : elle était tuée avant d'avoir rien
+dessiné — d'où un widget **noir et vide, sans même le texte de repli**, en moyen et en grand,
+alors que le petit (un quart des pixels) passait. Quatre entrées ramènent le pire cas à 19 Mo.
+
+Ce n'était **pas** un problème de disposition. `scaledToFill()` rend bien une taille plus
+grande que la proposition, et le `.clipped()` qui suit découpe contre cette taille-là, donc
+ne sert à rien — mais à la racine d'un widget l'hôte centre et recadre le débordement de
+toute façon : rendues, les trois tailles étaient couvertes à **100 %**, aucun pixel noir.
+
+Le `Color.clear.overlay { … }` que `Photo` utilise reste la bonne forme, pour une autre
+raison : **dans une pile**, une cellule qui déborde est mesurée à sa largeur débordée et prend
+la place de ses voisines. Un bandeau de trois cellules rendait **15 / 70 / 15** au lieu de
+33 / 33 / 33. C'est ce qui aurait cassé la mosaïque et les tuiles de raccourcis.
+
+Chaque décodage est dimensionné à **sa cellule**, pas au widget : la vedette de la mosaïque
+tire 1092 px de côté long (3,6 Mo en 4:3), les trois cellules du bandeau 0,4 Mo chacune.
+
+### Où atterrit un appui
+
+Un appui sur le widget ouvrait Keo à la racine, ce qui est l'autre moitié du « pas très
+pratique à l'usage ». Les URL viennent de `WidgetManifest.link(folder:)` et `link(day:)`,
+et la façon de les poser n'est pas la même partout :
+
+- **widget de dossier** et **Ce jour-là** : `widgetURL(_:)`, une destination pour tout le
+  widget, puisqu'il n'en montre qu'un ;
+- **raccourcis** : un `Link(destination:)` **par tuile**. `widgetURL` ne sait poser qu'une
+  destination globale, et toutes les tuiles ouvriraient le même dossier — l'erreur qui ne se
+  voit qu'en appuyant sur la deuxième.
 
 ### Récupérer le conteneur partagé depuis l'appareil
 
@@ -676,6 +745,40 @@ Rien de tout ceci ne se simule : il faut l'appareil, un widget posé, et de la p
 - **Widget posé avant le premier lancement de Keo.** Sur une installation neuve, poser le
   widget sans jamais ouvrir l'app : « Ouvre Keo pour remplir le widget », pas un crash.
 - **Rien d'épinglé.** Ouvrir Keo sans aucun raccourci : « Épingle un dossier dans Keo ».
+- **Les trois tailles du widget de dossier.** Poser « Keo » en **petit**, **moyen** *et*
+  **grand**. Les trois doivent montrer des photos et le nom du dossier. C'est la vérification
+  qui compte : le symptôme corrigé était un widget noir et vide en moyen et en grand, sans
+  même le texte de repli, pendant que le petit marchait. S'il revient, ce n'est pas la
+  disposition — c'est la mémoire : chercher un jetsam de `KeoWidgetExtension` dans
+  `Réglages → Confidentialité → Analyse` et raccourcir encore `WidgetStore.steps`.
+- **La mosaïque avec peu de photos.** Épingler un dossier d'**une seule** photo, puis de deux,
+  puis de trois, et regarder le grand : vedette seule, puis vedette plus une, plus deux. Ni
+  case vide, ni photo répétée.
+- **Les deux tailles des raccourcis.** Poser « Raccourcis Keo » en moyen (trois tuiles) et en
+  grand (deux rangs de trois). Avec **moins de trois** dossiers épinglés, les tuiles doivent
+  garder leur taille et non s'étirer.
+- **Chaque tuile ouvre son dossier.** Avec au moins trois dossiers épinglés, appuyer sur la
+  **deuxième** puis la **troisième** tuile : Keo doit ouvrir le dossier de la tuile touchée,
+  pas celui de la première ni la racine. C'est précisément ce que `widgetURL` ne sait pas
+  faire, donc c'est là que la régression se verrait.
+- **Appui sur le widget de dossier.** Keo doit ouvrir sur le dossier affiché, pas à la racine.
+- **Ligne de contexte.** Sur un dossier entièrement indexé, le moyen doit lire
+  « 14 595 photos · 2009 – 2024 ». Sur un dossier **en cours** d'indexation, le compte doit
+  **disparaître** — jamais « 0 photo », qui se lirait « ce dossier est vide ».
+- **« Ce jour-là », les trois tailles.** Un jour qui a des photos : les trois tailles les
+  montrent, chaque cellule avec son « il y a N ans », et l'appui ouvre la recherche sur ce
+  jour. Vérifier qu'une photo de l'année en cours dit « cette année » et non « il y a 0 an ».
+- **« Ce jour-là » un jour vide.** La plupart des jours : « Rien ce jour-là dans les années
+  passées ». Un widget vide ou une case cassée serait un échec ; cette phrase est le
+  comportement attendu.
+- **« Ce jour-là » après minuit.** Laisser le téléphone passer minuit **sans** ouvrir Keo :
+  le widget doit basculer sur « Ouvre Keo pour les photos d'aujourd'hui » et surtout pas
+  continuer à montrer les photos d'hier sous la date d'hier. Rouvrir Keo : il se remplit.
+- **Mode teinté.** Passer l'écran d'accueil en teinté : les photos restent en couleur. Si
+  elles deviennent des silhouettes blanches, un `widgetAccentedRenderingMode(.fullColor)` a
+  sauté — il y en a un, dans `Photo`.
+- **Galerie de widgets.** Les **trois** widgets doivent apparaître avec leurs descriptions,
+  et « Raccourcis Keo » **sans** la taille petite.
 - **Numéro de build.** Après installation, vérifier que l'app démarre : iOS refuse une app
   dont l'extension ne porte pas la version de l'hôte, et l'échec se produit à l'installation,
   jamais à la compilation.
