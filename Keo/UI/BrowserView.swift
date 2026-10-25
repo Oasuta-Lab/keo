@@ -47,6 +47,8 @@ struct BrowserView: View {
     @State private var choosingCollection = false
     /// Paths of folders already pinned, so a tile's menu can say the right thing.
     @State private var pinned: Set<String> = []
+    /// Set by « Aller au dossier » — a search result says nothing about where it lives.
+    @State private var goingTo: BrowserSource?
     /// True when every selected item is already a favourite — the action then unfavourites.
     @State private var selectionIsFavourite = false
 
@@ -113,6 +115,7 @@ struct BrowserView: View {
                                 selected: selecting ? selection.contains(document) : nil)
                         }
                         .buttonStyle(.plain)
+                        .contextMenu { locate(document) }
                     }
                 }
             }
@@ -162,6 +165,9 @@ struct BrowserView: View {
         }
         .navigationDestination(for: Item.self) { folder in
             BrowserView(client: client, source: .folder(folder))
+        }
+        .navigationDestination(item: $goingTo) { destination in
+            BrowserView(client: client, source: destination)
         }
         .fullScreenCover(item: $viewing) { item in
             ViewerView(client: client,
@@ -239,10 +245,24 @@ struct BrowserView: View {
                           lookahead: lookahead(after: offset + index))
                 }
                 .buttonStyle(.plain)
+                .contextMenu { locate(item) }
             }
         }
         .padding(.vertical, 2)
     }
+
+    /// Where an item actually lives. A result, a favourite or a collection member is shown
+    /// stripped of its folder, which is exactly the context you want back once you found it.
+    /// Pointless inside a real folder: you are already there.
+    @ViewBuilder
+    private func locate(_ item: Item) -> some View {
+        if !source.isOnNAS, let parent = BrowserSource.parent(of: item) {
+            Button("Aller dans « \(parent.title) »", systemImage: "folder") {
+                goingTo = parent
+            }
+        }
+    }
+
 
     private func refreshLibrary() async {
         collections = (try? await IndexStore.shared.collections()) ?? []

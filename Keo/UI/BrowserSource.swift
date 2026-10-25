@@ -39,6 +39,16 @@ enum BrowserSource: Hashable, Identifiable {
     /// Indexing, listing caches and folder statistics only mean something for a real folder.
     var isOnNAS: Bool { folderPath != nil }
 
+    /// The folder an item sits in. `nil` only when there is nothing to go to — the item is
+    /// already at the root, or its path is not one we can split. Never a made-up folder.
+    static func parent(of item: Item) -> BrowserSource? {
+        var components = item.path.split(separator: "/").map(String.init)
+        guard !components.isEmpty else { return nil }
+        components.removeLast()
+        guard let name = components.last else { return nil }
+        return .folder(path: "/" + components.joined(separator: "/"), title: name)
+    }
+
     static func folder(_ item: Item) -> BrowserSource {
         .folder(path: item.path, title: item.name)
     }

@@ -115,5 +115,19 @@ func checkSearch() async throws {
     let dated = hits.filter { !$0.isDirectory }.compactMap(\.captureDate)
     assert(dated == dated.sorted(by: >), "les résultats datés descendent — \(dated)")
 
-    print("ok — recherche : accents, jokers SQL, filtres type/fichiers/année/intervalle/favoris, dossiers par leur nom")
+    // --- « Aller au dossier » depuis un résultat -------------------------------------------
+    assert(BrowserSource.parent(of: plage)
+           == .folder(path: "/NAS/Photos/Été 2024", title: "Été 2024"),
+           "le raccourci pointe le dossier parent, pas le fichier")
+    assert(BrowserSource.parent(of: Item(path: "/seul.jpg", name: "seul.jpg", isDirectory: false,
+                                         size: 1, modified: nil, mimeType: nil)) == nil,
+           "un fichier à la racine n'a nulle part où renvoyer")
+    assert(BrowserSource.parent(of: Item(path: "/", name: "/", isDirectory: true,
+                                         size: 0, modified: nil, mimeType: nil)) == nil,
+           "la racine non plus")
+    assert(BrowserSource.parent(of: Item(path: "/A/B/C", name: "C", isDirectory: true,
+                                         size: 0, modified: nil, mimeType: nil))
+           == .folder(path: "/A/B", title: "B"), "vaut aussi pour un dossier")
+
+    print("ok — recherche : accents, jokers SQL, filtres type/fichiers/année/intervalle/favoris, dossiers par leur nom, aller au dossier")
 }

@@ -321,6 +321,16 @@ relisté, aucun fichier n'est relu (`read = 1` n'est pas touché).
 Un filtre de période exclut forcément les documents, qui n'ont pas de date. C'est voulu et
 c'est dit par le filtre « Fichiers ».
 
+### Retrouver l'endroit
+
+Un résultat est montré dépouillé de son dossier, ce qui est précisément le repère qu'on veut
+récupérer une fois qu'on l'a trouvé. Appui long sur n'importe quel résultat → « Aller dans
+*…* ». Vaut aussi dans les Favoris et les Collections, qui perdent le même repère ; inutile
+dans un vrai dossier, on y est déjà.
+
+`BrowserSource.parent(of:)` est volontairement hors SwiftUI pour être vérifiable : elle rend
+`nil` à la racine et pour tout chemin qu'on ne sait pas découper, jamais un dossier inventé.
+
 ### Période
 
 Un seul axe, trois états : toutes les périodes, une année, ou un intervalle entre deux dates.
@@ -622,6 +632,7 @@ swiftc -swift-version 6 -D DEBUG Keo/Freebox/Item.swift Keo/Freebox/Transport.sw
   Keo/Media/FolderStamp.swift Keo/Media/WalkOutcome.swift Keo/Media/SearchQuery.swift \
   Keo/Media/IndexStore.swift \
   Keo/Media/VideoDate.swift Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift \
+  Keo/UI/BrowserSource.swift \
   Keo/Sync/SyncModel.swift \
   Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
   Tests/sync.swift Tests/search.swift Tests/covers.swift \
