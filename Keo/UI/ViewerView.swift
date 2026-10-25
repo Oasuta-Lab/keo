@@ -307,26 +307,27 @@ private struct ImagePage: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            // Says the gesture exists. Without it a Live Photo is indistinguishable from a
-            // still, and nobody presses a photo on the off-chance.
-            if live != nil, !playing {
-                Label("LIVE", systemImage: "livephoto")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.black.opacity(0.4), in: Capsule())
-                    .padding(12)
-                    .allowsHitTesting(false)
+            // The badge *is* the button. A long press felt like guesswork, and the bottom bar
+            // is already four 60 pt glyphs wide — a fifth would not fit on an iPhone. This
+            // puts the control where the eye already goes to learn the photo has a video.
+            if live != nil {
+                Button { playing.toggle() } label: {
+                    Label("LIVE", systemImage: playing ? "livephoto.slash" : "livephoto")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(playing ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.45), in: Capsule())
+                        // The capsule is smaller than a thumb; the hit region is not.
+                        .frame(minWidth: 44, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .padding(.leading, 10)
+                .accessibilityLabel(playing ? "Arrêter la vidéo live" : "Jouer la vidéo live")
             }
         }
-        // Long press, like Photos — the gesture is already in everyone's fingers. Guarded on
-        // `zoomed` so it cannot fight the pinch gesture of the scroll view underneath.
-        .onLongPressGesture(minimumDuration: 0.3) {
-            guard live != nil, !zoomed else { return }
-            playing = true
-        }
         .sensoryFeedback(.impact(flexibility: .soft), trigger: playing) { _, now in now }
+        // Paging away must not leave a video running behind the next photo.
         .onChange(of: item.path) { _, _ in playing = false }
         .task(id: item.path) {
             // The grid thumbnail first so the page is never blank, then the real thing.

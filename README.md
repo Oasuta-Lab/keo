@@ -368,9 +368,14 @@ dans les métadonnées `PHAsset` est perdu à la copie, et rien dans les fichier
 vont ensemble. Résultat : une bibliothèque qui paraît deux fois plus pleine qu'elle n'est, et
 un jumeau gris à côté de chaque photo.
 
-Keo les réunit sur la seule preuve qui reste, le nom. Le `.MOV` disparaît de la grille, et un
-appui long sur la photo le joue — muet, une fois, comme Photos. Une pastille « LIVE » le
-signale, sinon personne n'appuie sur une photo au cas où.
+Keo les réunit sur la seule preuve qui reste, le nom. Le `.MOV` disparaît de la grille, et une
+pastille « LIVE » en haut à gauche de la photo le joue — muet, une passe, retap pour arrêter.
+
+L'appui long, à la Photos, a été essayé et abandonné : le ressenti n'y était pas, on ne sait
+pas combien de temps tenir ni si quelque chose se passe. La pastille **est** le bouton, à
+l'endroit où l'œil va déjà pour apprendre que la photo a une vidéo ; sa zone tactile fait
+44 pt même si la capsule est plus petite. La barre du bas n'était pas une option : quatre
+glyphes de 60 pt y tiennent déjà toute la largeur d'un iPhone.
 
 **Un `.MOV` isolé reste une vidéo visible.** C'est tout ce qui n'a pas été pris à l'iPhone, et
 le masquer le perdrait.
