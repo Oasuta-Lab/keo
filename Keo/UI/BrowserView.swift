@@ -36,6 +36,8 @@ struct BrowserView: View {
     @State private var unindexed = 0
     /// Counted during indexing, so a tile can say what is inside without asking the box.
     @State private var folderStats: [String: FolderStats] = [:]
+    /// One photo per subfolder, chosen by the index — no extra listing to find it.
+    @State private var folderCovers: [String: Item] = [:]
     /// True while the grid shows what the index remembers rather than a fresh listing.
     @State private var fromCache = false
     /// Saved items whose file the index no longer finds on the NAS.
@@ -72,7 +74,8 @@ struct BrowserView: View {
                         LazyVGrid(columns: folderColumns, spacing: 10) {
                             ForEach(contents.folders) { folder in
                                 NavigationLink(value: folder) {
-                                    FolderTile(folder: folder, stats: folderStats[folder.path])
+                                    FolderTile(folder: folder, stats: folderStats[folder.path],
+                                               cover: folderCovers[folder.path], client: client)
                                 }
                                 .buttonStyle(.plain)
                                 .disabled(selecting)
@@ -486,9 +489,9 @@ struct BrowserView: View {
     private func resolveDates() async {
         do {
             await offerIndexing()
-            folderStats = (try? await IndexStore.shared.stats(
-                for: contents.folders.map(\.path)
-            )) ?? [:]
+            let folders = contents.folders.map(\.path)
+            folderStats = (try? await IndexStore.shared.stats(for: folders)) ?? [:]
+            folderCovers = (try? await IndexStore.shared.covers(for: folders)) ?? [:]
 
             let known = try await IndexStore.shared.known(contents.media, in: path)
             if !known.isEmpty {
@@ -699,6 +702,11 @@ private struct FolderTile: View {
     let folder: Item
     /// Absent until the folder has been indexed; the tile simply says less.
     let stats: FolderStats?
+    /// A photo from inside, picked by the index. Absent until a pass has seen one.
+    let cover: Item?
+    let client: FreeboxClient
+
+    @State private var image: UIImage?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -706,11 +714,19 @@ private struct FolderTile: View {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(.tint.opacity(0.16))
                     .aspectRatio(4 / 3, contentMode: .fit)
-
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 34))
-                    .foregroundStyle(.tint)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay {
+                        if let image {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                                .transition(.opacity)
+                        } else {
+                            Image(systemName: "folder.fill")
+                                .font(.system(size: 34))
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                 if let count = stats?.mediaCount ?? folder.childCount, count > 0 {
                     Text(count, format: .number)
@@ -721,6 +737,14 @@ private struct FolderTile: View {
                         .background(.ultraThinMaterial, in: Capsule())
                         .padding(8)
                 }
+            }
+            .task(id: cover?.path) {
+                guard let cover else { return }
+                // Default size on purpose: the cover then shares its cache entry with the grid
+                // cell of the folder being opened, instead of fetching the same photo twice.
+                let loaded = await ThumbnailPipeline.shared.thumbnail(for: cover, client: client)
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.18)) { image = loaded }
             }
 
             Text(folder.name)

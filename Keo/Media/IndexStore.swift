@@ -1732,4 +1732,45 @@ actor IndexStore {
         }
         return found
     }
+
+    /// A photo to show on each folder tile, taken from the subtree like the totals above.
+    ///
+    /// An image beats a video: decoding a video cover costs an AVFoundation session, a still
+    /// costs the 256 KB probe the pipeline already does. Among images, the most recent capture
+    /// says more about the folder than an arbitrary one. The trailing path and name make the
+    /// order total, so the same folder never comes back with a different cover.
+    func covers(for folders: [String]) throws -> [String: Item] {
+        try open()
+        guard !folders.isEmpty else { return [:] }
+
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("""
+            SELECT folder.path, file.name, file.size, file.kind
+            FROM file JOIN folder ON folder.id = file.folder_id
+            WHERE file.kind IN (1, 2)
+              AND (folder.path = ?1 OR substr(folder.path, 1, length(?1) + 1) = ?1 || '/')
+            ORDER BY file.kind, file.capture DESC, folder.path, file.name
+            LIMIT 1
+            """, into: &statement)
+
+        var found: [String: Item] = [:]
+        for folder in folders {
+            sqlite3_reset(statement)
+            bind(statement, 1, folder)
+            guard sqlite3_step(statement) == SQLITE_ROW,
+                  let rawFolder = sqlite3_column_text(statement, 0),
+                  let rawName = sqlite3_column_text(statement, 1) else { continue }
+            let name = String(cString: rawName)
+            found[folder] = Item(
+                path: String(cString: rawFolder) + "/" + name,
+                name: name,
+                isDirectory: false,
+                size: sqlite3_column_int64(statement, 2),
+                modified: nil,
+                mimeType: Item.Kind(code: Int(sqlite3_column_int64(statement, 3)))?.mimeHint
+            )
+        }
+        return found
+    }
 }
