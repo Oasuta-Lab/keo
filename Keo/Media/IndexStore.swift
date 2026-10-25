@@ -2297,6 +2297,26 @@ actor IndexStore {
     /// costs roughly another copy of the table on disk. The screen reads this once and keeps
     /// it for as long as it is open.
     /// Five questions, not the dozen `statistics` asks: this one runs on every launch.
+    /// The box's capacity, read when the phone was last on the home network.
+    ///
+    /// Kept here rather than fetched on sight: Keo is LAN-only, so the gauge would be blank
+    /// every time the owner is out — which is most of the day. The box does not sleep; the
+    /// phone leaves.
+    func rememberCapacity(total: Int64, free: Int64) throws {
+        try open()
+        try setValue(total, forKey: "diskTotal")
+        try setValue(free, forKey: "diskFree")
+        try setValue(Int64(Date().timeIntervalSince1970), forKey: "diskSeen")
+    }
+
+    func capacity() throws -> (total: Int64, free: Int64, seen: Date)? {
+        try open()
+        guard let total = try value(forKey: "diskTotal"), total > 0,
+              let free = try value(forKey: "diskFree"),
+              let seen = try value(forKey: "diskSeen") else { return nil }
+        return (total, free, Date(timeIntervalSince1970: Double(seen)))
+    }
+
     func homeSummary(on today: Date = Date()) throws -> HomeSummary {
         try open()
         var summary = HomeSummary()

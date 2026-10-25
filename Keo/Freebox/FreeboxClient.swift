@@ -248,6 +248,31 @@ actor FreeboxClient {
 
     // MARK: Session
 
+    /// Total and free bytes across the box's partitions.
+    ///
+    /// A read like any other, on a route that only reports. It needs the « Accès aux fichiers »
+    /// permission the owner already granted — if the box refuses, the caller simply never gets
+    /// a capacity and shows what it knows instead of a gauge.
+    func storage() async throws -> (total: Int64, free: Int64) {
+        struct Partition: Decodable, Sendable {
+            let total_bytes: Int64?
+            let free_bytes: Int64?
+        }
+        struct Disk: Decodable, Sendable {
+            let partitions: [Partition]?
+        }
+        let url = FreeboxPath.url(base: endpoint.base, suffix: "storage/disk/")
+        let disks = try await authorized { token in
+            try await read.json(url, token: token, as: [Disk].self)
+        }
+        let partitions = disks.flatMap { $0.partitions ?? [] }
+        let total = partitions.reduce(Int64(0)) { $0 + ($1.total_bytes ?? 0) }
+        let free = partitions.reduce(Int64(0)) { $0 + ($1.free_bytes ?? 0) }
+        guard total > 0 else { throw FreeboxError.api(code: "no_capacity",
+                                                     message: "capacité inconnue") }
+        return (total, free)
+    }
+
     func currentSession() async throws -> String {
         if let sessionToken { return sessionToken }
         return try await openSession()

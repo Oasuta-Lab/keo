@@ -25,6 +25,7 @@ struct HomeView: View {
     @State private var recent: [Item] = []
     @State private var destination: BrowserSource?
     @State private var showingIndexing = false
+    @State private var disk: (total: Int64, free: Int64, seen: Date)?
 
     private var memoriesByYear: [(year: Int, items: [Item])] {
         guard let summary else { return [] }
@@ -40,6 +41,7 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 28) {
+                header
                 if let summary, summary.isEmpty {
                     WelcomeCard(reachable: store.client != nil) {
                         indexer.start(client: client)
@@ -60,18 +62,12 @@ struct HomeView: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 24)
         }
-        .navigationTitle("Keo")
-        .modifier(DaySubtitle())
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Image("AppLogo")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 28, height: 28)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .accessibilityHidden(true)
-            }
-        }
+        // Drawn in the content rather than as a navigation title: a large title renders on
+        // its own line below the bar, so the logo could only ever sit above the word, never
+        // beside it.
+        .navigationTitle("")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarVisibility(.hidden, for: .navigationBar)
         .navigationDestination(item: $destination) { source in
             BrowserView(client: client, source: source)
         }
@@ -83,6 +79,34 @@ struct HomeView: View {
         .onChange(of: undoer.revision) { _, _ in Task { await load() } }
         .onChange(of: indexer.state.isRunning) { _, _ in Task { await load() } }
         .refreshable { await load() }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image("AppLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 42, height: 42)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Keo").font(.largeTitle.bold())
+                Text(Self.today)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 4)
+    }
+
+    private static var today: String {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.setLocalizedDateFormatFromTemplate("EEEE d MMMM")
+        let text = formatter.string(from: Date())
+        return text.prefix(1).uppercased() + text.dropFirst()
     }
 
     // MARK: Ce jour-là
@@ -193,8 +217,7 @@ struct HomeView: View {
                     LibraryRow(icon: "chart.bar", title: "Statistiques", detail: nil)
                 }
                 Divider().padding(.leading, 52)
-                LibraryRow(icon: "internaldrive", title: "Poids lu", detail: weightLabel,
-                           chevron: false)
+                storage
                 Divider().padding(.leading, 52)
                 Menu {
                     Button("Déconnexion", systemImage: "rectangle.portrait.and.arrow.right",
@@ -209,10 +232,42 @@ struct HomeView: View {
         }
     }
 
-    /// Deliberately not a fill bar. A gauge needs a capacity, the capacity lives on the box,
-    /// and this screen has to mean something with the box switched off — a bar that is empty
-    /// two thirds of the day is worse than a number that is always true.
-    ///
+    /// The gauge needs a capacity, and the capacity lives on the box. Keo is LAN-only, so
+    /// fetching it on sight would leave the bar blank every time the owner is out — which is
+    /// most of the day. It is therefore read when the phone is home and remembered: the box
+    /// does not sleep, the phone leaves.
+    @ViewBuilder
+    private var storage: some View {
+        if let disk {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "internaldrive")
+                        .foregroundStyle(.tint)
+                        .frame(width: 28)
+                    Text("Stockage")
+                    Spacer(minLength: 8)
+                    Text((disk.total - disk.free).formatted(.byteCount(style: .file))
+                       + " sur " + disk.total.formatted(.byteCount(style: .file)))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                ProgressView(value: Double(disk.total - disk.free), total: Double(disk.total))
+                    .tint(Double(disk.free) / Double(disk.total) < 0.1 ? .orange : .accentColor)
+                    .padding(.leading, 28)
+                Text("Dont \(weightLabel) lus par Keo")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .padding(.leading, 28)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        } else {
+            LibraryRow(icon: "internaldrive", title: "Poids lu", detail: weightLabel,
+                       chevron: false)
+        }
+    }
+
     /// « au moins » when some stamped folder has no weight: the total is a floor, not a
     /// figure, and the index says which rather than quietly rounding up.
     private var weightLabel: String {
@@ -255,30 +310,18 @@ struct HomeView: View {
         pinCovers = (try? await IndexStore.shared.covers(for: paths)) ?? [:]
         recent = (try? await IndexStore.shared.recentMedia(under: FreeboxClient.rootPath,
                                                            limit: 12)) ?? []
+        disk = try? await IndexStore.shared.capacity()
+
+        // Refreshed in the background, and only when the box answers. A failure here is not
+        // worth a word on screen: the remembered figure stays, and it is still true.
+        if let fresh = try? await client.storage() {
+            try? await IndexStore.shared.rememberCapacity(total: fresh.total, free: fresh.free)
+            disk = try? await IndexStore.shared.capacity()
+        }
     }
 }
 
 // MARK: - Pieces
-
-/// « Samedi 25 octobre » under the title. On iOS 26 it is a real navigation subtitle; below
-/// that the date would have to be faked as content, which looks worse than not having it.
-private struct DaySubtitle: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.navigationSubtitle(Self.today)
-        } else {
-            content
-        }
-    }
-
-    private static var today: String {
-        let formatter = DateFormatter()
-        formatter.locale = .current
-        formatter.setLocalizedDateFormatFromTemplate("EEEE d MMMM")
-        let text = formatter.string(from: Date())
-        return text.prefix(1).uppercased() + text.dropFirst()
-    }
-}
 
 /// One year of this day, under its own photo. The text sits on a gradient of the photo
 /// itself — the owner's colour, with no extraction code anywhere.
