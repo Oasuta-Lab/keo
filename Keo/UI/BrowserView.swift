@@ -45,6 +45,8 @@ struct BrowserView: View {
     /// The cell the viewer flies back to. It follows the paging, so closing on the
     /// twentieth photo returns to *that* cell and not to the one originally tapped.
     @State private var anchor: Item.ID?
+    /// The cell the viewer was opened from, which is by definition on screen.
+    @State private var opened: Item.ID?
     @EnvironmentObject private var indexer: Indexer
     @State private var showingIndexing = false
     @State private var showingInvitation = false
@@ -148,16 +150,21 @@ struct BrowserView: View {
                     }
                 }
             }
-            // A zoom back to a cell that scrolled off screen has nowhere to land, so the
-            // grid follows the paging before the transition plays.
+            // Only when the photo on screen is no longer the one the grid was showing —
+            // that is, when paging in the viewer walked away from the opened cell.
+            //
+            // Scrolling unconditionally is what the owner was reporting as "the photos are
+            // not the same". The cell a photo was opened from is on screen by definition, so
+            // the scroll had nothing to fix; but `scrollTo` on a lazily built list of eight
+            // thousand cells, in sections of very uneven size, has to *estimate* the position
+            // of rows it never created — and it landed somewhere else entirely. Leaving the
+            // folder repaired it because a fresh load starts cleanly at the top.
             .onChange(of: viewing) { previous, now in
                 guard previous != nil, now == nil else { return }
-                // `at=absent` here with a grid that still lands on the wrong dates would
-                // refute the held-dates theory: it would mean the anchor itself was lost.
-                trace("viewer dismissed anchor=\(anchor ?? "nil") "
+                trace("viewer dismissed anchor=\(anchor ?? "nil") opened=\(opened ?? "nil") "
                     + "at=\(anchor.flatMap { mediaIndex[$0] }.map(String.init) ?? "absent") "
                     + "pending=\(pendingDates.count)")
-                guard let anchor else { return }
+                guard let anchor, anchor != opened else { return }
                 trace("dismiss scroll to \(anchor) at=\(mediaIndex[anchor].map(String.init) ?? "absent") "
                     + "n=\(contents.media.count)")
                 proxy.scrollTo(anchor, anchor: .center)
@@ -651,6 +658,7 @@ struct BrowserView: View {
             if selection.contains(item) { selection.remove(item) } else { selection.insert(item) }
         } else {
             anchor = item.id
+            opened = item.id
             viewing = item
         }
     }

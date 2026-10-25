@@ -1456,7 +1456,7 @@ Le geste de fermeture maison et la transition système veulent piloter la même 
 photo est rendue à son cadre naturel avant `dismiss()`, sinon le zoom démarre d'une image déjà
 réduite par le glissement.
 
-## Le bug de la grille au retour du plein écran, non résolu
+## Le bug de la grille au retour du plein écran
 
 Rapporté deux fois : ouvrir une photo, rester un moment, fermer — et la grille montre autre
 chose, « d'autres dates », impossible de retrouver ses photos ; sortir du dossier et revenir
@@ -1471,10 +1471,18 @@ le mécanisme**.
 Ce que la trace dit par ailleurs : `viewer dismissed anchor=…/IMG_0984.JPEG at=364`. L'ancre
 n'est donc pas perdue, et le scroll de retour vise délibérément l'index 364.
 
-Ce qui manquait pour conclure : **l'horodatage**. Impossible de savoir si le `load` observé
-précédait ou suivait la fermeture. Les traces sont donc horodatées à la milliseconde, chaque
-remplacement du contenu de la grille se nomme avec sa raison et sa taille, et le scroll de
-retour dit où il a vraiment atterri. La prochaine reproduction tranchera.
+**Deuxième théorie, celle qui tient.** Les traces horodatées donnent la réponse en cinq
+lignes : rien ne bouge pendant les trente secondes passées sur la photo, et le seul événement
+à la fermeture est le `scrollTo` de retour lui-même.
+
+Une photo s'ouvre depuis une cellule **qui est à l'écran par définition** — le scroll n'avait
+donc rien à réparer. Mais `scrollTo` sur une liste paresseuse de huit mille cellules, en
+sections de tailles très inégales, doit *estimer* la position de rangées qu'il n'a jamais
+créées. Il atterrissait ailleurs. Sortir du dossier réparait parce qu'un chargement frais
+recommence proprement en haut.
+
+Le scroll de retour ne se déclenche donc plus que si la pagination dans la visionneuse a
+quitté la cellule d'origine — le seul cas où il a quelque chose à rattraper.
 
 ## Ce qui se réévalue pendant le scroll
 
