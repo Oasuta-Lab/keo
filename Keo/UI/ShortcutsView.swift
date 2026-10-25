@@ -68,6 +68,8 @@ struct ShortcutsView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { SyncFootnote() }
         .task { await reload() }
+        // Pinning, or undoing one, can happen from another screen entirely.
+        .onChange(of: undoer.revision) { _, _ in Task { await reload() } }
         // Shortcuts arrived from another device land without a tap here: repaint on each
         // sync transition rather than waiting for the next visit.
         .onChange(of: sync.status) { Task { await reload() } }

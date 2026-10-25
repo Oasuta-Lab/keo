@@ -100,12 +100,16 @@ struct ViewerView: View {
             // Paging away must not leave a video running behind the next photo.
             livePlaying = false
         }
-        .task(id: currentID) {
-            guard let current else { return }
-            favourite = (try? await IndexStore.shared.isFavourite(current)) ?? false
-            hasNote = (try? await IndexStore.shared.note(on: current)) != nil
-        }
+        .task(id: currentID) { await readMarks() }
+        // An undo while the photo is open must move the heart back too.
+        .onChange(of: undoer.revision) { _, _ in Task { await readMarks() } }
         .statusBarHidden()
+    }
+
+    private func readMarks() async {
+        guard let current else { return }
+        favourite = (try? await IndexStore.shared.isFavourite(current)) ?? false
+        hasNote = (try? await IndexStore.shared.note(on: current)) != nil
     }
 
     private func toggleFavourite() {

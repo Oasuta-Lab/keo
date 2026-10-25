@@ -435,6 +435,17 @@ Le bandeau est posé à deux endroits — au-dessus de la barre d'onglets, et à
 visionneuse. Un `fullScreenCover` est dessiné par-dessus la racine, donc une superposition
 posée sur la racine serait invisible depuis la photo.
 
+### Un seul endroit qui sait que quelque chose a changé
+
+Les marqueurs d'une vignette — favori, collection, note — sont lus une fois par chargement.
+Chaque écran rafraîchissait donc les siens là où l'action se produisait, ce qui marchait tant
+que l'action se produisait là : mettre un favori depuis le plein écran laissait la grille
+derrière avec les anciens marqueurs, et une annulation ne rafraîchissait rien du tout.
+
+Toute modification de la personnalisation passe déjà par l'`Undoer` pour être réversible.
+C'est donc lui qui porte un numéro de révision, et chaque écran le regarde. Une seule source,
+au lieu d'un rafraîchissement à recopier à chaque nouvel appel.
+
 Le capteur de secouage est un premier répondeur de taille nulle, faute de geste de secouage en
 SwiftUI et parce que les alternatives sont le *swizzling* de `UIWindow` ou une liste de
 fenêtres dépréciée. Il cède le premier répondeur dès qu'un champ de texte le réclame, ce qui

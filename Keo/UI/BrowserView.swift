@@ -251,6 +251,16 @@ struct BrowserView: View {
             Task { await loadLocal() }
         }
         .onChange(of: selection) { _, _ in Task { await refreshSelectionState() } }
+        // Anything that touched a favourite, a collection, a shortcut or a note — from here,
+        // from the viewer on top, or from an undo. The marks on the tiles are read once per
+        // load, so without this they keep showing the state from before the tap.
+        .onChange(of: undoer.revision) { _, _ in
+            Task {
+                await refreshLibrary()
+                await refreshSelectionState()
+                if !source.isOnNAS { await loadLocal() }
+            }
+        }
         .confirmationDialog("Ajouter à une collection", isPresented: $choosingCollection,
                             titleVisibility: .visible) {
             ForEach(collections) { collection in

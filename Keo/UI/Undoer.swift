@@ -24,6 +24,15 @@ final class Undoer: ObservableObject {
     @Published private(set) var banner: Step?
     @Published private(set) var undoing = false
 
+    /// Bumped by every recorded action and by every undo.
+    ///
+    /// Each screen used to refresh its own badges right where the action happened, which
+    /// worked until the action happened somewhere else: favouriting from the full-screen
+    /// viewer left the grid behind it showing the old marks, and an undo refreshed nothing at
+    /// all. Every mutation of the personalisation already passes through here to be made
+    /// reversible, so this is the one place that knows something changed.
+    @Published private(set) var revision = 0
+
     private var stack: [Step] = []
     private var hide: Task<Void, Never>?
 
@@ -40,6 +49,7 @@ final class Undoer: ObservableObject {
         if stack.count > Self.depth { stack.removeFirst() }
 
         banner = step
+        revision += 1
         hide?.cancel()
         hide = Task { [weak self] in
             try? await Task.sleep(for: Self.linger)
@@ -56,6 +66,7 @@ final class Undoer: ObservableObject {
         Task {
             await step.revert()
             undoing = false
+            revision += 1
         }
     }
 

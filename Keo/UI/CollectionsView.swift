@@ -3,6 +3,7 @@ import SwiftUI
 /// The Collections tab: the list, and everything that manages it.
 struct CollectionsView: View {
     let client: FreeboxClient
+    @EnvironmentObject private var undoer: Undoer
 
     @EnvironmentObject private var sync: CloudSync
     @State private var collections: [IndexStore.Collection] = []
@@ -81,6 +82,8 @@ struct CollectionsView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { SyncFootnote() }
         .task { await reload() }
+        // Pinning, or undoing one, can happen from another screen entirely.
+        .onChange(of: undoer.revision) { _, _ in Task { await reload() } }
         // A collection created on another device lands without a tap here: repaint on each
         // sync transition rather than waiting for the next visit.
         .onChange(of: sync.status) { Task { await reload() } }
