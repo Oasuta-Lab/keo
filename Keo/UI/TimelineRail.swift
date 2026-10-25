@@ -15,6 +15,9 @@ struct TimelineRail: View {
     private static let railWidth: CGFloat = 3
     private static let activeWidth: CGFloat = 7
     private static let touchWidth: CGFloat = 44
+    /// At rest the scrub owns only the rail itself; the full 44 pt comes once the finger is
+    /// committed to a drag.
+    private static let idleWidth: CGFloat = 16
 
     var body: some View {
         GeometryReader { geometry in
@@ -50,12 +53,24 @@ struct TimelineRail: View {
                 }
                 .allowsHitTesting(false)
             }
-            .contentShape(Rectangle())
-            .gesture(scrub(in: height, bars: bars))
+            .overlay(alignment: .trailing) {
+                // This strip used to be 44 pt wide at rest, over a third of the right photo
+                // column: every tap there jumped the timeline instead of opening the photo.
+                Color.clear
+                    .frame(width: dragging == nil ? Self.idleWidth : Self.touchWidth)
+                    .contentShape(Rectangle())
+                    .gesture(scrub(in: height, bars: bars))
+            }
             .overlay(alignment: .topTrailing) { bubble(bars: bars, height: height) }
         }
         .frame(width: Self.touchWidth)
         .padding(.trailing, 2)
+        // One detent per period crossed, not per touch frame: `dragging` already changes
+        // exactly once per boundary. Nil means the finger left, which deserves no feedback.
+        .sensoryFeedback(trigger: dragging) { _, now in now == nil ? nil : .selection }
+        // Invisible by nature and redundant with the section headers, which VoiceOver can
+        // already walk.
+        .accessibilityHidden(true)
     }
 
     // MARK: Pieces
@@ -86,7 +101,8 @@ struct TimelineRail: View {
     }
 
     private func scrub(in height: CGFloat, bars: [Bar]) -> some Gesture {
-        DragGesture(minimumDistance: 0)
+        // Non-zero: at 0 a plain tap fired `onChanged` once and teleported the grid.
+        DragGesture(minimumDistance: 8)
             .onChanged { value in
                 guard height > 0, let bar = bar(at: value.location.y / height, in: bars) else { return }
                 guard bar.id != dragging else { return }

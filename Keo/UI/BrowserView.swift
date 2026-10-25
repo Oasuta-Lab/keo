@@ -196,6 +196,7 @@ struct BrowserView: View {
                 if selecting { selectionBar }
             }
         }
+        .sensoryFeedback(.selection, trigger: selection.count)
         .task(id: source.id) { await load() }
         .task(id: source.id) { await refreshLibrary() }
         // Favourites and collection members arrived from another device land without a tap
@@ -317,6 +318,8 @@ struct BrowserView: View {
                 Spacer()
                 Button("Retirer") { dropMissing() }
                     .font(.footnote.weight(.medium))
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -412,33 +415,45 @@ struct BrowserView: View {
                     : Set(contents.selectable)
             }
             .font(.footnote)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
 
             Spacer()
 
             Button { toggleFavourite() } label: {
                 Label("Favori", systemImage: selectionIsFavourite ? "heart.fill" : "heart")
             }
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
             .disabled(selection.isEmpty)
 
             Button { choosingCollection = true } label: {
                 Label("Collection", systemImage: "square.stack")
             }
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
             .disabled(selection.isEmpty)
 
             Button { start(.photos) } label: {
                 Label("Photos", systemImage: "photo.badge.arrow.down")
             }
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
             .disabled(!selectionFitsPhotos || downloader.isRunning)
 
             Button { start(.share) } label: {
                 Label("Partager", systemImage: "square.and.arrow.up")
             }
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
             .disabled(selection.isEmpty || downloader.isRunning)
         }
         .labelStyle(.iconOnly)
         .font(.title3)
         .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        // The buttons now carry the height themselves; the old 12 pt would stack on top of
+        // their 44 and make the bar a third taller than it was.
+        .padding(.vertical, 2)
         .background(.bar)
     }
 
@@ -685,6 +700,9 @@ private struct Thumb: View {
             .overlay {
                 if selected == true { Color.black.opacity(0.25) }
             }
+            .accessibilityLabel(item.name)
+            .accessibilityValue(selected.map { $0 ? "Sélectionné" : "Non sélectionné" } ?? "")
+            .accessibilityAddTraits(.isImage)
             .task(id: item.path) {
                 // Warm what is coming before awaiting our own, so the queue fills in scroll order.
                 await ThumbnailPipeline.shared.prefetch(Array(lookahead), client: client)

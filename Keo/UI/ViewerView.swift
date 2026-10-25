@@ -15,20 +15,29 @@ struct ViewerView: View {
     /// Pinched in, the scroll view owns the pan — stay out of its way.
     @State private var zoomed = false
     @State private var favourite = false
+    /// Counts taps, not the flag: paging also rewrites `favourite`, and swiping between a
+    /// favourite and a plain photo must not buzz.
+    @State private var favouriteTaps = 0
     @State private var collections: [IndexStore.Collection] = []
     @State private var choosingCollection = false
     /// Capture dates discovered while opening a file, keyed by path.
     @State private var captured: [Item.ID: Date] = [:]
 
+    /// The dismiss drag rewrites `drag` on every touch frame and the body reads `current`
+    /// several times per pass; a linear scan of a 14 600-item folder does not fit in a frame.
+    private let indexByID: [Item.ID: Int]
+
     init(client: FreeboxClient, items: [Item], start: Item) {
         self.client = client
         self.items = items
+        indexByID = Dictionary(items.enumerated().map { ($0.element.id, $0.offset) },
+                               uniquingKeysWith: { first, _ in first })
         _currentID = State(initialValue: start.id)
     }
 
     private var current: Item? {
-        guard let currentID else { return items.first }
-        return items.first { $0.id == currentID } ?? items.first
+        guard let currentID, let index = indexByID[currentID] else { return items.first }
+        return items[index]
     }
 
     var body: some View {
@@ -56,6 +65,7 @@ struct ViewerView: View {
             }
             Button("Annuler", role: .cancel) {}
         }
+        .sensoryFeedback(.impact(flexibility: .soft), trigger: favouriteTaps)
         .task { collections = (try? await IndexStore.shared.collections()) ?? [] }
         // The heart reflects the photo on screen, so it has to follow the paging.
         .task(id: currentID) {
@@ -69,6 +79,7 @@ struct ViewerView: View {
         guard let current else { return }
         let next = !favourite
         favourite = next
+        favouriteTaps += 1
         Task { try? await IndexStore.shared.setFavourite([current], next) }
     }
 
@@ -108,6 +119,7 @@ struct ViewerView: View {
     private var chrome: some View {
         HStack(spacing: 12) {
             Button { dismiss() } label: { Glyph("xmark") }
+                .accessibilityLabel("Fermer")
 
             Spacer(minLength: 0)
 
@@ -144,8 +156,11 @@ struct ViewerView: View {
                 Glyph(favourite ? "heart.fill" : "heart", large: true)
                     .foregroundStyle(favourite ? AnyShapeStyle(.tint) : AnyShapeStyle(.white))
             }
+            .accessibilityLabel("Favori")
+            .accessibilityValue(favourite ? "Oui" : "Non")
 
             Button { choosingCollection = true } label: { Glyph("square.stack", large: true) }
+                .accessibilityLabel("Ajouter à une collection")
 
             Menu {
                 if let current {
@@ -161,6 +176,7 @@ struct ViewerView: View {
             } label: {
                 Glyph("square.and.arrow.down", large: true)
             }
+            .accessibilityLabel("Enregistrer ou partager")
             .disabled(downloader.isRunning)
         }
         .disabled(current == nil)

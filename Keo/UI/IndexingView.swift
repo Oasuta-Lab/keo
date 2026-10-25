@@ -217,6 +217,9 @@ struct UnindexedChip: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(.ultraThinMaterial, in: Capsule())
+            // The capsule is about 32 pt tall; the tap target has to reach 44 without the
+            // chip itself growing into the grid.
+            .contentShape(Capsule().inset(by: -8))
         }
         .buttonStyle(.plain)
     }
@@ -241,6 +244,9 @@ struct IndexingChip: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(.ultraThinMaterial, in: Capsule())
+            // The capsule is about 32 pt tall; the tap target has to reach 44 without the
+            // chip itself growing into the grid.
+            .contentShape(Capsule().inset(by: -8))
         }
         .buttonStyle(.plain)
     }
