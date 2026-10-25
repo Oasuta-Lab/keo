@@ -145,6 +145,67 @@ enum ReadBench {
         trace("cid: \(failed) illisibles")
     }
 
+    /// The decisive measurement: on pairs the current rule already made, do the two halves
+    /// carry Apple's shared identifier, and does it agree?
+    ///
+    /// The previous probe answered the wrong question. It sampled photos at random and found
+    /// an identifier on 80.8 % of them — which is a fact about how many photos are Live, not
+    /// about whether the identifier can be read. What decides the rule is this: of the pairs
+    /// Keo currently shows as one moment, how many would survive a switch to identity, and
+    /// how many are coincidences of name like the IMG_0988 the owner found.
+    static func pairs(folder: String, client: FreeboxClient, sample: Int = 60) async {
+        let contents: FolderContents
+        do {
+            contents = try await client.list(folder)
+        } catch {
+            trace("paires: listing failed \(folder): \(error.localizedDescription)")
+            return
+        }
+
+        let pairs = contents.companions.compactMap { still, video -> (Item, Item)? in
+            guard let photo = contents.media.first(where: { $0.id == still }) else { return nil }
+            return (photo, video)
+        }
+        guard !pairs.isEmpty else {
+            trace("paires: aucune paire dans \(folder)")
+            return
+        }
+        let pool = Array(pairs.shuffled().prefix(sample))
+        trace("paires: \(folder), \(pool.count) paires sur \(pairs.count)")
+
+        var agree = 0, differ = 0, stillOnly = 0, videoOnly = 0, neither = 0, unreadable = 0
+        for (still, video) in pool {
+            guard let head = try? await client.bytes(still.path, prefix: prefix) else {
+                unreadable += 1
+                continue
+            }
+            var photoID = ImageDecoding.contentIdentifier(prefix: head)
+            if photoID == nil, still.size > Int64(prefix),
+               let deeper = try? await client.bytes(still.path, prefix: deepPrefix) {
+                photoID = ImageDecoding.contentIdentifier(prefix: deeper)
+            }
+
+            let clipID = try? await VideoDate.contentIdentifier(fileSize: video.size) { range in
+                try await client.bytes(video.path, range: range)
+            }
+
+            switch (photoID, clipID ?? nil) {
+            case let (a?, b?) where a == b: agree += 1
+            case (_?, _?):
+                differ += 1
+                // Named, because this is the case the owner reported and the one worth
+                // seeing with your own eyes before trusting a rule built on it.
+                trace("paires: désaccord \(still.name) / \(video.name)")
+            case (_?, nil): stillOnly += 1
+            case (nil, _?): videoOnly += 1
+            case (nil, nil): neither += 1
+            }
+        }
+
+        trace("paires: identiques \(agree), différents \(differ), photo seule \(stillOnly), "
+            + "vidéo seule \(videoOnly), aucun des deux \(neither), illisibles \(unreadable)")
+    }
+
     /// The indexer's second window, so the measurement matches what it would really do.
     static let deepPrefix = 128 << 10
 

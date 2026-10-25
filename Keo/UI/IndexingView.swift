@@ -175,6 +175,12 @@ struct IndexingView: View {
                 }
                 .disabled(benching || indexer.state.isRunning)
 
+                Button(benching ? "Mesure en cours…" : "Vérifier les paires live",
+                       systemImage: "checkmark.seal") {
+                    verify(bench.path)
+                }
+                .disabled(benching || indexer.state.isRunning)
+
                 ForEach(benchResult, id: \.parallel) { run in
                     Text(run.line)
                         .font(.system(size: 11, design: .monospaced))
@@ -201,6 +207,14 @@ struct IndexingView: View {
         benching = true
         Task {
             await ReadBench.identifiers(folder: folder, client: client)
+            benching = false
+        }
+    }
+
+    private func verify(_ folder: String) {
+        benching = true
+        Task {
+            await ReadBench.pairs(folder: folder, client: client)
             benching = false
         }
     }

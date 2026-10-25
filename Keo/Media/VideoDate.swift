@@ -43,12 +43,12 @@ enum VideoDate {
     // MARK: - Driver
 
     /// Floor on every range request; a short clip's whole `moov` usually fits in one.
-    private static let chunk: Int64 = 64 << 10
+    static let chunk: Int64 = 64 << 10
     /// When the whole `moov` is at most this big, it is fetched in one request instead of
     /// hopping child by child. Covers virtually every phone clip.
-    private static let moovSlurp: Int64 = 512 << 10
+    static let moovSlurp: Int64 = 512 << 10
     /// A legitimate file resolves in 2–5 requests; past this something is wrong.
-    private static let maxRequests = 8
+    static let maxRequests = 8
 
     /// Fetches just enough of the file to decide. Returns the capture date, `nil` for the
     /// sure verdict "this file carries none", and throws `Undecided` (or the fetch's own
@@ -261,7 +261,7 @@ enum VideoDate {
 
     // MARK: - Atom plumbing
 
-    private enum Fourcc {
+    enum Fourcc {
         static let ftyp: UInt32 = 0x6674_7970
         static let styp: UInt32 = 0x7374_7970
         static let moov: UInt32 = 0x6D6F_6F76
@@ -282,14 +282,14 @@ enum VideoDate {
         static let day: UInt32 = 0xA964_6179
     }
 
-    private static let plausibleFirst: Set<UInt32> = [
+    static let plausibleFirst: Set<UInt32> = [
         Fourcc.ftyp, Fourcc.styp, Fourcc.moov, Fourcc.mdat,
         Fourcc.free, Fourcc.skip, Fourcc.wide, Fourcc.pnot, Fourcc.uuid,
     ]
 
-    private typealias Child = (type: UInt32, body: Range<Int64>)
+    typealias Child = (type: UInt32, body: Range<Int64>)
 
-    private enum Piece {
+    enum Piece {
         case box(type: UInt32, body: Int64, end: Int64)
         case need(Range<Int64>)
         case corrupt
@@ -298,7 +298,7 @@ enum VideoDate {
     /// Reads one atom header. Every guard here is what makes network bytes unable to crash
     /// or loop the walk: sizes below the header length, sizes past the parent, and 64-bit
     /// sizes that would overflow all land on `.corrupt`.
-    private static func piece(_ r: Reader, at offset: Int64, end parentEnd: Int64) -> Piece {
+    static func piece(_ r: Reader, at offset: Int64, end parentEnd: Int64) -> Piece {
         guard offset >= 0, parentEnd - offset >= 8 else { return .corrupt }
         guard let size32 = r.u32(at: offset), let type = r.u32(at: offset + 4) else {
             return .need(offset ..< min(offset + 16, parentEnd))
@@ -324,7 +324,7 @@ enum VideoDate {
     /// Lists a container's children. Corruption mid-container keeps what was already read —
     /// a broken trailing atom must not hide an earlier, intact `meta`. Missing bytes fail
     /// with the range to fetch. The hop cap bounds the walk no matter what the bytes say.
-    private static func walk(_ r: Reader, from start: Int64,
+    static func walk(_ r: Reader, from start: Int64,
                              to end: Int64) -> Walked {
         var kids: [Child] = []
         var cursor = start
@@ -340,12 +340,12 @@ enum VideoDate {
         return .kids(kids)
     }
 
-    private enum Walked {
+    enum Walked {
         case kids([Child])
         case need(Range<Int64>)
     }
 
-    private enum MetaStart {
+    enum MetaStart {
         case at(Int64)
         case bail(Scan)
     }
@@ -353,7 +353,7 @@ enum VideoDate {
     /// `meta` is a FullBox in ISO files (4 bytes of version/flags before the children) but a
     /// plain box in QuickTime ones. `hdlr` is the mandatory first child either way, so its
     /// position tells the two layouts apart.
-    private static func metaChildrenStart(_ r: Reader,
+    static func metaChildrenStart(_ r: Reader,
                                           _ meta: Range<Int64>) -> MetaStart {
         guard meta.upperBound - meta.lowerBound >= 12 else { return .bail(.absent) }
         guard let probe = r.u32(at: meta.lowerBound + 4) else {
@@ -364,7 +364,7 @@ enum VideoDate {
 
     // MARK: - Bytes
 
-    private struct Reader {
+    struct Reader {
         let slices: [Slice]
         let fileSize: Int64
 
@@ -430,5 +430,135 @@ enum VideoDate {
 private extension [(type: UInt32, body: Range<Int64>)] {
     func first(_ type: UInt32) -> Range<Int64>? {
         first(where: { $0.type == type })?.body
+    }
+}
+
+// MARK: - The Live Photo identifier
+
+extension VideoDate {
+    /// Same three-valued contract as `Scan`, carrying a string instead of a date. Kept
+    /// separate rather than made generic: the date path has earned its shape through several
+    /// real-file surprises, and a shared generic would put both at risk of one change.
+    enum Text: Equatable, Sendable {
+        case found(String)
+        case absent
+        case need(Range<Int64>)
+    }
+
+    /// `moov/meta` key `com.apple.quicktime.content.identifier` — the UUID a Live Photo's
+    /// video shares with its still. Walks exactly the atoms the creation date already walks,
+    /// so on a file being scanned for its date this costs no extra request.
+    static func contentIdentifier(fileSize: Int64,
+                                  fetch: (Range<Int64>) async throws -> Data) async throws
+    -> String? {
+        guard fileSize >= 16 else { return nil }
+        var slices: [Slice] = []
+        for _ in 0..<maxRequests {
+            switch scanIdentifier(slices, fileSize: fileSize) {
+            case .found(let text):
+                return text
+            case .absent:
+                return nil
+            case .need(let range):
+                let lower = max(0, range.lowerBound)
+                let upper = min(fileSize, max(range.upperBound, lower + chunk))
+                guard lower < upper else { throw Undecided() }
+                let data = try await fetch(lower ..< upper)
+                guard Int64(data.count) >= range.upperBound - lower else { throw Undecided() }
+                slices.append(Slice(offset: lower, data: data))
+            }
+        }
+        throw Undecided()
+    }
+
+    static func scanIdentifier(_ slices: [Slice], fileSize: Int64) -> Text {
+        let r = Reader(slices: slices, fileSize: fileSize)
+        var cursor: Int64 = 0
+        var hops = 0
+        while cursor + 8 <= fileSize {
+            hops += 1
+            guard hops <= 1_000 else { return .absent }
+            switch piece(r, at: cursor, end: fileSize) {
+            case .need(let range): return .need(range)
+            case .corrupt: return .absent
+            case .box(let type, let body, let end):
+                if cursor == 0, !plausibleFirst.contains(type) { return .absent }
+                if type == Fourcc.moov { return moovIdentifier(r, body: body, end: end) }
+                cursor = end
+            }
+        }
+        return .absent
+    }
+
+    private static func moovIdentifier(_ r: Reader, body: Int64, end: Int64) -> Text {
+        if end > body, end - body <= moovSlurp, r.bytes(at: body, count: Int(end - body)) == nil {
+            return .need(body ..< end)
+        }
+        let kids: [Child]
+        switch walk(r, from: body, to: end) {
+        case .need(let range): return .need(range)
+        case .kids(let found): kids = found
+        }
+        guard let meta = kids.first(Fourcc.meta) else { return .absent }
+
+        let start: Int64
+        switch metaChildrenStart(r, meta.lowerBound ..< meta.upperBound) {
+        case .bail: return .absent
+        case .at(let at): start = at
+        }
+        let inner: [Child]
+        switch walk(r, from: start, to: meta.upperBound) {
+        case .need(let range): return .need(range)
+        case .kids(let found): inner = found
+        }
+        guard let keys = inner.first(Fourcc.keys), let ilst = inner.first(Fourcc.ilst) else {
+            return .absent
+        }
+
+        guard let rawCount = r.u32(at: keys.lowerBound + 4) else {
+            return .need(keys.lowerBound ..< min(keys.lowerBound + 8, keys.upperBound))
+        }
+        guard rawCount <= 4_096, rawCount > 0 else { return .absent }
+
+        var index: UInt32?
+        var p = keys.lowerBound + 8
+        for i in 1...rawCount {
+            guard p + 8 <= keys.upperBound else { break }
+            guard let entrySize = r.u32(at: p) else { return .need(p ..< keys.upperBound) }
+            guard entrySize >= 8, Int64(entrySize) <= keys.upperBound - p else { break }
+            if entrySize > 8 {
+                guard let name = r.bytes(at: p + 8, count: Int(entrySize) - 8) else {
+                    return .need(p ..< keys.upperBound)
+                }
+                if String(decoding: name, as: UTF8.self)
+                    == "com.apple.quicktime.content.identifier" {
+                    index = UInt32(i)
+                    break
+                }
+            }
+            p += Int64(entrySize)
+        }
+        guard let index else { return .absent }
+
+        let entries: [Child]
+        switch walk(r, from: ilst.lowerBound, to: ilst.upperBound) {
+        case .need(let range): return .need(range)
+        case .kids(let found): entries = found
+        }
+        guard let entry = entries.first(index) else { return .absent }
+        let payload: [Child]
+        switch walk(r, from: entry.lowerBound, to: entry.upperBound) {
+        case .need(let range): return .need(range)
+        case .kids(let found): payload = found
+        }
+        guard let data = payload.first(Fourcc.data),
+              data.upperBound - data.lowerBound > 8 else { return .absent }
+        guard let text = r.bytes(at: data.lowerBound + 8,
+                                 count: Int(data.upperBound - data.lowerBound - 8)) else {
+            return .need(data.lowerBound ..< data.upperBound)
+        }
+        let value = String(decoding: text, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? .absent : .found(value)
     }
 }
