@@ -33,6 +33,10 @@ struct BrowserView: View {
     /// Position of each photo in the flat media array, so a cell can find its prefetch
     /// window without rebuilding `Array(enumerated())` per section per frame.
     @State private var mediaIndex: [Item.ID: Int] = [:]
+    @Namespace private var zoom
+    /// The cell the viewer flies back to. It follows the paging, so closing on the
+    /// twentieth photo returns to *that* cell and not to the one originally tapped.
+    @State private var anchor: Item.ID?
     @EnvironmentObject private var indexer: Indexer
     @State private var showingIndexing = false
     @State private var showingStats = false
@@ -131,6 +135,12 @@ struct BrowserView: View {
                     }
                 }
             }
+            // A zoom back to a cell that scrolled off screen has nowhere to land, so the
+            // grid follows the paging before the transition plays.
+            .onChange(of: viewing) { previous, now in
+                guard previous != nil, now == nil, let anchor else { return }
+                proxy.scrollTo(anchor, anchor: .center)
+            }
             .coordinateSpace(name: Self.gridSpace)
             .onPreferenceChange(SectionTopKey.self) { tops in
                 cursor.id = Self.topmost(of: tops)
@@ -184,7 +194,8 @@ struct BrowserView: View {
         .fullScreenCover(item: $viewing) { item in
             ViewerView(client: client,
                        items: contents.media.isEmpty ? [item] : contents.media,
-                       start: item)
+                       start: item, anchor: $anchor)
+                .navigationTransition(.zoom(sourceID: anchor ?? item.id, in: zoom))
         }
         .sheet(item: $downloader.share) { payload in
             ShareSheet(urls: payload.urls)
@@ -267,6 +278,8 @@ struct BrowserView: View {
                         }
                 }
                 .buttonStyle(.plain)
+                .id(item.id)
+                .matchedTransitionSource(id: item.id, in: zoom)
                 .contextMenu { itemActions(item) }
             }
         }
@@ -542,6 +555,7 @@ struct BrowserView: View {
         if selecting {
             if selection.contains(item) { selection.remove(item) } else { selection.insert(item) }
         } else {
+            anchor = item.id
             viewing = item
         }
     }

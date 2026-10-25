@@ -753,6 +753,23 @@ parseur. N'écrit rien, ni sur le NAS ni dans l'index.
 Un seul passage ne suffit pas à conclure. La constante ne bouge que sur plusieurs passages
 indépendants qui disent la même chose.
 
+## Transition de zoom grille ↔ photo
+
+La photo sort de sa vignette et y retourne, au lieu d'un fondu au noir : `matchedTransitionSource`
+sur chaque cellule, `navigationTransition(.zoom(sourceID:in:))` sur la visionneuse. API iOS 18,
+rien à conditionner puisque c'est la cible du projet.
+
+Deux détails sans lesquels ça ne marche qu'à moitié :
+
+- **La cellule d'arrivée suit la pagination.** La visionneuse renvoie la photo courante, donc
+  fermer sur la vingtième photo revient sur *celle-là*, pas sur celle qu'on avait touchée.
+- **La grille s'y repositionne avant que la transition joue.** Un zoom vers une cellule sortie
+  de l'écran n'a nulle part où atterrir.
+
+Le geste de fermeture maison et la transition système veulent piloter la même animation : la
+photo est rendue à son cadre naturel avant `dismiss()`, sinon le zoom démarre d'une image déjà
+réduite par le glissement.
+
 ## Ce qui se réévalue pendant le scroll
 
 Trois choses se cumulaient sur la grille de 14 600 éléments, et toutes les trois pendant le

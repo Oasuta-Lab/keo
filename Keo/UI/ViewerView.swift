@@ -6,6 +6,8 @@ import SwiftUI
 struct ViewerView: View {
     let client: FreeboxClient
     let items: [Item]
+    /// Reported back so the grid knows which cell to fly home to, and scrolls it into view.
+    @Binding var anchor: Item.ID?
 
     @EnvironmentObject private var downloader: Downloader
     @Environment(\.dismiss) private var dismiss
@@ -29,9 +31,10 @@ struct ViewerView: View {
     /// several times per pass; a linear scan of a 14 600-item folder does not fit in a frame.
     private let indexByID: [Item.ID: Int]
 
-    init(client: FreeboxClient, items: [Item], start: Item) {
+    init(client: FreeboxClient, items: [Item], start: Item, anchor: Binding<Item.ID?>) {
         self.client = client
         self.items = items
+        _anchor = anchor
         indexByID = Dictionary(items.enumerated().map { ($0.element.id, $0.offset) },
                                uniquingKeysWith: { first, _ in first })
         _currentID = State(initialValue: start.id)
@@ -73,6 +76,8 @@ struct ViewerView: View {
         .sensoryFeedback(.impact(flexibility: .soft), trigger: favouriteTaps)
         .task { collections = (try? await IndexStore.shared.collections()) ?? [] }
         // The heart reflects the photo on screen, so it has to follow the paging.
+        // Paging moves the cell the grid will zoom back to.
+        .onChange(of: currentID) { _, now in anchor = now }
         .task(id: currentID) {
             guard let current else { return }
             favourite = (try? await IndexStore.shared.isFavourite(current)) ?? false
@@ -213,6 +218,10 @@ struct ViewerView: View {
             .onEnded { value in
                 guard !zoomed, drag != .zero else { return }
                 if value.translation.height > 140 || value.predictedEndTranslation.height > 400 {
+                    // Hand the photo back at its natural frame first: the zoom transition
+                    // animates from what it is given, and a frame already shrunk by the drag
+                    // makes it start from the wrong size.
+                    drag = .zero
                     dismiss()
                 } else {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { drag = .zero }
