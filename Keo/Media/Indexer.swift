@@ -9,11 +9,54 @@ import UIKit
 /// queue the open folder jumps to the front of.
 /// Lifecycle tracing, debug builds only. Three rounds of plausible-but-wrong fixes is enough:
 /// the next change to this file should be driven by what the device actually reports.
+///
+/// Also written to the app container, because `devicectl … --console` keeps dying — the
+/// session ends the moment the app is relaunched from the home screen, and it has already
+/// swallowed two measurements. The file survives that, and comes back with:
+///
+///     xcrun devicectl device copy from --device <UDID> \
+///       --domain-type appDataContainer --domain-identifier com.oasutalab.keo \
+///       --source "Library/Application Support/Keo/trace.log" --destination /tmp/
 func trace(_ message: @autoclosure () -> String) {
     #if DEBUG
-    print("[keo] \(message())")
+    let line = "[keo] \(message())"
+    print(line)
+    TraceFile.append(line)
     #endif
 }
+
+#if DEBUG
+/// Append-only, size-capped, and silent on failure: a diagnostic that can break the app it
+/// diagnoses is worse than no diagnostic.
+private enum TraceFile {
+    nonisolated(unsafe) private static var handle: FileHandle?
+    private static let lock = NSLock()
+    private static let cap: UInt64 = 2 << 20
+
+    static func append(_ line: String) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if handle == nil {
+            guard let folder = try? FileManager.default.url(
+                for: .applicationSupportDirectory, in: .userDomainMask,
+                appropriateFor: nil, create: true
+            ).appendingPathComponent("Keo", isDirectory: true) else { return }
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let url = folder.appendingPathComponent("trace.log")
+            if !FileManager.default.fileExists(atPath: url.path) {
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+            }
+            handle = try? FileHandle(forWritingTo: url)
+            // Start over rather than grow without bound; nobody reads a week-old trace.
+            if let size = try? handle?.seekToEnd(), size > cap {
+                try? handle?.truncate(atOffset: 0)
+            }
+        }
+        try? handle?.write(contentsOf: Data((line + "\n").utf8))
+    }
+}
+#endif
 
 @MainActor
 final class Indexer: ObservableObject {

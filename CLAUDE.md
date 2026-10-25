@@ -75,6 +75,18 @@ xcrun devicectl device process launch --device <UDID> --console com.oasutalab.ke
   2>&1 | grep -a --line-buffered "\[keo\]"
 ```
 
+Les traces `[keo]` sont aussi écrites dans le conteneur de l'app, parce que la session
+`--console` meurt dès que l'app est relancée depuis l'écran d'accueil. Les récupérer :
+
+```sh
+xcrun devicectl device copy from --device <UDID> \
+  --domain-type appDataContainer --domain-identifier com.oasutalab.keo \
+  --source "Library/Application Support/Keo/trace.log" --destination /tmp/
+```
+
+Le même mécanisme sort `index.sqlite` quand il faut savoir ce que l'appareil a vraiment en
+base plutôt que le demander.
+
 - Le `CFBundleVersion` est le nombre de commits, tamponné au build. Ne pas le saisir à la main.
 - **Ne jamais réinstaller pendant qu'une mesure ou un test tourne sur l'appareil** :
   l'installation tue le processus et la session console avec. Ça a déjà fait perdre une mesure.
