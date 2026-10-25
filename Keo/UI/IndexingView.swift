@@ -169,6 +169,12 @@ struct IndexingView: View {
                 }
                 .disabled(benching || indexer.state.isRunning)
 
+                Button(benching ? "Mesure en cours…" : "Mesurer l'identifiant live",
+                       systemImage: "livephoto") {
+                    identify(bench.path)
+                }
+                .disabled(benching || indexer.state.isRunning)
+
                 ForEach(benchResult, id: \.parallel) { run in
                     Text(run.line)
                         .font(.system(size: 11, design: .monospaced))
@@ -186,6 +192,16 @@ struct IndexingView: View {
                    + "pour ne pas mesurer le cache de la box. N'écrit rien, ni sur le NAS ni "
                    + "dans l'index.")
             }
+        }
+    }
+
+    /// The gate before Live Photos are paired on Apple's identifier instead of on names.
+    /// One tap, then read the `[keo] cid:` lines off the device.
+    private func identify(_ folder: String) {
+        benching = true
+        Task {
+            await ReadBench.identifiers(folder: folder, client: client)
+            benching = false
         }
     }
 

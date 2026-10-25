@@ -49,6 +49,22 @@ enum ImageDecoding {
         return captureDate(in: source)
     }
 
+    /// The UUID Apple writes into both halves of a Live Photo — MakerNote tag 17 on the
+    /// still, `com.apple.quicktime.content.identifier` on the video. Two files carrying the
+    /// same one *are* a pair; the shared filename is only Apple's naming convention on top.
+    ///
+    /// It sits in the same metadata blob as the capture date, so reading it costs nothing
+    /// beyond the prefix already fetched — provided the blob survives truncation, which is
+    /// what `ReadBench.identifiers` is there to measure before any of this is relied on.
+    static func contentIdentifier(prefix: Data) -> String? {
+        guard let source = CGImageSourceCreateWithData(prefix as CFData, sourceOptions),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any],
+              let apple = properties[kCGImagePropertyMakerAppleDictionary] as? [CFString: Any]
+        else { return nil }
+        return apple["17" as CFString] as? String
+    }
+
     private static func captureDate(in source: CGImageSource) -> Date? {
         guard let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
                 as? [CFString: Any] else {

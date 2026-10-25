@@ -86,6 +86,68 @@ enum ReadBench {
         return runs
     }
 
+    /// The gate before pairing Live Photos on Apple's identifier rather than on filenames.
+    ///
+    /// The identifier lives in the same metadata blob as the capture date, so in principle a
+    /// 24 KB prefix that yields one yields the other. "In principle" is what this repository
+    /// has learned to distrust: the date itself was found in only 38.9 % of 4 KB prefixes
+    /// before anyone measured it. So it is measured, on real photos, before a line of the
+    /// pairing rule is written.
+    ///
+    /// Reads nothing the indexer does not already read, and writes nothing anywhere.
+    static func identifiers(folder: String, client: FreeboxClient, sample: Int = 120) async {
+        let contents: FolderContents
+        do {
+            contents = try await client.list(folder)
+        } catch {
+            trace("cid: listing failed \(folder): \(error.localizedDescription)")
+            return
+        }
+
+        let stills = contents.media.filter { $0.kind == .image }
+        guard !stills.isEmpty else {
+            trace("cid: aucune photo dans \(folder)")
+            return
+        }
+        let pool = Array(stills.shuffled().prefix(sample))
+        trace("cid: \(folder), \(pool.count) photos sur \(stills.count)")
+
+        var dated = 0, identified = 0, deepDated = 0, deepIdentified = 0, failed = 0
+        for item in pool {
+            guard let head = try? await client.bytes(item.path, prefix: prefix) else {
+                failed += 1
+                continue
+            }
+            let date = ImageDecoding.captureDate(prefix: head)
+            let cid = ImageDecoding.contentIdentifier(prefix: head)
+            if date != nil { dated += 1 }
+            if cid != nil { identified += 1 }
+
+            // The second window the indexer already falls back to, so the comparison is
+            // against what Keo actually does and not against a prefix it never reads.
+            guard date == nil || cid == nil, item.size > Int64(prefix),
+                  let deeper = try? await client.bytes(item.path, prefix: deepPrefix) else {
+                if date != nil { deepDated += 1 }
+                if cid != nil { deepIdentified += 1 }
+                continue
+            }
+            if ImageDecoding.captureDate(prefix: deeper) != nil { deepDated += 1 }
+            if ImageDecoding.contentIdentifier(prefix: deeper) != nil { deepIdentified += 1 }
+        }
+
+        let n = max(pool.count - failed, 1)
+        trace(String(format: "cid: 24 Ko — date %d/%d (%.1f %%), identifiant %d/%d (%.1f %%)",
+                     dated, n, Double(dated) * 100 / Double(n),
+                     identified, n, Double(identified) * 100 / Double(n)))
+        trace(String(format: "cid: 128 Ko — date %d/%d (%.1f %%), identifiant %d/%d (%.1f %%)",
+                     deepDated, n, Double(deepDated) * 100 / Double(n),
+                     deepIdentified, n, Double(deepIdentified) * 100 / Double(n)))
+        trace("cid: \(failed) illisibles")
+    }
+
+    /// The indexer's second window, so the measurement matches what it would really do.
+    static let deepPrefix = 128 << 10
+
     private static func measure(_ items: [Item], parallel: Int,
                                 client: FreeboxClient) async -> Run {
         let started = Date()
