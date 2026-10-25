@@ -37,10 +37,10 @@ swiftc -swift-version 6 -D DEBUG \
   Keo/Media/IndexStore.swift \
   Keo/Media/VideoDate.swift Keo/Media/WidgetManifest.swift Keo/Sync/SyncModel.swift \
   Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift Keo/UI/BrowserSource.swift \
-  Keo/UI/DeepLink.swift \
+  Keo/UI/DeepLink.swift Keo/UI/HumanDate.swift \
   Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
   Tests/sync.swift Tests/search.swift Tests/covers.swift Tests/notes.swift \
-  Tests/stats.swift Tests/widget.swift Tests/links.swift Tests/live.swift \
+  Tests/stats.swift Tests/widget.swift Tests/links.swift Tests/live.swift Tests/dates.swift \
   -o /tmp/keocheck && /tmp/keocheck
 ```
 
@@ -50,6 +50,11 @@ Puis compiler pour l'appareil — la vérification ci-dessus ne compile aucun fi
 xcodebuild -project Keo.xcodeproj -scheme Keo -configuration Debug \
   -destination 'generic/platform=iOS' build 2>&1 | grep -E "error:|\*\* BUILD"
 ```
+
+Un fichier de `Tests/` ne doit pas porter le nom d'un fichier de `Keo/` à la casse près :
+le système de fichiers est insensible à la casse, les deux produisent le même fichier objet,
+et l'édition de liens échoue sur des symboles introuvables sans jamais nommer la cause.
+`DeepLink.swift` et `HumanDate.swift` ont chacun coûté cette erreur.
 
 Toute logique non triviale ajoutée laisse une vérification derrière elle, dans `Tests/`, en
 français, sur le vrai SQLite quand c'est du stockage. Pas de framework, pas de fixtures.

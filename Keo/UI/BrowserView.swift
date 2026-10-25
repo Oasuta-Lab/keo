@@ -101,10 +101,13 @@ struct BrowserView: View {
                                 .buttonStyle(.plain)
                                 .disabled(selecting)
                                 .contextMenu {
+                                    // Files' vocabulary, not a second "this matters" metaphor
+                                    // beside the heart. Pinning and favouriting are different
+                                    // verbs and had been wearing the same costume.
                                     Button(pinned.contains(folder.path)
-                                           ? "Retirer des raccourcis" : "Ajouter aux raccourcis",
+                                           ? "Désépingler" : "Épingler",
                                            systemImage: pinned.contains(folder.path)
-                                           ? "star.slash" : "star") {
+                                           ? "pin.slash" : "pin") {
                                         togglePin(folder)
                                     }
                                     noteAction(folder)
@@ -344,7 +347,7 @@ struct BrowserView: View {
             let on = !pinned.contains(folder.path)
             try? await IndexStore.shared.setShortcut(folder, on)
             await refreshLibrary()
-            undoer.record(on ? "« \(folder.name) » épinglé" : "« \(folder.name) » dépinglé") {
+            undoer.record(on ? "« \(folder.name) » épinglé" : "« \(folder.name) » désépinglé") {
                 try? await IndexStore.shared.setShortcut(folder, !on)
             }
         }
@@ -448,13 +451,36 @@ struct BrowserView: View {
             ProgressView()
         } else if let error {
             ContentUnavailableView("Connexion impossible", systemImage: "externaldrive.badge.xmark",
-                                   description: Text(error))
+                                   description: Text("La Freebox ne répond pas. Ce que Keo a "
+                                                   + "déjà lu reste consultable — ce dossier-ci "
+                                                   + "n'a simplement jamais été vu.\n\n" + error))
         } else if contents.isEmpty {
             if source == .favourites, sync.status == .recovering {
                 // Empty because nothing has arrived yet, not because there is nothing.
                 SyncRecoveryView()
             } else {
-                ContentUnavailableView("Dossier vide", systemImage: "folder")
+                // Vocabulary follows the place, not the storage underneath. The most personal
+                // tab in the app used to greet an empty library with "Dossier vide" and a
+                // folder icon — filesystem words for something that is not a folder.
+                switch source {
+                case .favourites:
+                    ContentUnavailableView {
+                        Label("Aucun favori pour l'instant", systemImage: "heart")
+                    } description: {
+                        Text("Un cœur en plein écran, et la photo t'attendra ici.")
+                    }
+                case .collection:
+                    ContentUnavailableView {
+                        Label("Rien ici pour l'instant", systemImage: "square.stack")
+                    } description: {
+                        Text("Ajoute des photos depuis la grille ou le plein écran : "
+                           + "sélection, puis Collection.")
+                    }
+                case .results:
+                    ContentUnavailableView("Rien trouvé", systemImage: "magnifyingglass")
+                case .folder:
+                    ContentUnavailableView("Ce dossier est vide", systemImage: "folder")
+                }
             }
         }
     }
@@ -462,42 +488,42 @@ struct BrowserView: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
+            if !selecting, contents.selectableCount > 0 {
+                Button("Sélectionner", systemImage: "checkmark.circle") { selecting = true }
+                    .labelStyle(.iconOnly)
+            }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
             if selecting {
                 Button("OK") {
                     selecting = false
                     selection = []
                 }
-            } else {
+            } else if contents.selectableCount > 0 {
+                // Nothing but what belongs to the grid in front of you. Indexing, statistics
+                // and signing out used to live here, in the sort menu of every folder — the
+                // machinery on every screen is what makes an app feel like an admin console.
+                // They have a room of their own now.
                 Menu {
-                    if contents.selectableCount > 0 {
-                        Button("Sélectionner", systemImage: "checkmark.circle") { selecting = true }
+                    Picker("Trier", selection: $order) {
+                        ForEach(ItemOrder.allCases, id: \.self) { option in
+                            Label(option.label, systemImage: option.systemImage).tag(option)
+                        }
+                    }
 
-                        Picker("Trier", selection: $order) {
-                            ForEach(ItemOrder.allCases, id: \.self) { option in
+                    if order != .name {
+                        Picker("Regrouper", selection: $granularity) {
+                            ForEach(Granularity.allCases, id: \.self) { option in
                                 Label(option.label, systemImage: option.systemImage).tag(option)
                             }
                         }
-
-                        if order != .name {
-                            Picker("Regrouper", selection: $granularity) {
-                                ForEach(Granularity.allCases, id: \.self) { option in
-                                    Label(option.label, systemImage: option.systemImage)
-                                        .tag(option)
-                                }
-                            }
-                        }
                     }
-                    Divider()
-                    Button("Indexation de la bibliothèque…", systemImage: "square.stack.3d.up") {
-                        showingIndexing = true
-                    }
-
+                    // Temporary: statistics move to the home screen's Bibliothèque card in
+                    // the next step. Leaving them unreachable in between would make this
+                    // change un-shippable on its own.
                     if source.isRoot {
-                        Button("Statistiques…", systemImage: "chart.bar") {
-                            showingStats = true
-                        }
-
                         Divider()
+                        Button("Statistiques…", systemImage: "chart.bar") { showingStats = true }
                         Button("Déconnexion", systemImage: "rectangle.portrait.and.arrow.right",
                                role: .destructive) { store.signOut() }
                     }

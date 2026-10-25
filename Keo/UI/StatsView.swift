@@ -90,7 +90,7 @@ struct StatsView: View {
 
             if let first = stats.firstCapture {
                 row { open(day: first, title: label(first)) } label: {
-                    LabeledContent("Première photo") { Text(label(first)) }
+                    LabeledContent("Première photo") { Text(HumanDate.origin(first)) }
                 }
             }
 
@@ -198,7 +198,7 @@ struct StatsView: View {
                 Text(subtree.name).font(.subheadline.weight(.medium)).lineLimit(1)
                 Spacer()
                 if subtree.media > 0 {
-                    Text("\(subtree.media.formatted()) médias")
+                    Text("\(subtree.media.formatted()) éléments")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }

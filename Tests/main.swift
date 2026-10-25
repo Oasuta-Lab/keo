@@ -61,6 +61,7 @@ func checkNothingWritesToTheNAS() {
 
 checkNothingWritesToTheNAS()
 checkDeepLinks()
+checkHumanDates()
 
 // MARK: - Le jeton d'application se synchronise
 

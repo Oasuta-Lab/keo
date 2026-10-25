@@ -11,7 +11,7 @@ struct ShortcutsWidget: Widget {
         StaticConfiguration(kind: "KeoShortcuts", provider: ShortcutsProvider()) { entry in
             ShortcutsView(entry: entry)
         }
-        .configurationDisplayName("Raccourcis Keo")
+        .configurationDisplayName("Épingles Keo")
         .description("Les dossiers épinglés, un appui pour y aller.")
         .supportedFamilies([.systemMedium, .systemLarge])
         .contentMarginsDisabled()

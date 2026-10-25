@@ -27,7 +27,7 @@ struct IndexingView: View {
                               systemImage: "checkmark.circle")
                             .foregroundStyle(.secondary)
                     } else {
-                        Label("Jamais lancée", systemImage: "clock.badge.questionmark")
+                        Label("Pas encore commencée", systemImage: "clock.badge.questionmark")
                             .foregroundStyle(.secondary)
                     }
                 } header: {
@@ -150,7 +150,7 @@ struct IndexingView: View {
             Text("Banc d'essai (debug)")
         } footer: {
             if let bench {
-                Text("Lit des prefixes de 24 Ko dans « \(bench.path) » (\(bench.count) médias) "
+                Text("Lit des prefixes de 24 Ko dans « \(bench.path) » (\(bench.count) photos et vidéos) "
                    + "à plusieurs niveaux de parallélisme, chacun sur des fichiers différents "
                    + "pour ne pas mesurer le cache de la box. N'écrit rien, ni sur le NAS ni "
                    + "dans l'index.")
@@ -171,7 +171,7 @@ struct IndexingView: View {
     private var rebuildWarning: String {
         let dates = knownCount.formatted()
         return "Les \(dates) dates déjà lues seront effacées, puis chaque photo sera relue "
-             + "une par une sur le NAS. Comptez plusieurs minutes par millier de photos.\n\n"
+             + "une par une sur le NAS. Compte plusieurs minutes par millier de photos.\n\n"
              + "À ne faire que si les dates affichées sont fausses. Pour simplement détecter "
              + "des photos ajoutées, « Revérifier tous les dossiers » suffit et ne relit rien."
     }

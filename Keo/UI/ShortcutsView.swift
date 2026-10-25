@@ -19,10 +19,10 @@ struct ShortcutsView: View {
                         SyncRecoveryView()
                     } else {
                         ContentUnavailableView {
-                            Label("Aucun raccourci", systemImage: "star")
+                            Label("Rien d'épinglé", systemImage: "pin")
                         } description: {
                             Text("Garde sous la main les dossiers où tu reviens. Appui long sur un "
-                               + "dossier dans Parcourir, puis « Ajouter aux raccourcis ».")
+                               + "dossier dans Parcourir, puis « Épingler ».")
                         }
                     }
                 }
@@ -50,7 +50,7 @@ struct ShortcutsView: View {
                     }
                 }
                 .swipeActions(edge: .trailing) {
-                    Button("Retirer", systemImage: "star.slash", role: .destructive) {
+                    Button("Désépingler", systemImage: "pin.slash", role: .destructive) {
                         Task {
                             try? await IndexStore.shared.setShortcut(folder, false)
                             await reload()
@@ -62,7 +62,7 @@ struct ShortcutsView: View {
                 }
             }
         }
-        .navigationTitle("Raccourcis")
+        .navigationTitle("Épinglés")
         .navigationDestination(for: BrowserSource.self) { destination in
             BrowserView(client: client, source: destination)
         }
@@ -82,7 +82,7 @@ struct ShortcutsView: View {
             return parent
         }
         let weight = stats.bytes.map { " · \($0.formatted(.byteCount(style: .file)))" } ?? ""
-        return "\(parent) — \(count.formatted()) médias\(weight)"
+        return "\(parent) — \(count.formatted()) éléments\(weight)"
     }
 
     private func reload() async {

@@ -154,7 +154,7 @@ struct SearchView: View {
             }
         } else if results.isEmpty, query == searched {
             ContentUnavailableView {
-                Label("Aucun résultat", systemImage: "magnifyingglass")
+                Label("Rien trouvé", systemImage: "magnifyingglass")
             } description: {
                 Text(scope)
             } actions: {
@@ -167,7 +167,7 @@ struct SearchView: View {
 
     private var scope: String {
         indexedFolders == 0
-            ? "Rien n'est encore indexé : lancez une analyse pour pouvoir chercher."
+            ? "Rien n'est encore indexé : lance une analyse pour pouvoir chercher."
             : "La recherche porte sur les \(indexedFolders) dossiers déjà indexés. "
               + "Un dossier jamais parcouru n'apparaîtra pas."
     }

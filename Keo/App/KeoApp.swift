@@ -80,7 +80,7 @@ private struct Shelf: View {
                 }
             } label: {
                 // A tab bar fills its symbols by default; outline reads lighter.
-                Label("Raccourcis", systemImage: "star").environment(\.symbolVariants, .none)
+                Label("Épinglés", systemImage: "pin").environment(\.symbolVariants, .none)
             }
 
             Tab(value: Place.favourites) {
