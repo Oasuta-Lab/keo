@@ -537,6 +537,29 @@ Deux choix à connaître :
 
 Les fichiers sans date vont à la fin, pas au 1ᵉʳ janvier 1970.
 
+## Banc d'essai des lectures
+
+`Indexer.parallel` a longtemps valu 3 par prudence, sans jamais avoir été vérifié. Le bon
+nombre est une propriété de la box et du réseau, pas du code : il se mesure. `ReadBench`
+(builds debug, bouton en bas de l'écran Indexation) lit les mêmes prefixes de 24 Ko que
+l'indexeur, à plusieurs niveaux de parallélisme, et trace le débit sur la console.
+
+Trois précautions, chacune apprise en lisant un résultat faux :
+
+- **Une tranche de fichiers par niveau.** Rejouer les mêmes fichiers d'un niveau à l'autre
+  mesure le cache de la box, et chaque niveau paraît rapide dans l'ordre où il est passé.
+- **Pool mélangé.** La première version gardait l'ordre de la liste, donc relancer la mesure
+  retombait sur exactement les mêmes photos — le second passage a donné 243 f/s au lieu de 52,
+  avec une courbe qui ne fait plus que monter. C'était le cache, pas la box.
+- **Ordre des niveaux tiré au sort.** Sinon une dérive du réseau pendant la mesure flatte
+  systématiquement les niveaux passés en premier.
+
+Photos uniquement : la date d'une vidéo coûte un nombre variable de requêtes et mesurerait le
+parseur. N'écrit rien, ni sur le NAS ni dans l'index.
+
+Un seul passage ne suffit pas à conclure. La constante ne bouge que sur plusieurs passages
+indépendants qui disent la même chose.
+
 ## Tenue à l'échelle
 
 La galerie est supposée très grande. Ce qui a été fait pour ça :
