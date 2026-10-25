@@ -80,6 +80,7 @@ actor IndexStore {
         relistAfterListingChange()
         markLivePairsEverywhere()
         readIdentitiesAfterRuleChange()
+        retryDatelessVideos()
         repairKinds()
         migrateFromJSON(in: folder)
         // Last, deliberately: the JSON migration above re-inserts paths recorded by a build
@@ -618,6 +619,37 @@ actor IndexStore {
             // Only the stamp: `read = 1` is untouched, so no photo is read a second time.
             try exec("UPDATE folder SET mtime = NULL")
             try setValue(Self.listingVersion, forKey: "listingVersion")
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+        }
+    }
+
+    /// Re-reads the videos the index holds without a date.
+    ///
+    /// Measured on 120 real dateless files: 111 genuinely carry no capture date — they are
+    /// screenshots, downloads, received images, and no window will ever find one. But **7 of
+    /// the 8 videos read perfectly today**, so their blank is a past failure, not a fact
+    /// about the file: a dropped read or a shorted range at the moment they were indexed.
+    ///
+    /// Videos only, deliberately. Re-queueing every dateless file would re-read 1 584 of them
+    /// to recover the hundred that are videos; this re-reads the hundred.
+    private static let videoRetryVersion: Int64 = 1
+
+    private func retryDatelessVideos() {
+        guard let seen = try? value(forKey: "videoRetryVersion") ?? 0,
+              seen < Self.videoRetryVersion else { return }
+        do {
+            try exec("BEGIN IMMEDIATE")
+            try exec("""
+                UPDATE file SET read = 0
+                WHERE kind = \(Item.Kind.video.code) AND read = 1 AND capture IS NULL
+                """)
+            try exec("""
+                UPDATE folder SET mtime = NULL WHERE id IN
+                (SELECT DISTINCT folder_id FROM file WHERE read = 0)
+                """)
+            try setValue(Self.videoRetryVersion, forKey: "videoRetryVersion")
             try exec("COMMIT")
         } catch {
             try? exec("ROLLBACK")

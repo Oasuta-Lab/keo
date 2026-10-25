@@ -1320,6 +1320,42 @@ Deux choix à connaître :
 
 Les fichiers sans date vont à la fin, pas au 1ᵉʳ janvier 1970.
 
+## Ce que « sans date » veut vraiment dire
+
+Mesuré sur 120 fichiers tirés au sort parmi les 1 584 que l'index tient pour lus et sans date :
+
+| Verdict | Nombre |
+|---|---|
+| Fichier entier lu, aucune date | **111** |
+| Date lisible aujourd'hui, donc échec passé | 7 (toutes des vidéos) |
+| Date entre 128 et 512 Ko | 1 |
+| Aucune date dans les atomes | 1 |
+
+**92,5 % n'ont réellement aucune date de prise de vue** — 94 `.jpg`, 7 `.png`, 8 `.jpeg` : des
+captures d'écran, des images reçues, des téléchargements. Aucune fenêtre de lecture ne la
+trouvera, parce qu'elle n'existe pas. C'est un résultat utile : il clôt la question.
+
+**Sept vidéos sur huit se lisent pourtant parfaitement aujourd'hui.** Leur blanc n'est pas un
+fait sur le fichier mais un échec au moment de l'indexation — lecture coupée, plage tronquée.
+`videoRetryVersion` les remet en file, les vidéos seulement : relire les 1 584 pour récupérer
+la centaine qui sont des vidéos coûterait vingt fois le gain.
+
+### Deux pistes écartées, avec leurs chiffres
+
+- **Une troisième fenêtre de 512 Ko** récupérerait 1 fichier sur 120. Il faudrait la payer sur
+  *tous* les échecs des deux premières, soit ~800 Mo de lecture pour une quinzaine de dates.
+- **La date dans le nom de fichier** (`IMG_20190714_103000.jpg`) ne concerne que 5 fichiers sur
+  120 — et c'est **une autre nature de vérité**. Une date d'étiquette n'est pas une date de
+  prise de vue, et les mélanger silencieusement abîmerait la seule chose que cet index promet.
+  Le parseur existe et est testé ; il n'alimente que le banc d'essai.
+
+## Les 227 à une face, jugées
+
+Mesuré sur la bibliothèque entière : **172 dé-appariées, 5 gardées, 0 sans date comparable**.
+Les gardées sont toutes à **moins de deux minutes** d'écart ; la plus serrée des dé-appariées
+est à **14,5 jours**, et plusieurs dépassent les mille jours. Le seuil de 16 h est loin des
+données des deux côtés : il n'y avait pas de zone grise à arbitrer.
+
 ## Indexer sans être interrompu
 
 La demande était « que l'indexation continue en arrière-plan ou en veille ». La recherche a
