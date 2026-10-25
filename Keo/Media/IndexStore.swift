@@ -78,6 +78,9 @@ actor IndexStore {
         markLivePairsEverywhere()
         repairKinds()
         migrateFromJSON(in: folder)
+        // Last, deliberately: the JSON migration above re-inserts paths recorded by a build
+        // that had no exclusion rule at all, so the cleanup has to run after it.
+        dropExcludedAfterRuleChange()
     }
 
     private static let schema = """
@@ -570,6 +573,48 @@ actor IndexStore {
         }
     }
 
+    /// Bumped when `FolderExclusion` changes. What the walk no longer descends into must also
+    /// leave the index, or the counts, the weights, the statistics and the search keep showing
+    /// dev detritus indexed by an earlier version — the owner's index held 4 799 folders when
+    /// the rule was written. One scan of `folder`, once.
+    ///
+    /// Only `folder` rows are deleted; `file` follows by cascade. Favourites, collections,
+    /// shortcuts and notes are keyed on the path and hold no foreign key to `folder`: they are
+    /// deliberately outside the index's lifetime, and nothing here may reach them.
+    private static let exclusionVersion: Int64 = 1
+
+    private func dropExcludedAfterRuleChange() {
+        guard let seen = try? value(forKey: "exclusionVersion") ?? 0,
+              seen < Self.exclusionVersion else { return }
+        do {
+            let doomed = try excludedFolderIDs()
+            try exec("BEGIN IMMEDIATE")
+            // The ids come from the database, so interpolating them cannot inject anything —
+            // same reasoning as `sweepFolders`.
+            for id in doomed { try exec("DELETE FROM folder WHERE id = \(id)") }
+            try setValue(Self.exclusionVersion, forKey: "exclusionVersion")
+            try exec("COMMIT")
+        } catch {
+            try? exec("ROLLBACK")
+        }
+    }
+
+    /// Collected before deleting anything: a statement cannot be stepped while the table it
+    /// reads is being emptied underneath it.
+    private func excludedFolderIDs() throws -> [Int64] {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT id, path FROM folder", into: &statement)
+
+        var doomed: [Int64] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let raw = sqlite3_column_text(statement, 1),
+                  FolderExclusion.excludes(path: String(cString: raw)) else { continue }
+            doomed.append(sqlite3_column_int64(statement, 0))
+        }
+        return doomed
+    }
+
     /// Rows written before `kind` existed inherited 0, which means "folder" — so every photo
     /// already indexed came back from the cache as a folder you could tap into. The name is
     /// enough to work out what they really are.
@@ -622,6 +667,14 @@ actor IndexStore {
     func rewriteKindsAsUnknownForChecks() throws {
         try open()
         try exec("UPDATE file SET kind = 0")
+    }
+
+    /// Replays the one-pass cleanup on a database written before the exclusion rule existed.
+    /// `open()` runs it once and only once, which is exactly what a check cannot work with.
+    func replayExclusionCleanupForChecks() throws {
+        try open()
+        try setValue(0, forKey: "exclusionVersion")
+        dropExcludedAfterRuleChange()
     }
     #endif
 

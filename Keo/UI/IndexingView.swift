@@ -241,6 +241,15 @@ struct IndexingView: View {
 
         row("Dossiers parcourus", progress.foldersVisited)
         row("Déjà indexés, ignorés", progress.foldersSkipped)
+        if progress.foldersExcluded > 0 {
+            // Visible on purpose, and tappable: une liste d'exclusion silencieuse ressemble à
+            // un bug, et c'est en lisant ces noms qu'on repère une règle devenue trop gourmande.
+            problemLink("Dossiers techniques exclus", count: progress.foldersExcluded,
+                        problems: progress.problems.filter { $0.trouble == .folderExcluded },
+                        footer: "Ces dossiers ne sont pas indexés : leurs fichiers n'entrent "
+                              + "ni dans la recherche, ni dans les statistiques, ni dans les "
+                              + "compteurs. Ils restent consultables dans Parcourir.")
+        }
         row("Dates lues cette fois", progress.datesRead)
         row("Restantes ici", max(progress.folderTotal - progress.folderDone, 0))
         if progress.adopted > 0 {
@@ -265,15 +274,15 @@ struct IndexingView: View {
     /// Tappable only when there is something to show: the list is capped, so a very large
     /// failure keeps its honest count while detailing only the first entries.
     @ViewBuilder
-    private func problemLink(_ label: String, count: Int,
-                             problems: [Indexer.Problem]) -> some View {
+    private func problemLink(_ label: String, count: Int, problems: [Indexer.Problem],
+                             footer: String = ProblemList.retryFooter) -> some View {
         if problems.isEmpty {
             LabeledContent(label) {
                 Text(count, format: .number).monospacedDigit().foregroundStyle(.orange)
             }
         } else {
             NavigationLink {
-                ProblemList(title: label, total: count, problems: problems)
+                ProblemList(title: label, total: count, problems: problems, footer: footer)
             } label: {
                 LabeledContent(label) {
                     Text(count, format: .number).monospacedDigit().foregroundStyle(.orange)
@@ -344,9 +353,15 @@ struct IndexingChip: View {
 
 /// The detail behind a failure count.
 private struct ProblemList: View {
+    /// Ce que dit une liste d'échecs. Une liste d'exclusions dit autre chose, et prétendre
+    /// que des dossiers volontairement ignorés « seront réessayés » serait un mensonge.
+    static let retryFooter = "Ces entrées ne sont pas perdues : elles restent à lire et "
+                           + "seront réessayées au prochain passage."
+
     let title: String
     let total: Int
     let problems: [Indexer.Problem]
+    var footer = Self.retryFooter
 
     var body: some View {
         List {
@@ -369,11 +384,9 @@ private struct ProblemList: View {
             } footer: {
                 if total > problems.count {
                     Text("\(total.formatted()) au total, les \(problems.count) premiers sont "
-                       + "listés ici.\n\nCes entrées ne sont pas perdues : elles restent à lire "
-                       + "et seront réessayées au prochain passage.")
+                       + "listés ici.\n\n" + footer)
                 } else {
-                    Text("Ces entrées ne sont pas perdues : elles restent à lire et seront "
-                       + "réessayées au prochain passage.")
+                    Text(footer)
                 }
             }
         }
