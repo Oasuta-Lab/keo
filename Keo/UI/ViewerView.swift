@@ -70,7 +70,11 @@ struct ViewerView: View {
                 UndoBanner()
                 DownloadBar(downloader: downloader)
                     .frame(maxWidth: 420)
-                actionBar
+                // Pas sur une vidéo : AVKit dessine son scrubber au bas de ses propres
+                // limites, exactement là où flotte cette barre. Leur réserver chacune une
+                // moitié de l'écran marchait en portrait et amputait la vidéo en paysage —
+                // alors le bas revient au lecteur, et les actions montent dans le bandeau.
+                if !showsVideoControls { actionBar }
             }
             // The whole stack fades with the dismiss drag. The progress bar used to be
             // exempt, which left an opaque strip hanging under a photo already shrinking
@@ -205,8 +209,13 @@ struct ViewerView: View {
 
             Spacer(minLength: 0)
 
-            // Balances the close button so the caption stays centred.
-            Glyph("xmark").opacity(0).allowsHitTesting(false)
+            if showsVideoControls {
+                Menu { videoActions } label: { Glyph("ellipsis") }
+                    .accessibilityLabel("Actions")
+            } else {
+                // Balances the close button so the caption stays centred.
+                Glyph("xmark").opacity(0).allowsHitTesting(false)
+            }
         }
         .padding(.horizontal, 16)
     }
@@ -223,6 +232,27 @@ struct ViewerView: View {
     /// to four all write to Keo's own index — note, collection, favourite — and rise in
     /// frequency towards the thumb. Live is in none of those families: it changes what is on
     /// screen, not what is recorded, so it is not in the group at all.
+    /// The same four actions, as a menu, for the pages where the bar cannot live.
+    @ViewBuilder
+    private var videoActions: some View {
+        if let current {
+            Button(favourite ? "Retirer des favoris" : "Mettre en favori",
+                   systemImage: favourite ? "heart.slash" : "heart") { toggleFavourite() }
+            Button("Ajouter à une collection", systemImage: "square.stack") {
+                choosingCollection = true
+            }
+            Button(hasNote ? "Modifier la note" : "Ajouter une note",
+                   systemImage: "text.quote") { annotating = current }
+            Divider()
+            Button("Partager", systemImage: "square.and.arrow.up") {
+                downloader.save([current], from: client, to: .share)
+            }
+            Button("Enregistrer dans Photos", systemImage: "photo.badge.arrow.down") {
+                downloader.save([current], from: client, to: .photos)
+            }
+        }
+    }
+
     private var actionBar: some View {
         Group {
             if #available(iOS 26.0, *) {
@@ -236,6 +266,9 @@ struct ViewerView: View {
         // and the Live bubble stays beside it rather than a hand-span away.
         .frame(maxWidth: 560)
     }
+
+    /// True when AVKit owns the bottom of the screen.
+    private var showsVideoControls: Bool { current?.kind == .video }
 
     private var hasLive: Bool {
         guard let current else { return false }
@@ -521,10 +554,6 @@ private struct VideoPage: View {
             Color.black
             if let player {
                 VideoPlayer(player: player)
-                    // AVKit pose son propre scrubber en bas de ses limites, droit sous notre
-                    // barre d'actions flottante. On lui réserve la place plutôt que de les
-                    // laisser se superposer.
-                    .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 108) }
             } else if let failure {
                 ContentUnavailableView("Lecture impossible", systemImage: "play.slash",
                                        description: Text(failure))

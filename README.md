@@ -1600,6 +1600,17 @@ reste un objet compact au centre plutôt que cinq glyphes éparpillés sur mille
 - **La barre de progression ne s'effaçait pas** avec le glissement de fermeture, ce qui laissait
   une bande opaque sous une photo déjà en train de rétrécir vers sa vignette.
 
+### Sur une vidéo, le bas appartient au lecteur
+
+AVKit dessine son scrubber au bas de ses propres limites, exactement là où flotte la barre
+d'actions. Leur réserver à chacune une bande de l'écran fonctionnait en portrait et amputait
+la vidéo en paysage, où elle occupe tout l'écran : deux barres qui se disputent le même bord
+ne se règlent pas en les empilant.
+
+Sur une page vidéo, la barre d'actions disparaît donc et ses quatre entrées remontent dans un
+menu du bandeau supérieur. Rien n'est perdu, le lecteur garde ses commandes, et ça tient dans
+les deux orientations.
+
 ## Transition de zoom grille ↔ photo
 
 La photo sort de sa vignette et y retourne, au lieu d'un fondu au noir : `matchedTransitionSource`
