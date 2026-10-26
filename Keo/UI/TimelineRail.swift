@@ -87,7 +87,11 @@ struct TimelineRail: View {
     private func segment(_ bar: Bar, height: CGFloat) -> some View {
         let highlighted = bar.id == (dragging ?? cursor.id)
         return Capsule()
-            .fill(highlighted ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary.opacity(0.42)))
+            // The inactive bars have to sit *below* the tint in weight, and the tint is
+            // now a pale peach: at 0.42 of the text colour they were the darker ones, and
+            // the bar you were on read as the faintest on the rail. Width already carries
+            // the state; the greys only have to stay out of its way.
+            .fill(highlighted ? AnyShapeStyle(.tint) : AnyShapeStyle(.primary.opacity(0.18)))
             .frame(width: highlighted ? Self.activeWidth : Self.railWidth,
                    height: max(bar.height * height - 2, 2))
             .offset(y: bar.start * height)

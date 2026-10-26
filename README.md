@@ -138,11 +138,24 @@ Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copi
 
 - **`AppIcon`** ← `keo-icon.png`, la version à fond plein. Une icône iOS ne peut pas avoir de
   canal alpha, donc la variante détourée ne convient pas ici.
-- **`Mascot`** ← `keo-icon-transparent.png`, détourée (78 % de pixels transparents), affichée
-  sur l'écran d'association où le fond est noir.
-- **`AccentColor`** ← `#015EB4`, le bleu de marque, éclairci en `#258BE8` en mode sombre où le
-  bleu foncé manquerait de contraste. Il teinte toute l'app : boutons, dossiers, rail de la
-  timeline.
+- **`AccentColor`** ← `#e9a178`, la pêche de la marque, **une seule valeur pour les deux
+  apparences**. Elle teinte toute l'app : boutons, dossiers, rail de la timeline.
+
+  À savoir avant d'y toucher : cette pêche donne **2,14:1 sur blanc**, sous le seuil de 3,0
+  qui vaut même pour une icône. C'est un choix de marque assumé par le propriétaire, pas un
+  oubli. Il a une conséquence qu'aucun `grep` ne montre : iOS colore en teinte **tout `Button`
+  sans style** — « Plus tard », les boutons de barre, ceux des alertes — et en apparence
+  claire ils sont donc faibles. Ce qui porte vraiment de l'information est doublé ailleurs :
+  une jauge a ses chiffres au-dessus, une icône a son libellé à côté, un avertissement a son
+  symbole.
+- **`OnAccent`** ← `#1C1C1E`, également unique. C'est l'encre posée **sur** la teinte : libellé
+  d'un bouton proéminent, puce de filtre active, coche de sélection. SwiftUI choisit sinon du
+  blanc, en supposant un remplissage foncé — sur la pêche ça tombe à 2,14:1. Ici : 7,97:1.
+- **`ChartPhotos` / `ChartVideos`** ne suivent pas la marque, et c'est voulu : ce sont des
+  couleurs catégorielles de données, qui doivent se distinguer l'une de l'autre **et** tenir
+  sur le fond. Elles sont passées par un validateur (bande de luminosité, plancher de chroma,
+  séparation daltonienne, contraste) en clair comme en sombre. Les repeindre en pêche
+  rendrait le graphique illisible.
 
 ## L'app parlait anglais sans le savoir
 
@@ -207,8 +220,8 @@ se regarde sur du noir quelle que soit la lumière de la pièce, et c'est ce que
 
 Ce qui a dû changer : le rail de timeline peignait en `.white` sur un fond supposé noir, il
 peint en `.primary` ; la mascotte, crème sur blanc, serait invisible — elle est devenue une
-image *template* qui reçoit sa couleur au lieu de la porter, crème sur sombre et bleu de
-marque sur clair. Les blancs restants sont tous posés **sur des photos**, où ils sont justes
+image *template* qui reçoit sa couleur au lieu de la porter. (La mascotte a depuis disparu :
+voir plus bas.) Les blancs restants sont tous posés **sur des photos**, où ils sont justes
 dans les deux modes.
 
 ### La mascotte

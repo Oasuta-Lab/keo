@@ -65,7 +65,7 @@ struct IndexingInvitation: View {
                             .frame(maxWidth: .infinity)
                     }
                     // The label colour SwiftUI picks for a prominent button assumes a
-                    // dark fill. Keo's accent is a pale peach in dark mode, where white
+                    // dark fill. Keo's accent is a pale peach in both appearances, where white
                     // on it falls to 2.1:1 — `OnAccent` flips with the appearance.
                     .buttonStyle(.borderedProminent)
                     .foregroundStyle(Color("OnAccent"))

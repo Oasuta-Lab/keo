@@ -33,9 +33,10 @@ enum Theme {
     /// Something needs attention but nothing is broken: a stale index, a partial count, a disk
     /// nearly full.
     ///
-    /// Keo's tint is now a terracotta, close enough to this that colour alone no longer carries
-    /// the signal. Every use must pair it with a symbol — `exclamationmark.triangle`,
-    /// `pause.circle` — so the meaning survives both the palette and colour-blind sight.
+    /// Keo's tint is a peach of almost exactly this luminance — 1.03:1 between the two, so
+    /// against the brand they are the same shade of nothing. Colour alone cannot carry the
+    /// signal here. Every use must pair it with a symbol — `exclamationmark.triangle`,
+    /// `pause.circle` — so the meaning survives the palette and colour-blind sight alike.
     static let warning = Color.orange
 }
 
