@@ -692,6 +692,9 @@ actor IndexStore {
             try exec("DELETE FROM file")
             try exec("UPDATE folder SET mtime = NULL, child_count = NULL, "
                    + "media_count = NULL, bytes = NULL")
+            // The report describes an index that no longer exists. Leaving it would have the
+            // screen announce "rien de neuf" over an index that was just emptied.
+            try exec("DELETE FROM meta WHERE k = '\(Self.lastPassKey)'")
             try exec("COMMIT")
         } catch {
             try? exec("ROLLBACK")
@@ -2220,22 +2223,9 @@ actor IndexStore {
     }
 
     #if DEBUG
-    /// The folder with the most indexed media — what `ReadBench` should be pointed at, so the
-    /// measurement is not dominated by the cost of listing a folder of twelve files.
-    func largestFolder() throws -> (path: String, count: Int)? {
-        try open()
-        var statement: OpaquePointer?
-        defer { sqlite3_finalize(statement) }
-        try prepare("SELECT path, media_count FROM folder WHERE media_count IS NOT NULL "
-                  + "ORDER BY media_count DESC LIMIT 1", into: &statement)
-        guard sqlite3_step(statement) == SQLITE_ROW,
-              let raw = sqlite3_column_text(statement, 0) else { return nil }
-        return (String(cString: raw), Int(sqlite3_column_int64(statement, 1)))
-    }
-
     /// Every pair the name rule keeps where exactly one half carries an identifier — the
-    /// population the date rule arbitrates. For `ReadBench.oneSided`, which predicts the
-    /// verdicts on the real library before the requeued reads make them permanent.
+    /// population the date rule arbitrates. It exists so the SQL and the Swift rule can be
+    /// held against each other: `Tests/live.swift` asks both and fails if they disagree.
     func oneSidedPairs() throws -> [(folder: String, still: Item, video: Item)] {
         try open()
         var statement: OpaquePointer?
@@ -2439,6 +2429,26 @@ actor IndexStore {
         bind(statement, 1, key)
         guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
         return sqlite3_column_int64(statement, 0)
+    }
+
+    /// The last complete pass, as the Indexation screen and the home row read it.
+    ///
+    /// In the index rather than in defaults, because it describes the index: emptying one has
+    /// to empty the other, and `forgetEverything` does it in the same transaction.
+    static let lastPassKey = "lastPass"
+
+    func rememberLastPass(_ pass: LastPass) {
+        guard let json = pass.encoded() else { return }
+        // Silent on failure, like the rest of `meta`: a report that cannot be written is a
+        // sentence missing from a screen, never a reason to fail the pass that produced it.
+        try? open()
+        try? setTextValue(json, forKey: Self.lastPassKey)
+    }
+
+    func lastPass() -> LastPass? {
+        try? open()
+        guard let json = try? textValue(forKey: Self.lastPassKey) else { return nil }
+        return LastPass.decode(json)
     }
 
     private func textValue(forKey key: String) throws -> String? {

@@ -147,6 +147,8 @@ checkFrenchPlural()
 try await checkRecentKinds()
 try await checkArrivalDate()
 checkWalkSummary()
+checkIndexingLine()
+try await checkLastPass()
 try await checkSweepCounts()
 try await checkUnseenArrivals()
 

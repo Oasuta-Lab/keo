@@ -13,6 +13,12 @@ enum BuildStamp {
     }()
 }
 
+/// Only on the connection screen now. On the home screen the stamp is behind ten taps on the
+/// logo (`HomeView.knock`): it is support information, consulted perhaps twice a year, and it
+/// was holding a permanent line on the one page the owner opens every day. Here it stays
+/// visible, because this is the screen you are on when nothing works yet and there is no home
+/// page to tap.
+///
 /// Deliberately quiet: small, dimmed, and behind a material so it stays legible over a photo.
 struct BuildStampLabel: View {
     var body: some View {

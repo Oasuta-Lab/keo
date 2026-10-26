@@ -118,9 +118,18 @@ cours d'une phase de build :
 - `CFBundleVersion` = nombre de commits, donc il monte à chaque commit, sans saisie manuelle
 - `KeoCommit` = hash court, suffixé d'un `+` si la build portait des modifications non commitées
 
-Affiché en petit en bas de l'écran d'association et de la racine de la galerie, sous la forme
-`v0.1 (13) · a1b2c3d`. Il disparaît dès qu'une barre de sélection ou de téléchargement occupe
-le bas de l'écran, et n'apparaît pas dans les sous-dossiers ni en plein écran.
+Affiché en petit en bas de l'écran d'association, sous la forme `v0.1 (13) · a1b2c3d`.
+
+**Plus sur l'accueil.** C'est une information de support, consultée deux fois par an, et elle
+occupait une ligne permanente sur la seule page que le propriétaire ouvre tous les jours. Elle
+est derrière **dix tapes sur le logo Keo** en haut de l'accueil, paraît sous le logotype et se
+referme seule au bout de huit secondes — une trappe, pas une case à décocher. Le compte repart
+de zéro dès qu'une tape se fait attendre plus d'une seconde et demie : sinon dix appuis
+distraits étalés sur une semaine finiraient par l'ouvrir, et une trappe qui s'ouvre toute
+seule est un bug.
+
+Il reste visible sur l'écran d'association, parce que c'est l'écran où l'on se trouve quand
+rien ne marche encore et qu'il n'y a pas d'accueil à taper.
 
 Sans git (build depuis une archive), le script sort sans rien faire et la valeur du dépôt est
 conservée.
@@ -324,8 +333,8 @@ L'échantillon de 120 photos promettait ~1 % de vraies sans-date ; la bibliothè
 montre **1 584 sur 23 073** (6,9 %), lues de bout en bout. Un échantillon d'un seul dossier
 n'était pas la bibliothèque — la leçon est déjà écrite plus haut, elle se répète.
 
-Avant de toucher au lecteur, `ReadBench.dateless` (bouton « Pourquoi “sans date” », debug)
-tire au sort dans la liste même que compte l'écran Statistiques et demande à chaque fichier
+Avant de toucher au lecteur, une sonde `ReadBench.dateless` (retirée depuis : sa réponse est
+ci-dessous) a tiré au sort dans la liste même que compte l'écran Statistiques et demande à chaque fichier
 *pourquoi* : pour une photo, il regrimpe l'échelle exacte de l'indexeur (24 Ko puis 128 Ko —
 une date trouvée là est marquée `(!)`, l'index aurait dû l'avoir), puis deux barreaux qu'il
 n'a pas (512 Ko, puis le fichier entier sous 8 Mo) ; pour une vidéo, il rejoue le parseur
@@ -380,6 +389,75 @@ Tant que l'index est vide, Keo explique une fois pourquoi l'indexation compte : 
 NAS ne fournit que la date de copie, donc le tri par date et la timeline restent inertes — et
 l'app a l'air cassée plutôt que non configurée. L'écran propose de lancer ou de remettre à
 plus tard ; dans ce cas la pastille et le menu suffisent, on ne redemande pas.
+
+### Keo n'oubliait rien, sauf ce qu'il venait de faire
+
+Le bilan d'une marche vivait huit secondes dans une carte flottante, le lecteur le remettait à
+`nil`, et les ennuis — dossiers injoignables, fichiers illisibles, dossiers écartés par la
+règle — ne vivaient que dans `Progress`, donc le temps de la marche et pas une seconde de
+plus. Tout ce que l'app savait de son indexation portait donc sur les cinq pour cent du temps
+où une marche tourne. Le reste du temps, il ne restait que des totaux, et un total ne répond à
+aucune question.
+
+`LastPass` est ce que la passe laisse derrière elle : le `WalkSummary`, sa date, les compteurs
+d'ennuis et les premiers chemins en détail. Il est rangé dans la table `meta` de l'index et
+non dans les réglages, **parce qu'il décrit l'index** : « Tout relire depuis zéro » l'emporte
+dans la même transaction que les dates qu'il résume. Un enregistrement écrit par une version
+plus ancienne qui ne se relit plus est simplement absent — un bilan manquant est une phrase en
+moins, refuser d'ouvrir l'écran pour ça serait pire.
+
+Ce qu'il débloque, et qui est le vrai sujet : l'écran Indexation a enfin quelque chose à dire
+quand rien ne tourne, et la rangée de l'accueil peut parler d'échecs et de fraîcheur au lieu
+d'un rapport de dossiers.
+
+### « X dossiers sur Y » ne disait rien
+
+La rangée « Indexation » de l'accueil annonçait `4 781 dossiers sur 4 802`. Mauvaise réponse
+deux fois : la soustraction est laissée au lecteur, et la branche ne s'affiche presque jamais —
+la découverte périodique tamponne chaque dossier qu'elle liste, donc les dossiers sont à jour
+bien avant les fichiers. Un rapport de dossiers, c'est la machinerie qui parle d'elle-même.
+
+`IndexingLine` la remplace par un **ordre de priorité**, pas une formule : à chaque instant une
+seule chose mérite la ligne, et la plus rare est la plus précieuse.
+
+1. une marche en cours, avec un chiffre qui bouge — `En cours · 412 dates lues`. Pas de points
+   de suspension : une ellipse prouve qu'un drapeau est levé, un compteur prouve du travail,
+   et c'est exactement la distinction que `isStalled` existe pour faire ;
+2. `Interrompue · reste 340`, en ambre — le seul état qui attend un geste ;
+3. `3 dossiers inaccessibles`, en ambre — un partage démonté laisse l'index pourrir en
+   silence, et rien d'autre sur l'accueil n'en parlerait jamais ;
+4. `340 fichiers à lire`, **sans** ambre : la découverte périodique en fabrique toute seule à
+   chaque arrivée de photos, et colorer le cours normal des choses apprend à ignorer la
+   couleur ;
+5. `Vérifié hier`, sinon. La question quotidienne n'est pas « combien ? » mais « est-ce que je
+   peux faire confiance à ce que je regarde ». Registre machine, donc le style relatif du
+   système et surtout pas `HumanDate` : « Un mardi de juillet » pour une marche sur un NAS
+   serait absurde.
+
+L'ordre est vérifié dans `Tests/indexation.swift`, pas la mise en forme : c'est lui qui est
+facile à casser et impossible à voir.
+
+### L'écran Indexation, remonté
+
+Quatre sections au lieu de trois, et surtout du contenu au bon moment.
+
+- **Maintenant** — pendant la marche, le dossier sous l'aiguille et sa barre ; le reste du
+  temps, le dernier passage raconté. Les dix lignes de compteurs étaient un vidage de la
+  structure `Progress` : per-passe et global mélangés, zéros dits, et deux d'entre elles
+  répétaient ce que la barre disait déjà. Elles passent maintenant par `WalkSummary.details`,
+  qui décide déjà quoi dire et dans quel ordre — la marche et son bilan parlent d'une seule
+  voix.
+- **À surveiller** — injoignables, illisibles, dossiers techniques écartés, chacun ouvrant la
+  liste des chemins. Absente quand il n'y a rien à dire. Ils ne se lisaient qu'en marchant,
+  ce qui est l'inverse du besoin : un partage disparu mérite d'être su précisément quand rien
+  ne tourne.
+- **Action** — un geste principal et « Revérifier ». « Tout relire depuis zéro » part dans le
+  menu « … » de la barre : trois lignes de même rang, c'était l'écran qui affirmait que les
+  trois gestes se valent. Ils ne se valent pas — le dernier jette des heures de lecture
+  réseau.
+- **Comment ça marche** — quatre paragraphes au lieu de six plus un pied de section. Le
+  paragraphe qui comparait « Revérifier » et « Tout relire » est parti : il vit déjà dans
+  `rebuildWarning`, au seul moment où on en a besoin.
 
 ### Ouverture instantanée
 
@@ -734,11 +812,12 @@ Trois conséquences mécaniques :
   mois, jours chargés, « ce jour-là », « sans date » — filtrent donc sur `live = 0` : le
   moment est déjà compté par sa photo, et un compagnon sans date ne rend pas le *moment*
   « sans date ».
-- `ReadBench.oneSided` (bouton « Juger les paires à une face », debug) juge toute la
-  bibliothèque **avant** que la file ne rende les verdicts permanents : il lit la date vidéo
-  exactement comme l'indexeur le fera et trace, par paire, l'écart et le verdict, puis les
-  totaux — gardées (dont à moins de deux minutes), dé-appariées, sans date comparable.
-  Les lignes arrivent dans `[keo] uneface:`, console ou fichier de trace du conteneur.
+- `ReadBench.oneSided` (retirée depuis) a jugé toute la bibliothèque **avant**
+  que la file ne rende les verdicts permanents : il lisait la date vidéo exactement comme
+  l'indexeur allait le faire et traçait, par paire, l'écart et le verdict, puis les totaux.
+  Le résultat est plus bas, « Les 227 à une face, jugées ». Ce que la sonde garantissait sans
+  elle, `Tests/live.swift` le garde : `IndexStore.oneSidedPairs` et la règle Swift sont tenus
+  l'un contre l'autre et doivent rendre le même verdict.
 
 ### Le cache rend tout, la grille applique la règle
 
@@ -976,6 +1055,25 @@ dans Xcode avec le compte de l'équipe ton équipe Apple :
    cibles, tant que Xcode n'a pas été ouvert une fois. Ce n'est pas un défaut du projet — la
    compilation et l'assemblage passent (`CODE_SIGNING_ALLOWED=NO` le montre), seule la
    signature attend ce passage par l'interface.
+
+### La ligne de synchro ne parle que quand elle a quelque chose à dire
+
+`SyncFootnote` disait « Synchronisé avec iCloud » en permanence, au pied de Favoris, de
+Collections et de l'accueil. Un état stable, vrai pendant des mois, qui ne demande rien : une
+ligne qui rassure en permanence est du mobilier, la même maladie que le rapport de dossiers de
+la rangée d'indexation.
+
+Elle est donc muette sur les deux états stables — « Synchronisé avec iCloud » et « sans
+iCloud » — et garde la moitié transitoire : récupération en cours, synchro en cours, hors
+ligne, erreur. Celles-là méritent une ligne précisément parce qu'elles finissent, et parce
+qu'elles expliquent une liste qui bouge toute seule ou qui n'est pas encore complète —
+`SyncRecoveryView` ne couvre que la liste *vide*, une liste non vide en pleine récupération
+n'avait que cette ligne pour le dire.
+
+L'accueil fait exception et demande à être rassuré (`SyncFootnote(reassures: true)`) : c'est
+la pièce où l'on vient voir si tout est à sa place, la carte Bibliothèque est juste au-dessus,
+et « tout est là » est ce qu'on vient y lire. Quand elle se tait, elle rend `EmptyView` et le
+`safeAreaInset` qui la porte se replie avec elle, sans laisser de bande vide.
 
 ### Vérifier le reste à la main
 
@@ -1452,7 +1550,9 @@ la centaine qui sont des vidéos coûterait vingt fois le gain.
 - **La date dans le nom de fichier** (`IMG_20190714_103000.jpg`) ne concerne que 5 fichiers sur
   120 — et c'est **une autre nature de vérité**. Une date d'étiquette n'est pas une date de
   prise de vue, et les mélanger silencieusement abîmerait la seule chose que cet index promet.
-  Le parseur existe et est testé ; il n'alimente que le banc d'essai.
+  Le parseur existe et reste testé, branché sur rien : la mesure pour laquelle il a été
+  écrit est faite, et ce qu'il débloquerait — une date d'étiquette *annoncée comme telle* sur
+  la timeline — est une décision produit que personne n'a prise.
 
 ## Les 227 à une face, jugées
 
@@ -1533,8 +1633,20 @@ reste faux, aucun balayage n'a lieu et la reprise au prochain lancement fonction
 
 `Indexer.parallel` a longtemps valu 3 par prudence, sans jamais avoir été vérifié. Le bon
 nombre est une propriété de la box et du réseau, pas du code : il se mesure. `ReadBench`
-(builds debug, bouton en bas de l'écran Indexation) lit les mêmes prefixes de 24 Ko que
-l'indexeur, à plusieurs niveaux de parallélisme, et trace le débit sur la console.
+(builds debug, bouton en bas de l'écran Indexation) lisait les mêmes prefixes de 24 Ko que
+l'indexeur, à plusieurs niveaux de parallélisme, et traçait le débit sur la console.
+
+**Le banc n'existe plus.** Il y a eu cinq sondes — parallélisme, identifiant live, verdict des
+paires, « pourquoi sans date », paires à une face — et toutes les cinq ont rendu leur verdict ;
+les verdicts sont dans ce fichier, c'est-à-dire là où on les relira. Une sonde dont la réponse
+est écrite est un échafaudage, et un échafaudage laissé debout finit par se lire comme de la
+structure : quatre cents lignes d'outillage, dont cent au milieu de l'écran Indexation, qui le
+rendaient pénible à relire.
+
+Ce qui reste est ce qui compte : les mesures ci-dessous, et les trois précautions au-dessus.
+Si un jour la box change et que `Indexer.parallel` doit être revérifié, c'est une centaine de
+lignes à réécrire — contre quatre cents à porter en attendant ce jour, qui n'est peut-être
+jamais venu.
 
 Trois précautions, chacune apprise en lisant un résultat faux :
 

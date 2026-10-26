@@ -121,6 +121,8 @@ struct CollectionsView: View {
                 }
             }
         }
+        // Muette tant que tout va bien — voir `SyncFootnote`. Une collection créée sur un
+        // autre appareil arrive ici toute seule, et c'est ce moment-là qui mérite une ligne.
         .safeAreaInset(edge: .bottom, spacing: 0) { SyncFootnote() }
         .task { await reload() }
         // Pinning, or undoing one, can happen from another screen entirely.

@@ -6,9 +6,10 @@ import Foundation
 /// This is a different kind of truth from a capture date: the name says what some device or
 /// app chose to call the file, not when a shutter fired. It must never be stored or shown as
 /// a capture date — « sans date » is a statement about the file's metadata, and a date of this
-/// kind does not change it. Its only consumer today is the `ReadBench.dateless` probe, which
-/// measures how many of the undated files a *labelled* fallback could place on the timeline;
-/// wiring it any further waits on that measurement.
+/// kind does not change it. Nothing in the app consumes it yet: the measurement it was built
+/// for has been taken (README, « 6,9 % sans date »), and what it would unlock is a *labelled*
+/// fallback on the timeline — a product decision nobody has made. It stays parked, with its
+/// checks, rather than being wired in by default.
 enum FilenameDate {
     /// First plausible yyyyMMdd (optionally separated, the separator repeating) in the name,
     /// with an optional hhmmss behind it. Lookarounds keep a longer digit run — a serial, a

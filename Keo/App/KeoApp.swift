@@ -62,6 +62,9 @@ struct KeoApp: App {
             // donc relancer l'app n'en empile pas deux. C'est ce qui permet à Keo d'apprendre
             // qu'un fichier est arrivé sans qu'on ait eu à y penser.
             .task { PeriodicDiscovery.schedule() }
+            // Le bilan du dernier passage vit dans l'index, pas en mémoire : sans ça, l'écran
+            // Indexation et la rangée de l'accueil repartent muets à chaque lancement.
+            .task { await indexer.restoreLastPass() }
             .onOpenURL { link = DeepLink($0) }
             // Zero-sized, and the only place a shake is heard. It gives up first responder
             // to any text field that wants it, which is right: while typing, a shake belongs

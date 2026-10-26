@@ -84,23 +84,6 @@ final class Indexer: ObservableObject {
     /// `start()` still guards on `state.isRunning`, so two entry points cannot run two walks.
     static let shared = Indexer()
 
-    /// What went wrong, and where. A bare counter tells you something failed but never what,
-    /// which is no help at all when one folder out of eighty is unreachable.
-    struct Problem: Identifiable, Equatable, Sendable {
-        enum Trouble: Equatable, Sendable {
-            case folderUnreachable   // could not even be listed
-            case fileUnreadable      // listed, but its bytes would not come
-            case folderExcluded      // skipped on purpose, by `FolderExclusion`
-        }
-
-        var id: String { path }
-        let path: String
-        let reason: String
-        let trouble: Trouble
-
-        var name: String { (path as NSString).lastPathComponent }
-    }
-
     struct Progress: Equatable {
         var folder = "/"
         var foldersVisited = 0
@@ -116,9 +99,9 @@ final class Indexer: ObservableObject {
         var unreachable = 0
         /// The first few in detail. Bounded: a box that is entirely gone would otherwise
         /// collect thousands of identical entries.
-        var problems: [Problem] = []
+        var problems: [IndexProblem] = []
 
-        mutating func note(_ problem: Problem) {
+        mutating func note(_ problem: IndexProblem) {
             guard problems.count < Progress.problemLimit,
                   !problems.contains(where: { $0.path == problem.path }) else { return }
             problems.append(problem)
@@ -176,7 +159,8 @@ final class Indexer: ObservableObject {
 
     @AppStorage("lastIndexedAt") private var lastIndexedAt: Double = 0
 
-    /// Measured on the real box, four passes of `ReadBench` over 14 595 photos: 1 is last in
+    /// Measured on the real box, four passes over 14 595 photos — the bench that took them is
+    /// gone, its table is in the README under « Banc d'essai des lectures ». 1 is last in
     /// every pass, 2 and 3 sit below a plateau that runs from 4 to 12, and 4 ties for the best
     /// rank. Picked over 8, which ties with it, because the gain is noise and the smaller
     /// number leaves more of the box to the thumbnail pipeline — the user is looking at the
@@ -218,6 +202,15 @@ final class Indexer: ObservableObject {
     /// The last complete pass's report, for whoever wants to show it. Cleared by the reader:
     /// a card that dismisses itself must not come back on the next redraw.
     @Published var lastSummary: WalkSummary?
+
+    /// The same pass, kept. `lastSummary` is the notification and is consumed; this is the
+    /// archive, and it is what the Indexation screen and the home row read the rest of the
+    /// time — which is almost all of the time, since a walk runs for minutes and then not for
+    /// days. Survives relaunch: it lives in the index's `meta` table.
+    @Published private(set) var lastPass: LastPass?
+    /// Built alongside `summary`, published by `finishRun` for the same reason: a report must
+    /// not appear while the bar is still moving.
+    private var record: LastPass?
     private var observers: [NSObjectProtocol] = []
     /// Survives a relaunch: iOS may terminate a suspended app outright, and an interrupted
     /// index must still know it has somewhere to pick up.
@@ -324,6 +317,14 @@ final class Indexer: ObservableObject {
     /// state a suspension used to leave behind.
     var isStalled: Bool { state.isRunning && runner == nil }
 
+    /// Brings back the last pass after a relaunch. Called once, from the app's root. It never
+    /// overwrites a fresher record: a pass that finished during this launch is the truth, and
+    /// the one in the index is the same thing, written.
+    func restoreLastPass() async {
+        guard lastPass == nil else { return }
+        lastPass = await IndexStore.shared.lastPass()
+    }
+
     // MARK: Running
 
     private func pump() {
@@ -361,7 +362,12 @@ final class Indexer: ObservableObject {
     private func finishRun(_ token: Int) {
         trace("finishRun token=\(token) current=\(runToken) completed=\(walkCompleted)")
         if walkCompleted, let summary { lastSummary = summary }
+        if walkCompleted, let record {
+            lastPass = record
+            Task { await IndexStore.shared.rememberLastPass(record) }
+        }
         summary = nil
+        record = nil
         guard token == runToken else { return }   // a superseded worker decides nothing
         if walkCompleted { resumeWanted = false }
         runner = nil
@@ -461,7 +467,7 @@ final class Indexer: ObservableObject {
                     listingFailures += 1
                     consecutiveFailures += 1
                     progress.unreachable += 1
-                    progress.note(Problem(path: folder.path,
+                    progress.note(IndexProblem(path: folder.path,
                                           reason: error.localizedDescription,
                                           trouble: .folderUnreachable))
                     state = .running(progress)
@@ -479,7 +485,7 @@ final class Indexer: ObservableObject {
                     guard !FolderExclusion.excludes(folder: child.name) else {
                         progress.foldersExcluded += 1
                         if progress.foldersExcluded <= Self.excludedDetailed {
-                            progress.note(Problem(path: child.path,
+                            progress.note(IndexProblem(path: child.path,
                                                   reason: "Dossier technique, exclu de l'index",
                                                   trouble: .folderExcluded))
                         }
@@ -545,8 +551,18 @@ final class Indexer: ObservableObject {
                     foldersVisited: progress.foldersVisited,
                     foldersSkipped: progress.foldersSkipped,
                     datesRead: progress.datesRead, dateless: progress.dateless,
+                    adopted: progress.adopted,
                     unreadable: progress.unreadable,
                     indexedOverall: progress.indexedOverall)
+                record = LastPass(
+                    // The stamp the pass itself wrote, not a second reading of the clock:
+                    // the screen shows one date and the footnote the other, and two clocks
+                    // read a millisecond apart is a disagreement waiting to be noticed.
+                    finishedAt: Date(timeIntervalSince1970: lastIndexedAt),
+                    summary: summary ?? WalkSummary(),
+                    unreachable: progress.unreachable,
+                    excluded: progress.foldersExcluded,
+                    problems: progress.problems)
                 trace("walk summary arrived=\(arrived) vanished=\(vanished)")
             }
             // Never republish `.running` after a pause: that is what left the app claiming to
@@ -714,7 +730,7 @@ final class Indexer: ObservableObject {
                         // recorded as "this photo has no date".
                         failures += 1
                         progress.unreadable += 1
-                        progress.note(Problem(path: item.path,
+                        progress.note(IndexProblem(path: item.path,
                                               reason: error.localizedDescription,
                                               trouble: .fileUnreadable))
                     }

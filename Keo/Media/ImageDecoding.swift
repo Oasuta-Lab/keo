@@ -54,8 +54,9 @@ enum ImageDecoding {
     /// same one *are* a pair; the shared filename is only Apple's naming convention on top.
     ///
     /// It sits in the same metadata blob as the capture date, so reading it costs nothing
-    /// beyond the prefix already fetched — provided the blob survives truncation, which is
-    /// what `ReadBench.identifiers` is there to measure before any of this is relied on.
+    /// beyond the prefix already fetched — provided the blob survives truncation, which was
+    /// measured on real photos before any of this was relied on. See README, « Le nom ne
+    /// suffit pas : l'identité d'Apple ».
     static func contentIdentifier(prefix: Data) -> String? {
         guard let source = CGImageSourceCreateWithData(prefix as CFData, sourceOptions),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)

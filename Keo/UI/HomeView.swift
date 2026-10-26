@@ -40,6 +40,11 @@ struct HomeView: View {
     /// rather than animated: an animation that a swipe interrupts has to be unwound before it
     /// can restart, and that unwinding is exactly what read as the bar being slow to resume.
     @State private var turnStarted = Date()
+    /// La trappe du logo. Rien de secret dedans — juste rien qui mérite une ligne permanente
+    /// sur la seule page que le propriétaire regarde tous les jours.
+    @State private var knocks = 0
+    @State private var lastKnock = Date.distantPast
+    @State private var showingStamp = false
 
     /// How long a memory holds the card.
     private static let turnEvery: TimeInterval = 6
@@ -100,12 +105,11 @@ struct HomeView: View {
                     arrived
                 }
                 library
-                VStack(spacing: 6) {
-                    SyncFootnote()
-                    BuildStampLabel()
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 4)
+                // Le seul écran qui demande à être rassuré : c'est la pièce où l'on vient
+                // voir si tout est à sa place.
+                SyncFootnote(reassures: true)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 4)
             }
             .padding(.horizontal, 16)
             .padding(.bottom, 24)
@@ -173,10 +177,37 @@ struct HomeView: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Keo")
+            .onTapGesture(perform: knock)
+
+            if showingStamp {
+                Text(BuildStamp.text)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .transition(.opacity)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .trailing) { capacity }
         .padding(.top, 4)
+        // Se referme toute seule : la trappe est pour le jour où on cherche quelle version
+        // est dans la main, pas une case à décocher.
+        .task(id: showingStamp) {
+            guard showingStamp else { return }
+            try? await Task.sleep(for: .seconds(8))
+            withAnimation(.snappy) { showingStamp = false }
+        }
+    }
+
+    /// Dix tapes sur le logo. Le compte repart de zéro dès qu'une tape se fait attendre :
+    /// sans ça, dix appuis distraits étalés sur une semaine finiraient par ouvrir la trappe,
+    /// et une trappe qui s'ouvre toute seule est un bug.
+    private func knock() {
+        let now = Date()
+        knocks = now.timeIntervalSince(lastKnock) < 1.5 ? knocks + 1 : 1
+        lastKnock = now
+        guard knocks >= 10 else { return }
+        knocks = 0
+        withAnimation(.snappy) { showingStamp = true }
     }
 
     /// Ce qu'il reste sur le NAS, en anneau, à hauteur du mot.
@@ -548,7 +579,7 @@ struct HomeView: View {
                     IndexingView(client: client, standalone: false)
                 } label: {
                     LibraryRow(icon: "square.stack.3d.up", title: "Indexation",
-                               detail: indexingState, warning: summary?.isPartial == true)
+                               detail: indexing.text, warning: indexing.warning)
                 }
                 Divider().padding(.leading, 52)
                 NavigationLink {
@@ -586,18 +617,19 @@ struct HomeView: View {
         return summary.unweighed > 0 ? "au moins \(size)" : size
     }
 
-    private var indexingState: String {
-        if indexer.state.isRunning, !indexer.isStalled { return "En cours…" }
-        guard let summary else { return "…" }
-        if summary.isEmpty { return "Pas encore commencée" }
-        if summary.indexedFolders < summary.knownFolders {
-            return "\(summary.indexedFolders.formatted()) dossiers sur "
-                 + "\(summary.knownFolders.formatted())"
-        }
-        if summary.unreadFiles > 0 {
-            return "\(summary.unreadFiles.formatted()) fichiers à lire"
-        }
-        return "À jour · \(summary.fileCount.formatted()) fichiers"
+    /// The order of precedence lives in `IndexingLine`, outside SwiftUI, where it can be
+    /// checked. Here there is only the gathering.
+    private var indexing: (text: String, warning: Bool) {
+        guard let summary else { return ("…", false) }
+        return IndexingLine.detail(IndexingLine.Facts(
+            running: indexer.state.isRunning && !indexer.isStalled,
+            paused: indexer.state.isPaused || indexer.isStalled,
+            datesRead: indexer.state.progress?.datesRead ?? 0,
+            empty: summary.isEmpty,
+            unreachable: indexer.lastPass?.unreachable ?? 0,
+            unread: summary.unreadFiles,
+            lastRun: indexer.lastRun
+        ))
     }
 
     // MARK: Work

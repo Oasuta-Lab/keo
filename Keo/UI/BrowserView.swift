@@ -301,6 +301,11 @@ struct BrowserView: View {
                 // Collections et l'accueil l'avaient, Favoris non — alors que c'est le même
                 // contenu, venu du même iCloud, et que cet écran gère déjà l'état de
                 // récupération. Pas sur un dossier du NAS, qui ne se synchronise pas.
+                //
+                // Muette tant que tout va bien : ici elle ne sert qu'à expliquer une liste
+                // qui bouge toute seule ou qui n'est pas encore complète. `SyncRecoveryView`
+                // ne couvre que la liste vide ; une liste non vide en pleine récupération
+                // n'avait que cette ligne pour le dire.
                 if case .favourites = source, !selecting { SyncFootnote() }
             }
         }

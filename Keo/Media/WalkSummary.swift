@@ -11,7 +11,7 @@ import Foundation
 /// `vanished` is deliberately not called "deleted". Keo never deletes anything on the NAS — a
 /// file counted here is one the box stopped listing, whatever did it. Saying "supprimés" in a
 /// read-only app would read as a confession.
-struct WalkSummary: Equatable, Sendable {
+struct WalkSummary: Equatable, Sendable, Codable {
     /// Files seen for the first time in a folder Keo already knew.
     var arrived = 0
     /// Rows the sweep removed because the box no longer lists them.
@@ -21,6 +21,10 @@ struct WalkSummary: Equatable, Sendable {
     var foldersSkipped = 0
     var datesRead = 0
     var dateless = 0
+    /// Files whose date came from an identical twin elsewhere in the index rather than from
+    /// the box — a folder renamed or moved, keeping its photos. Said because it is the one
+    /// counter that explains a pass finishing far faster than the file count suggests.
+    var adopted = 0
     var unreadable = 0
     var indexedOverall = 0
 
@@ -69,6 +73,11 @@ struct WalkSummary: Equatable, Sendable {
                                     "dates de prise de vue lues")
             if dateless > 0 { read += ", \(dateless.formatted()) sans date" }
             lines.append(read)
+        }
+
+        if adopted > 0 {
+            lines.append(Plural.count(adopted, "date retrouvée après un déplacement",
+                                      "dates retrouvées après un déplacement"))
         }
 
         if unreadable > 0 {

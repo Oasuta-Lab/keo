@@ -3,10 +3,42 @@ import SwiftUI
 /// One quiet line at the foot of the personalisation tabs — the only places sync matters.
 /// Same family as the indexing chips: informative, never modal, never a dialog. The Freebox
 /// user without iCloud reads one calm sentence, not a nag.
+///
+/// It says nothing at all when there is nothing to say. « Synchronisé avec iCloud » and « sans
+/// iCloud » are steady states: true for months, asking for nothing, and a permanent line that
+/// is permanently reassuring is furniture — the same disease the home row had with its folder
+/// ratio. What the other screens keep is the transient half: a recovery in flight, a sync
+/// running, a device offline, an error. Those are worth a line precisely because they end.
+///
+/// `reassures` turns the steady states back on, and exactly one screen asks for it. The home
+/// screen is the room where the state of the library is surveyed — the Bibliothèque card is
+/// right above — and « tout est à sa place » is what someone comes there to read.
 struct SyncFootnote: View {
+    /// Say the calm states too. The home screen only.
+    var reassures = false
+
     @EnvironmentObject private var sync: CloudSync
 
+    /// A steady state on a screen that did not ask to be reassured.
+    private var silent: Bool {
+        guard !reassures else { return false }
+        switch sync.status {
+        case .upToDate, .off: return true
+        default: return false
+        }
+    }
+
     var body: some View {
+        if silent {
+            // Zero height, so the `safeAreaInset` that holds it collapses with it rather than
+            // leaving a band of padding behind.
+            EmptyView()
+        } else {
+            line
+        }
+    }
+
+    private var line: some View {
         HStack(spacing: 6) {
             switch sync.status {
             case .off:
