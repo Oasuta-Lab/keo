@@ -49,6 +49,9 @@ struct HomeView: View {
         CGFloat(count) * 6 + CGFloat(max(0, count - 1)) * 5
     }
     @State private var showingIndexing = false
+    /// Signing out drops a key that iCloud shares with the owner's other devices, so it is
+    /// not a local undoable thing.
+    @State private var signingOut = false
     @State private var disk: (total: Int64, free: Int64, seen: Date)?
 
     /// The page on screen. Clamped, because the list is rebuilt whenever the index moves and
@@ -111,6 +114,14 @@ struct HomeView: View {
         }
         .modifier(PushTargets(client: client, declare: true))
         .sheet(isPresented: $showingIndexing) { IndexingView(client: client) }
+        .confirmationDialog("Se déconnecter de la Freebox ?", isPresented: $signingOut,
+                            titleVisibility: .visible) {
+            Button("Se déconnecter", role: .destructive) { store.signOut() }
+            Button("Annuler", role: .cancel) {}
+        } message: {
+            Text("L'autorisation est partagée par iCloud : tes autres appareils la perdent "
+               + "aussi, et il faudra réappuyer sur ✓ sur la face avant de la Freebox.")
+        }
         .task { await load() }
         .onChange(of: undoer.revision) { _, _ in Task { await load() } }
         .onChange(of: indexer.state.isRunning) { _, _ in Task { await load() } }
@@ -377,7 +388,7 @@ struct HomeView: View {
                 Divider().padding(.leading, 52)
                 Menu {
                     Button("Déconnexion", systemImage: "rectangle.portrait.and.arrow.right",
-                           role: .destructive) { store.signOut() }
+                           role: .destructive) { signingOut = true }
                 } label: {
                     LibraryRow(icon: "externaldrive.connected.to.line.below",
                                title: "Freebox", detail: boxName, chevron: false)

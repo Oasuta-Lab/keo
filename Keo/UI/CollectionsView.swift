@@ -7,13 +7,23 @@ struct CollectionsView: View {
 
     @EnvironmentObject private var sync: CloudSync
     @State private var collections: [IndexStore.Collection] = []
+    /// Without it the empty state flashes on the first frame, before the first read has
+    /// returned — the browser already guards its own the same way.
+    @State private var loaded = false
     @State private var naming = false
+    /// Deleting a collection is the one piece of personalisation the undo stack cannot take
+    /// back, so it is the one that asks.
+    @State private var deleting: IndexStore.Collection?
     @State private var renaming: IndexStore.Collection?
     @State private var name = ""
 
     var body: some View {
         List {
-            if collections.isEmpty {
+            if !loaded {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .listRowBackground(Color.clear)
+            } else if collections.isEmpty {
                 Group {
                     if sync.status == .recovering {
                         SyncRecoveryView()
@@ -44,7 +54,7 @@ struct CollectionsView: View {
                 }
                 .swipeActions(edge: .trailing) {
                     Button("Supprimer", systemImage: "trash", role: .destructive) {
-                        act { try await IndexStore.shared.deleteCollection(collection.id) }
+                        deleting = collection
                     }
                     Button("Renommer", systemImage: "pencil") {
                         renaming = collection
@@ -55,6 +65,29 @@ struct CollectionsView: View {
             }
         }
         .navigationTitle("Collections")
+        // Inline like every other tab's. A large title draws on its own line *below* the bar,
+        // which put this one lower than the others rather than higher.
+        .navigationBarTitleDisplayMode(.inline)
+        // Favoris and Parcourir both pull to refresh; a collection arriving from another
+        // device is exactly the case that wants it.
+        .refreshable { await reload() }
+        // Every other personalisation — épingler, favoriser, annoter — is reversible by
+        // shaking. This one is not: the collection and its contents go together.
+        .confirmationDialog(Text("Supprimer « \(deleting?.name ?? "") » ?"),
+                            isPresented: Binding(get: { deleting != nil },
+                                                 set: { if !$0 { deleting = nil } }),
+                            titleVisibility: .visible) {
+            // The name belongs in the title, which wraps. A button label does not: a long
+            // collection name was simply cut off mid-word.
+            Button("Supprimer", role: .destructive) {
+                guard let doomed = deleting else { return }
+                act { try await IndexStore.shared.deleteCollection(doomed.id) }
+                deleting = nil
+            }
+            Button("Annuler", role: .cancel) { deleting = nil }
+        } message: {
+            Text("Les photos restent sur le NAS. Seul le rangement disparaît.")
+        }
         .modifier(PushTargets(client: client, declare: true))
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -104,5 +137,6 @@ struct CollectionsView: View {
 
     private func reload() async {
         collections = (try? await IndexStore.shared.collections()) ?? []
+        loaded = true
     }
 }
