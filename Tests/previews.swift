@@ -190,3 +190,58 @@ func checkArrivalDate() async throws {
     print("ok — arrivées : un dossier découvert n'en produit aucune, seul le neuf en est une, "
         + "et ni un repassage ni une reconstruction ne les déplacent")
 }
+
+/// Le compteur d'arrivées non vues.
+///
+/// Il compte des **arrivées**, pas des lectures. L'app a déjà « N fichiers à lire », qui ne
+/// parle que des dates à aller chercher — un document n'en a aucune, il est complet dès qu'il
+/// est listé, et l'y compter ferait promettre un travail inexistant à un voyant qui ne
+/// s'éteindrait jamais.
+func checkUnseenArrivals() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("keo-unseen-\(ProcessInfo.processInfo.processIdentifier)")
+    try? FileManager.default.removeItem(at: home)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    func file(_ name: String) -> Item {
+        Item(path: "/NAS/Boîte/\(name)", name: name, isDirectory: false, size: 2_048,
+             modified: nil, mimeType: nil)
+    }
+    let store = IndexStore(directory: home)
+    let folder = "/NAS/Boîte"
+    let stamp = FolderStamp.Completion(modified: Date(timeIntervalSince1970: 1_700_000_000),
+                                       childCount: 2, mediaCount: 1, bytes: 4_096)
+
+    // Premier passage : le dossier est découvert, donc rien n'est une arrivée.
+    var generation = try await store.beginGeneration()
+    try await store.commit([], in: folder, generation: generation, stamp: stamp,
+                           present: [file("a.jpg")])
+    var unseen = try await store.unseenArrivals()
+    assert(unseen == 0, "un dossier découvert ne signale rien — \(unseen)")
+
+    // Un document arrive : il compte, alors qu'il n'a aucune date à lire.
+    try await Task.sleep(for: .milliseconds(1_100))
+    generation = try await store.beginGeneration()
+    try await store.commit([], in: folder, generation: generation, stamp: stamp,
+                           present: [file("a.jpg"), file("facture.pdf")])
+    unseen = try await store.unseenArrivals()
+    assert(unseen == 1,
+           "un document est une arrivée : c'est tout l'intérêt de ce compteur — \(unseen)")
+
+    // Montrer l'étagère éteint le compteur.
+    try await store.markArrivalsSeen()
+    unseen = try await store.unseenArrivals()
+    assert(unseen == 0, "une fois montrées, elles ne sont plus neuves — \(unseen)")
+
+    // Et une arrivée postérieure au repère le rallume.
+    try await Task.sleep(for: .milliseconds(1_100))
+    generation = try await store.beginGeneration()
+    try await store.commit([], in: folder, generation: generation, stamp: stamp,
+                           present: [file("a.jpg"), file("facture.pdf"), file("plus.txt")])
+    unseen = try await store.unseenArrivals()
+    assert(unseen == 1,
+           "ce qui arrive après le dernier regard compte à nouveau — \(unseen)")
+
+    print("ok — arrivées non vues : un document compte, l'affichage éteint, la suite rallume")
+}

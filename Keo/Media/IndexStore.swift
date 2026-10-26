@@ -2422,6 +2422,28 @@ actor IndexStore {
         guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
     }
 
+    /// Les dates passent par ici plutôt que par `value`/`setValue` : un horodatage rangé en
+    /// entier est tronqué à la seconde inférieure, et une arrivée survenue dans la même
+    /// seconde que le repère restait alors « non vue » pour toujours.
+    private func doubleValue(forKey key: String) throws -> Double? {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT v FROM meta WHERE k = ?", into: &statement)
+        bind(statement, 1, key)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return sqlite3_column_double(statement, 0)
+    }
+
+    private func setDoubleValue(_ value: Double, forKey key: String) throws {
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v",
+                    into: &statement)
+        bind(statement, 1, key)
+        sqlite3_bind_double(statement, 2, value)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
+    }
+
     private func setValue(_ value: Int64, forKey key: String) throws {
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
@@ -2485,6 +2507,37 @@ actor IndexStore {
     /// `kinds` restreint ce qui remonte. L'étagère de l'accueil s'appelle « Dernières
     /// photos » : elle ne doit donc montrer que des photos, pas des vidéos sous un titre qui
     /// n'est pas le leur. Le widget, lui, prend les deux.
+    /// Combien d'arrivées le propriétaire n'a pas encore vues.
+    ///
+    /// Un compteur d'**arrivées**, et pas un compteur de lectures. L'app a déjà « N fichiers à
+    /// lire », qui veut dire « il reste des dates à aller chercher » — un document n'en a
+    /// aucune, il est complet dès qu'il est listé, et l'y compter ferait promettre un travail
+    /// qui n'existe pas à un voyant qui ne s'éteindrait jamais. Deux questions différentes,
+    /// deux chiffres.
+    ///
+    /// Le repère est la date de la dernière fois que l'étagère a été à l'écran. Absent, tout
+    /// compte : à la première ouverture après une arrivée, elle se signale.
+    func unseenArrivals() throws -> Int {
+        try open()
+        let since = try doubleValue(forKey: Self.arrivalsSeenKey) ?? 0
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT count(*) FROM arrival WHERE added > ?", into: &statement)
+        sqlite3_bind_double(statement, 1, since)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+        return Int(sqlite3_column_int64(statement, 0))
+    }
+
+    /// Avance le repère à maintenant. Appelé quand l'étagère paraît : « vu » veut dire que
+    /// l'app l'a montré, pas que quelqu'un a cliqué quelque part — un compteur qu'on ne peut
+    /// éteindre que par un geste précis finit allumé pour toujours.
+    func markArrivalsSeen() throws {
+        try open()
+        try setDoubleValue(Date().timeIntervalSince1970, forKey: Self.arrivalsSeenKey)
+    }
+
+    private static let arrivalsSeenKey = "arrivalsSeenAt"
+
     /// Ce qui est arrivé depuis que Keo regarde, tous genres confondus — documents compris.
     ///
     /// La jointure avec `arrival` fait le tri toute seule : ce qui a été indexé avant

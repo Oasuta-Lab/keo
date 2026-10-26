@@ -28,6 +28,9 @@ struct HomeView: View {
     /// Ce qui est arrivé depuis que Keo regarde. Vide tant que rien n'est arrivé, et alors
     /// l'étagère ne s'affiche pas — une section vide sur un accueil est une promesse non tenue.
     @State private var arrivals: [Item] = []
+    /// Combien d'entre elles n'avaient pas encore été montrées. Lu avant que l'étagère ne
+    /// paraisse, donc le chiffre survit à la visite qui l'efface.
+    @State private var unseenArrivals = 0
     @State private var destination: BrowserSource?
     @State private var memoryPage = 0
     /// Advances once per auto-turn, and indexes into each year's photos — so a year that
@@ -376,7 +379,12 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Épinglés").font(.title3.bold())
                 ScrollView(.horizontal) {
-                    LazyHStack(spacing: 12) {
+                    // `HStack` et non `LazyHStack` : une pile paresseuse ne mesure que ce
+                    // qu'elle a matérialisé, donc la rangée prenait la hauteur de la première
+                    // carte visible — la plus courte — et tronquait le bas des suivantes, qui
+                    // ont une ligne de plus dès que l'index connaît leur poids et leur
+                    // période. Il y a une poignée d'épingles : la paresse ne rapportait rien.
+                    HStack(alignment: .top, spacing: 12) {
                         ForEach(pins) { folder in
                             NavigationLink(value: BrowserSource.folder(folder)) {
                                 FolderCard(folder: folder, stats: pinStats[folder.path],
@@ -451,7 +459,22 @@ struct HomeView: View {
     private var arrived: some View {
         if !arrivals.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Derniers ajouts").font(.title3.bold())
+                HStack(spacing: 8) {
+                    Text("Derniers ajouts").font(.title3.bold())
+                    // Le seul endroit de l'app qui annonce l'arrivée d'un document : « N
+                    // fichiers à lire » ne parle que des dates, et un document n'en a pas.
+                    if unseenArrivals > 0 {
+                        Text(unseenArrivals.formatted())
+                            .font(.caption2.weight(.semibold))
+                            .fontDesign(.rounded)
+                            .foregroundStyle(Color("OnAccent"))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(.tint, in: Capsule())
+                            .accessibilityLabel(
+                                Plural.count(unseenArrivals, "nouvel élément", "nouveaux éléments"))
+                    }
+                }
                 VStack(spacing: 0) {
                     let shown = Array(arrivals.prefix(Self.shownArrivals))
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, item in
@@ -482,6 +505,10 @@ struct HomeView: View {
                             in: RoundedRectangle(cornerRadius: Theme.Radius.panel,
                                                  style: .continuous))
             }
+            // Le repère avance quand l'étagère a été montrée. Le chiffre affiché, lui, vient
+            // d'une lecture faite avant : la pastille reste donc visible pendant cette
+            // visite-ci et ne revient qu'au prochain ajout.
+            .task(id: arrivals.first?.id) { try? await IndexStore.shared.markArrivalsSeen() }
         }
     }
 
@@ -599,6 +626,7 @@ struct HomeView: View {
         // une seconde requête juste pour compter.
         arrivals = (try? await IndexStore.shared.recentlyAdded(under: FreeboxClient.rootPath,
                                                                limit: Self.shownArrivals + 1)) ?? []
+        unseenArrivals = (try? await IndexStore.shared.unseenArrivals()) ?? 0
         disk = try? await IndexStore.shared.capacity()
 
         // Refreshed in the background, and only when the box answers. A failure here is not
