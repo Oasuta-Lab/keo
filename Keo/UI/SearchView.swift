@@ -221,6 +221,6 @@ private struct Chip: View {
             .padding(.vertical, 7)
             .background(on ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary),
                         in: Capsule())
-            .foregroundStyle(on ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .foregroundStyle(on ? AnyShapeStyle(Color("OnAccent")) : AnyShapeStyle(.primary))
     }
 }

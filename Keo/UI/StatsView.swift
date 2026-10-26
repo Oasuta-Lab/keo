@@ -69,7 +69,7 @@ struct StatsView: View {
         Section {
             Label(stats.coverage, systemImage: "exclamationmark.triangle")
                 .font(.footnote)
-                .foregroundStyle(.orange)
+                .foregroundStyle(Theme.warning)
             Button("Continuer l'indexation…", systemImage: "square.stack.3d.up") {
                 showingIndexing = true
             }
@@ -119,7 +119,7 @@ struct StatsView: View {
                     LabeledContent("Pas encore lues") {
                         Text(stats.datelessUnread, format: .number)
                             .monospacedDigit()
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Theme.warning)
                     }
                 }
             }
@@ -143,6 +143,15 @@ struct StatsView: View {
             BarMark(x: .value("Année", tally.year), y: .value("Nombre", tally.videos))
                 .foregroundStyle(by: .value("Type", "Vidéos"))
         }
+        // Years are plotted on a quantitative axis, which Swift Charts anchors at zero unless
+        // told otherwise — every year then landed in a sliver at the right edge, under tick
+        // labels reading 0, 500, 1000. The domain is the data, padded by a year on each side.
+        .chartXScale(domain: (years.map(\.year).min() ?? 0) - 1
+                           ... (years.map(\.year).max() ?? 0) + 1)
+        .chartForegroundStyleScale([
+            "Photos": Color("ChartPhotos"),
+            "Vidéos": Color("ChartVideos"),
+        ])
         .chartXAxis {
             // A year is a number, not a quantity: grouping separators would print "2 024".
             AxisMarks(values: .automatic(desiredCount: 5)) { value in
@@ -173,9 +182,11 @@ struct StatsView: View {
     }
 
     private func detail(_ tally: YearTally) -> String {
-        guard tally.videos > 0 else { return "\(tally.photos.formatted()) photos" }
-        guard tally.photos > 0 else { return "\(tally.videos.formatted()) vidéos" }
-        return "\(tally.photos.formatted()) photos · \(tally.videos.formatted()) vidéos"
+        let photos = Undoer.count(tally.photos, "photo", "photos")
+        let videos = Undoer.count(tally.videos, "vidéo", "vidéos")
+        guard tally.videos > 0 else { return photos }
+        guard tally.photos > 0 else { return videos }
+        return photos + " · " + videos
     }
 
     // MARK: Poids
@@ -222,9 +233,11 @@ struct StatsView: View {
                 }
             }
             .frame(height: 6)
-            Text(subtree.weight)
+            // "≈" rather than amber alone: part of this subtree has no known size, so the
+            // figure is a floor. Said in the text, it survives being read in greyscale.
+            Text(subtree.unweighed > 0 ? "≈ " + subtree.weight : subtree.weight)
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(subtree.unweighed > 0 ? Color.orange : Color.secondary)
+                .foregroundStyle(subtree.unweighed > 0 ? Theme.warning : Color.secondary)
         }
         .padding(.vertical, 2)
     }

@@ -125,7 +125,7 @@ struct Badges: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 5)
             .padding(.vertical, 3)
-            .background(.black.opacity(0.45), in: Capsule())
+            .background(.black.opacity(Theme.Scrim.chip), in: Capsule())
             .padding(5)
             .allowsHitTesting(false)
         }

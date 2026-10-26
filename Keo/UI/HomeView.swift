@@ -100,7 +100,7 @@ struct HomeView: View {
                 .resizable()
                 .scaledToFit()
                 .frame(width: 42, height: 42)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tight, style: .continuous))
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 0) {
@@ -148,7 +148,7 @@ struct HomeView: View {
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
 
-                LinearGradient(colors: [.black.opacity(0.75), .clear],
+                LinearGradient(colors: [.black.opacity(Theme.Scrim.caption), .clear],
                                startPoint: .bottom, endPoint: .center)
                     .allowsHitTesting(false)
 
@@ -180,7 +180,7 @@ struct HomeView: View {
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
-                    .background(.black.opacity(0.35), in: Capsule())
+                    .background(.black.opacity(Theme.Scrim.chip), in: Capsule())
                     .padding(12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .allowsHitTesting(false)
@@ -188,7 +188,7 @@ struct HomeView: View {
                 }
             }
             .aspectRatio(4 / 3, contentMode: .fit)
-            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous))
             // The overlays let taps through, so this opens the year on screen while the
             // carousel keeps its own swipe.
             .contentShape(Rectangle())
@@ -210,8 +210,9 @@ struct HomeView: View {
                     LazyHStack(spacing: 12) {
                         ForEach(pins) { folder in
                             NavigationLink(value: BrowserSource.folder(folder)) {
-                                PinCard(folder: folder, stats: pinStats[folder.path],
-                                        cover: pinCovers[folder.path], client: client)
+                                FolderCard(folder: folder, stats: pinStats[folder.path],
+                                           cover: pinCovers[folder.path], client: client,
+                                           width: 140)
                             }
                             .buttonStyle(.plain)
                             // Pinning happens in Parcourir by long press; unpinning had no
@@ -250,7 +251,7 @@ struct HomeView: View {
                             } label: {
                                 Thumb(item: item, client: client, selected: nil, lookahead: [])
                                     .frame(width: 96, height: 96)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8,
+                                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tight,
                                                                 style: .continuous))
                             }
                             .buttonStyle(.plain)
@@ -298,7 +299,7 @@ struct HomeView: View {
                 }
             }
             .background(.quaternary.opacity(0.4),
-                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        in: RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous))
         }
     }
 
@@ -306,13 +307,22 @@ struct HomeView: View {
     /// fetching it on sight would leave the bar blank every time the owner is out — which is
     /// most of the day. It is therefore read when the phone is home and remembered: the box
     /// does not sleep, the phone leaves.
+    /// Under a tenth left. Below this the gauge and its glyph both change.
+    private var nearlyFull: Bool {
+        guard let disk, disk.total > 0 else { return false }
+        return Double(disk.free) / Double(disk.total) < 0.1
+    }
+
     @ViewBuilder
     private var storage: some View {
         if let disk {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Image(systemName: "internaldrive")
-                        .foregroundStyle(.tint)
+                    // The gauge turning amber is not enough on its own: the glyph changes too,
+                    // so a disk running out still reads without relying on colour.
+                    Image(systemName: nearlyFull ? "internaldrive.badge.xmark" : "internaldrive")
+                        .foregroundStyle(nearlyFull ? AnyShapeStyle(Theme.warning)
+                                                    : AnyShapeStyle(.tint))
                         .frame(width: 28)
                     Text("Stockage")
                     Spacer(minLength: 8)
@@ -323,7 +333,7 @@ struct HomeView: View {
                         .lineLimit(1)
                 }
                 ProgressView(value: Double(disk.total - disk.free), total: Double(disk.total))
-                    .tint(Double(disk.free) / Double(disk.total) < 0.1 ? .orange : .accentColor)
+                    .tint(nearlyFull ? Theme.warning : .accentColor)
                     .padding(.leading, 28)
                 Text("Dont \(weightLabel) lus par Keo")
                     .font(.caption2)
@@ -393,42 +403,6 @@ struct HomeView: View {
 
 // MARK: - Pieces
 
-private struct PinCard: View {
-    let folder: Item
-    let stats: FolderStats?
-    let cover: Item?
-    let client: FreeboxClient
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Color.clear
-                .aspectRatio(4 / 3, contentMode: .fit)
-                .overlay {
-                    if let cover {
-                        Thumb(item: cover, client: client, selected: nil, lookahead: [])
-                    } else {
-                        Image(systemName: "folder")
-                            .font(.title)
-                            .foregroundStyle(.tint)
-                    }
-                }
-                .background(.quaternary.opacity(0.4))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-            Text(folder.name).font(.subheadline).lineLimit(1)
-            // Omitted rather than zeroed: on a folder the index has not finished, the count
-            // is genuinely unknown, and "0" would read as "this folder is empty".
-            if let count = stats?.mediaCount {
-                Text(Undoer.count(count, "photo", "photos"))
-                    .font(.caption2)
-                    .fontDesign(.rounded)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(width: 140)
-    }
-}
-
 private struct LibraryRow: View {
     let icon: String
     let title: String
@@ -447,7 +421,7 @@ private struct LibraryRow: View {
             if let detail {
                 Text(detail)
                     .font(.subheadline)
-                    .foregroundStyle(warning ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                    .foregroundStyle(warning ? AnyShapeStyle(Theme.warning) : AnyShapeStyle(.secondary))
                     .lineLimit(1)
             }
             if chevron {
@@ -463,14 +437,14 @@ private struct LibraryRow: View {
 }
 
 /// The first launch, when the app has nothing of the owner's to show. One of the three places
-/// the mascot is allowed — never on a screen that has photos on it, where the photos win.
+/// the mark is allowed — never on a screen that has photos on it, where the photos win.
 private struct WelcomeCard: View {
     let reachable: Bool
     let start: () -> Void
 
     var body: some View {
         VStack(spacing: 14) {
-            Mascot(height: 96)
+            CageMark.Filled(height: 64).foregroundStyle(.tint)
             Text("Bienvenue dans Keo").font(.title3.bold())
             Text("Keo n'a encore rien vu de ta bibliothèque. Une première lecture construit "
                + "son index : les vraies dates de prise de vue, la timeline, la recherche — "
@@ -481,7 +455,11 @@ private struct WelcomeCard: View {
 
             if reachable {
                 Button("Lancer la première lecture", action: start)
+                    // The label colour SwiftUI picks for a prominent button assumes a
+                    // dark fill. Keo's accent is a pale peach in dark mode, where white
+                    // on it falls to 2.1:1 — `OnAccent` flips with the appearance.
                     .buttonStyle(.borderedProminent)
+                    .foregroundStyle(Color("OnAccent"))
                     .controlSize(.large)
             } else {
                 // Absence of the box is Tuesday, not a failure. No error styling.
@@ -495,6 +473,6 @@ private struct WelcomeCard: View {
         .frame(maxWidth: .infinity)
         .padding(24)
         .background(.quaternary.opacity(0.4),
-                    in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                    in: RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous))
     }
 }

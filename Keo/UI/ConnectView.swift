@@ -13,7 +13,7 @@ struct ConnectView: View {
         VStack(spacing: 28) {
             Spacer()
 
-            Mascot(height: 160)
+            CageMark.Filled(height: 110).foregroundStyle(.tint)
 
             VStack(spacing: 8) {
                 Text("Keo").font(.largeTitle.bold())
@@ -49,7 +49,11 @@ struct ConnectView: View {
                     Button("Associer à la Freebox") {
                         Task { await store.pair() }
                     }
+                    // The label colour SwiftUI picks for a prominent button assumes a
+                    // dark fill. Keo's accent is a pale peach in dark mode, where white
+                    // on it falls to 2.1:1 — `OnAccent` flips with the appearance.
                     .buttonStyle(.borderedProminent)
+                    .foregroundStyle(Color("OnAccent"))
                     .controlSize(.large)
 
                     // The accepted trade-off, said once where the authorization is created.

@@ -114,7 +114,7 @@ struct BrowserView: View {
                         LazyVGrid(columns: folderColumns, spacing: 10) {
                             ForEach(contents.folders) { folder in
                                 NavigationLink(value: folder) {
-                                    FolderTile(folder: folder, stats: folderStats[folder.path],
+                                    FolderCard(folder: folder, stats: folderStats[folder.path],
                                                cover: folderCovers[folder.path], client: client,
                                                noted: noted.contains(folder.path))
                                 }
@@ -530,7 +530,7 @@ struct BrowserView: View {
         if !missing.isEmpty, !source.isOnNAS {
             HStack(spacing: 10) {
                 Image(systemName: "questionmark.folder")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.warning)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(missing.count == 1
                          ? "1 élément introuvable sur le NAS"
@@ -970,7 +970,10 @@ struct Thumb: View {
                         .scaledToFill()
                         .transition(.opacity)
                 } else {
-                    Image(systemName: item.kind == .video ? "film" : "photo")
+                    // The mark, not a `photo` glyph: this is the one empty rectangle a photo
+                    // app makes by itself, and it says the true thing — the file is still on
+                    // the NAS. Videos keep their play badge below, so nothing is lost.
+                    CageMark.Filled(height: 30)
                         .foregroundStyle(.tertiary)
                 }
             }
@@ -992,13 +995,13 @@ struct Thumb: View {
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(.white,
                                          selected ? AnyShapeStyle(.tint)
-                                                  : AnyShapeStyle(.black.opacity(0.3)))
+                                                  : AnyShapeStyle(.black.opacity(Theme.Scrim.chip)))
                         .shadow(radius: 2)
                         .padding(5)
                 }
             }
             .overlay {
-                if selected == true { Color.black.opacity(0.25) }
+                if selected == true { Color.black.opacity(Theme.Scrim.veil) }
             }
             .accessibilityLabel(item.name)
             .accessibilityValue(selected.map { $0 ? "Sélectionné" : "Non sélectionné" } ?? "")
@@ -1010,91 +1013,6 @@ struct Thumb: View {
                 guard !Task.isCancelled else { return }
                 withAnimation(.easeOut(duration: 0.18)) { image = loaded }
             }
-    }
-}
-
-private struct FolderTile: View {
-    let folder: Item
-    /// Absent until the folder has been indexed; the tile simply says less.
-    let stats: FolderStats?
-    /// A photo from inside, picked by the index. Absent until a pass has seen one.
-    let cover: Item?
-    let client: FreeboxClient
-    let noted: Bool
-
-    @State private var image: UIImage?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ZStack(alignment: .bottomTrailing) {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(.tint.opacity(0.16))
-                    .aspectRatio(4 / 3, contentMode: .fit)
-                    .overlay {
-                        if let image {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                                .transition(.opacity)
-                        } else {
-                            Image(systemName: "folder.fill")
-                                .font(.system(size: 34))
-                                .foregroundStyle(.tint)
-                        }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-
-                Badges(noted: noted)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-                if let count = stats?.mediaCount ?? folder.childCount, count > 0 {
-                    Text(count, format: .number)
-                        .font(.caption2.weight(.medium))
-                        .fontDesign(.rounded)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(.ultraThinMaterial, in: Capsule())
-                        .padding(8)
-                }
-            }
-            .task(id: cover?.path) {
-                guard let cover else { return }
-                // Default size on purpose: the cover then shares its cache entry with the grid
-                // cell of the folder being opened, instead of fetching the same photo twice.
-                let loaded = await ThumbnailPipeline.shared.thumbnail(for: cover, client: client)
-                guard !Task.isCancelled else { return }
-                withAnimation(.easeOut(duration: 0.18)) { image = loaded }
-            }
-
-            Text(folder.name)
-                .font(.subheadline)
-                .lineLimit(2, reservesSpace: true)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.top, 6)
-                .padding(.horizontal, 2)
-
-            if let detail {
-                Text(detail)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 2)
-            }
-        }
-        .contentShape(Rectangle())
-    }
-
-    /// "8,2 Go · 2019 – 2024", trimmed to whatever is actually known.
-    private var detail: String? {
-        guard let stats else { return nil }
-        let parts = [
-            stats.bytes.map { Int64($0).formatted(.byteCount(style: .file)) },
-            stats.span,
-        ].compactMap { $0 }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
 

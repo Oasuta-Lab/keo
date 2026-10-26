@@ -37,7 +37,7 @@ struct ShortcutsView: View {
                             if missing.contains(folder.path) {
                                 Image(systemName: "questionmark.circle.fill")
                                     .font(.caption)
-                                    .foregroundStyle(.orange)
+                                    .foregroundStyle(Theme.warning)
                             }
                         }
                         Text(missing.contains(folder.path)

@@ -263,7 +263,7 @@ struct ViewerView: View {
     private var barShape: AnyShape {
         currentPlayer == nil
             ? AnyShape(Capsule())
-            : AnyShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+            : AnyShape(RoundedRectangle(cornerRadius: Theme.Radius.panel, style: .continuous))
     }
 
     private func barRow(morphing: Bool) -> some View {

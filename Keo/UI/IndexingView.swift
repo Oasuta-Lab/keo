@@ -38,7 +38,7 @@ struct IndexingView: View {
                             .foregroundStyle(.secondary)
                     } else {
                         VStack(spacing: 10) {
-                            Mascot(height: 72, opacity: 0.8)
+                            CageMark.Filled(height: 52, opacity: 0.8).foregroundStyle(.tint)
                             Text("Pas encore commencée")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
@@ -313,7 +313,7 @@ struct IndexingView: View {
             } else if indexer.state.isPaused || indexer.isStalled {
                 Label("En pause — reprend là où elle s'est arrêtée",
                       systemImage: "pause.circle.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.warning)
             } else {
                 Label("Terminée", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
@@ -360,14 +360,14 @@ struct IndexingView: View {
                              footer: String = ProblemList.retryFooter) -> some View {
         if problems.isEmpty {
             LabeledContent(label) {
-                Text(count, format: .number).monospacedDigit().foregroundStyle(.orange)
+                Text(count, format: .number).monospacedDigit().foregroundStyle(Theme.warning)
             }
         } else {
             NavigationLink {
                 ProblemList(title: label, total: count, problems: problems, footer: footer)
             } label: {
                 LabeledContent(label) {
-                    Text(count, format: .number).monospacedDigit().foregroundStyle(.orange)
+                    Text(count, format: .number).monospacedDigit().foregroundStyle(Theme.warning)
                 }
             }
         }
@@ -382,26 +382,40 @@ struct IndexingView: View {
 }
 
 /// Shown when a folder has more undated files than is reasonable to read on the fly.
+/// The capsule both grid chips wear.
+///
+/// Only the contents differ between them; the chassis — padding, material, and above all the
+/// tap target reaching 44 pt without the chip growing into the grid — was copied twice, which
+/// is how the second copy loses the part that is easy to forget.
+private struct GridChip<Content: View>: View {
+    let open: () -> Void
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 8) { content }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.ultraThinMaterial, in: Capsule())
+                // The capsule is about 32 pt tall; the tap target has to reach 44 without the
+                // chip itself growing into the grid.
+                .contentShape(Capsule().inset(by: -8))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
 struct UnindexedChip: View {
     let count: Int
     let open: () -> Void
 
     var body: some View {
-        Button(action: open) {
-            HStack(spacing: 8) {
-                Image(systemName: "calendar.badge.exclamationmark")
-                Text("\(count.formatted()) photos pas encore lues")
-                    .fontDesign(.rounded)
-                    .font(.caption.weight(.medium))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
-            // The capsule is about 32 pt tall; the tap target has to reach 44 without the
-            // chip itself growing into the grid.
-            .contentShape(Capsule().inset(by: -8))
+        GridChip(open: open) {
+            Image(systemName: "calendar.badge.exclamationmark")
+            Text(Undoer.count(count, "photo pas encore lue", "photos pas encore lues"))
+                .fontDesign(.rounded)
+                .font(.caption.weight(.medium))
         }
-        .buttonStyle(.plain)
     }
 }
 
@@ -412,23 +426,14 @@ struct IndexingChip: View {
     let open: () -> Void
 
     var body: some View {
-        Button(action: open) {
-            HStack(spacing: 10) {
-                ProgressView(value: fraction)
-                    .progressViewStyle(.circular)
-                    .controlSize(.mini)
-                Text("Indexation · \(pending) restantes")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: Capsule())
-            // The capsule is about 32 pt tall; the tap target has to reach 44 without the
-            // chip itself growing into the grid.
-            .contentShape(Capsule().inset(by: -8))
+        GridChip(open: open) {
+            ProgressView(value: fraction)
+                .progressViewStyle(.circular)
+                .controlSize(.mini)
+            Text("Indexation · " + Undoer.count(pending, "restante", "restantes"))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
     }
 }
 
@@ -459,7 +464,7 @@ private struct ProblemList: View {
                             .truncationMode(.head)
                         Text(problem.reason)
                             .font(.caption)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Theme.warning)
                     }
                     .padding(.vertical, 2)
                 }
