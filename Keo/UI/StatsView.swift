@@ -227,8 +227,10 @@ struct StatsView: View {
             }
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3).fill(.quaternary)
-                    RoundedRectangle(cornerRadius: 3).fill(.tint)
+                    // Une capsule, pas un rayon chiffré : la barre fait 6 pt de haut, donc
+                    // « moitié de la hauteur » est exactement ce qu'on veut dire.
+                    Capsule().fill(.quaternary)
+                    Capsule().fill(.tint)
                         .frame(width: geometry.size.width * subtree.fraction(of: heaviest))
                 }
             }

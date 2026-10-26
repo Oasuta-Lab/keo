@@ -444,7 +444,8 @@ struct HomeView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Derniers ajouts").font(.title3.bold())
                 VStack(spacing: 0) {
-                    ForEach(Array(arrivals.enumerated()), id: \.element.id) { index, item in
+                    let shown = Array(arrivals.prefix(Self.shownArrivals))
+                    ForEach(Array(shown.enumerated()), id: \.element.id) { index, item in
                         Button {
                             destination = BrowserSource.parent(of: item)
                         } label: {
@@ -453,9 +454,19 @@ struct HomeView: View {
                                        detail: BrowserSource.parent(of: item)?.title)
                         }
                         .buttonStyle(.plain)
-                        if index < arrivals.count - 1 {
+                        if index < shown.count - 1 || arrivals.count > shown.count {
                             Divider().padding(.leading, 56)
                         }
+                    }
+                    // Seulement s'il y a vraiment une suite : un « Voir tout » qui ouvre les
+                    // cinq mêmes lignes est une porte qui ne mène nulle part.
+                    if arrivals.count > Self.shownArrivals {
+                        Button {
+                            Task { await openAllArrivals() }
+                        } label: {
+                            LibraryRow(icon: "ellipsis", title: "Voir tout", detail: nil)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .background(.quaternary.opacity(0.4),
@@ -463,6 +474,20 @@ struct HomeView: View {
                                                  style: .continuous))
             }
         }
+    }
+
+    /// Cinq lignes : assez pour voir ce qui vient d'arriver, assez peu pour que la section
+    /// reste une nouvelle et pas une liste.
+    private static let shownArrivals = 5
+
+    /// La liste complète, récupérée au moment du geste plutôt que gardée en mémoire : on ne
+    /// charge pas deux cents lignes à chaque ouverture de l'accueil pour un bouton que
+    /// personne ne touche la plupart du temps.
+    private func openAllArrivals() async {
+        let all = (try? await IndexStore.shared.recentlyAdded(under: FreeboxClient.rootPath,
+                                                              limit: 200)) ?? arrivals
+        guard !all.isEmpty else { return }
+        destination = .results(title: "Derniers ajouts", items: all)
     }
 
     private static func glyph(for kind: Item.Kind) -> String {
@@ -561,8 +586,10 @@ struct HomeView: View {
         // sous ce titre est un contenu qui ne correspond pas à ce qui l'annonce.
         recent = (try? await IndexStore.shared.recentMedia(under: FreeboxClient.rootPath,
                                                            limit: 12, kinds: [.image])) ?? []
+        // Un de plus que les cinq montrés : c'est ce qui dit s'il y a une suite, sans poser
+        // une seconde requête juste pour compter.
         arrivals = (try? await IndexStore.shared.recentlyAdded(under: FreeboxClient.rootPath,
-                                                               limit: 6)) ?? []
+                                                               limit: Self.shownArrivals + 1)) ?? []
         disk = try? await IndexStore.shared.capacity()
 
         // Refreshed in the background, and only when the box answers. A failure here is not

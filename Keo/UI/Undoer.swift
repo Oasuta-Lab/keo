@@ -120,7 +120,10 @@ struct UndoBanner: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 2)
             .frame(maxWidth: 420)
-            .background(.bar, in: Capsule())
+            // `.ultraThinMaterial`, pas `.bar` : cette capsule flotte au-dessus du
+            // contenu comme les puces et la bulle du rail, et `.bar` est le fond d'une
+            // barre collée à un bord. Sur une photo noire, les deux ne se répondaient pas.
+            .background(.ultraThinMaterial, in: Capsule())
             .padding(.horizontal, 16)
             // Swipe it away rather than wait it out. The step stays on the stack — shaking
             // still undoes it — the banner has simply stopped asking for attention.
