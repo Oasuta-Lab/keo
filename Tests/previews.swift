@@ -116,12 +116,12 @@ func checkRecentKinds() async throws {
     print("ok — l'étagère « Dernières photos » ne ramène que des photos")
 }
 
-/// La date d'arrivée : posée une fois, jamais déplacée, jamais inventée.
+/// La date d'arrivée : jamais inventée, posée une fois, jamais déplacée.
 ///
-/// Les trois propriétés qui comptent, et qui ne se voient qu'au bout de plusieurs passages :
-/// un fichier neuf reçoit sa date ; un fichier revu la garde — sinon un ré-indexage ferait
-/// remonter toute la bibliothèque d'un coup ; et ce qui était là avant la colonne n'en reçoit
-/// aucune, plutôt que d'hériter de l'instant de la mise à jour.
+/// Quatre propriétés, et chacune s'est payée. La plus coûteuse à voir est la première : la
+/// table étant vide à la livraison, le premier passage sur un dossier tamponnait tout son
+/// contenu comme arrivé à l'instant — des fichiers posés là depuis des années. Un fichier
+/// n'est une arrivée que s'il apparaît dans un dossier que Keo connaissait déjà.
 func checkArrivalDate() async throws {
     let home = FileManager.default.temporaryDirectory
         .appendingPathComponent("keo-added-\(ProcessInfo.processInfo.processIdentifier)")
@@ -135,57 +135,58 @@ func checkArrivalDate() async throws {
     }
     let store = IndexStore(directory: home)
     let folder = "/NAS/Boîte"
+    let stamp = FolderStamp.Completion(modified: Date(timeIntervalSince1970: 1_700_000_000),
+                                       childCount: 3, mediaCount: 1, bytes: 6_144)
 
-    // --- premier passage : trois fichiers de genres différents ------------------------
+    // --- premier passage : rien n'est une arrivée -------------------------------------
     var generation = try await store.beginGeneration()
     try await store.commit([(file("a.jpg"), nil)], in: folder, generation: generation,
+                           stamp: stamp,
                            present: [file("a.jpg"), file("notes.txt"), file("clip.mov")])
     let first = try await store.recentlyAdded(under: folder, limit: 10)
-    assert(first.count == 3, "les trois arrivées sont vues — \(first.map(\.name))")
-    assert(first.contains { $0.kind == .other },
-           "un document compte comme un ajout : c'est tout l'intérêt de cette étagère")
+    assert(first.isEmpty,
+           "un dossier découvert n'est pas un dossier où quelque chose vient d'arriver — "
+         + "\(first.map(\.name))")
 
-    // --- deuxième passage sur les mêmes : la date ne bouge pas ------------------------
+    // --- deuxième passage : seul le nouveau est une arrivée ---------------------------
     try await Task.sleep(for: .milliseconds(1_100))
     generation = try await store.beginGeneration()
     try await store.commit([(file("a.jpg"), nil)], in: folder, generation: generation,
+                           stamp: stamp,
                            present: [file("a.jpg"), file("notes.txt"), file("clip.mov"),
                                      file("neuf.pdf")])
     let second = try await store.recentlyAdded(under: folder, limit: 10)
-    assert(second.count == 4, "le nouveau s'ajoute aux trois — \(second.map(\.name))")
-    assert(second.first?.name == "neuf.pdf",
-           "le dernier arrivé passe devant, sinon la colonne a été réécrite — \(second.map(\.name))")
+    assert(second.map(\.name) == ["neuf.pdf"],
+           "seul le fichier apparu depuis la dernière visite — \(second.map(\.name))")
+    assert(second.first?.kind == .other,
+           "un document est une arrivée comme une autre : c'est tout l'intérêt de l'étagère")
 
-    // --- « Tout relire depuis zéro » ne doit pas tout faire remonter ------------------
-    // C'est le cas qui a tué la première version : la reconstruction fait `DELETE FROM file`,
-    // donc une date d'arrivée rangée dans cette table-là était effacée et le re-parcours
-    // tamponnait toute la bibliothèque de l'instant de la reconstruction.
-    let order = second.map(\.name)
+    // --- un troisième passage sans rien de neuf ne change rien ------------------------
+    try await Task.sleep(for: .milliseconds(1_100))
+    generation = try await store.beginGeneration()
+    try await store.commit([(file("a.jpg"), nil)], in: folder, generation: generation,
+                           stamp: stamp,
+                           present: [file("a.jpg"), file("notes.txt"), file("clip.mov"),
+                                     file("neuf.pdf")])
+    let again = try await store.recentlyAdded(under: folder, limit: 10)
+    assert(again.map(\.name) == ["neuf.pdf"],
+           "repasser ne crée pas d'arrivées et ne déplace pas celles qui existent — "
+         + "\(again.map(\.name))")
+
+    // --- « Tout relire depuis zéro » non plus -----------------------------------------
+    // Le cas qui a tué la première version : la reconstruction fait `DELETE FROM file`, donc
+    // une date rangée dans cette table-là était effacée et tout remontait d'un coup.
     try await store.forgetEverything()
     try await Task.sleep(for: .milliseconds(1_100))
     generation = try await store.beginGeneration()
     try await store.commit([(file("a.jpg"), nil)], in: folder, generation: generation,
+                           stamp: stamp,
                            present: [file("a.jpg"), file("notes.txt"), file("clip.mov"),
                                      file("neuf.pdf")])
     let rebuilt = try await store.recentlyAdded(under: folder, limit: 10)
-    assert(rebuilt.map(\.name) == order,
-           "après une reconstruction, l'ordre d'arrivée est celui d'avant — "
-         + "\(rebuilt.map(\.name)) au lieu de \(order)")
+    assert(rebuilt.map(\.name) == ["neuf.pdf"],
+           "après une reconstruction, l'étagère est celle d'avant — \(rebuilt.map(\.name))")
 
-    // --- un fichier sans arrivée notée n'apparaît pas ---------------------------------
-    // L'état d'une base antérieure à la table : la ligne existe, l'arrivée non. Écrit à même
-    // le fichier, `exec` étant privé — on n'ouvre pas une API du magasin pour un test.
-    var raw: OpaquePointer?
-    let dbPath = home.appendingPathComponent("index.sqlite").path
-    assert(sqlite3_open(dbPath, &raw) == SQLITE_OK, "la base de test doit s'ouvrir")
-    assert(sqlite3_exec(raw, "DELETE FROM arrival WHERE name = 'clip.mov'",
-                        nil, nil, nil) == SQLITE_OK, "suppression de l'arrivée notée")
-    sqlite3_close(raw)
-    let third = try await store.recentlyAdded(under: folder, limit: 10)
-    assert(!third.contains { $0.name == "clip.mov" },
-           "sans arrivée notée, un fichier n'est pas un ajout récent")
-    assert(third.count == 3, "les autres restent — \(third.map(\.name))")
-
-    print("ok — date d'arrivée : posée une fois, conservée au ré-indexage et à la "
-        + "reconstruction, jamais inventée")
+    print("ok — arrivées : un dossier découvert n'en produit aucune, seul le neuf en est une, "
+        + "et ni un repassage ni une reconstruction ne les déplacent")
 }

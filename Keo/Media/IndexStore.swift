@@ -69,6 +69,16 @@ actor IndexStore {
         // Rows written before the column existed were all read ones.
         try? exec("UPDATE file SET read = 1 WHERE read = 0 AND gen >= 0 AND capture IS NOT NULL")
 
+        // La première version des arrivées notait tout le contenu d'un dossier dès son
+        // premier passage, faute de demander si Keo le connaissait déjà. Les lignes qu'elle a
+        // écrites ne veulent rien dire : des fichiers posés là depuis des années datés de
+        // l'instant où l'index les a rencontrés. On les jette une fois — l'étagère repart
+        // vide, ce qui est exactement ce qu'elle doit dire tant que rien n'est arrivé.
+        if (try? scalar("PRAGMA user_version")) ?? 0 == 0 {
+            try? exec("DELETE FROM arrival")
+            try? exec("PRAGMA user_version = 1")
+        }
+
         // Readable while the phone is locked after the first unlock, like the rest of our data.
         try? FileManager.default.setAttributes(
             [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
@@ -331,6 +341,39 @@ actor IndexStore {
             let id = try folderID(folder, create: true)!
             try exec("UPDATE folder SET gen = \(generation) WHERE id = \(id)")
 
+            // Noté avant que les lignes de `file` ne soient écrites, parce que les deux
+            // conditions se lisent sur l'état d'avant.
+            //
+            // « Déjà listé » (`mtime IS NOT NULL`) est la condition que la première version
+            // avait oubliée, et c'est elle qui comptait : la table d'arrivées était vide à la
+            // livraison, donc le premier passage sur un dossier tamponnait tout son contenu
+            // comme arrivé à l'instant — des fichiers posés là depuis des années. Un fichier
+            // n'est une arrivée que s'il apparaît dans un dossier que Keo connaissait déjà.
+            //
+            // « Pas déjà dans `file` » écarte ce qui était là au passage précédent, et
+            // `OR IGNORE` empêche de redater ce qui a déjà sa date — y compris après une
+            // reconstruction, qui vide `file` mais pas cette table.
+            let arriving = results.map(\.item) + present
+            if !arriving.isEmpty {
+                var note: OpaquePointer?
+                defer { sqlite3_finalize(note) }
+                try prepare("""
+                    INSERT OR IGNORE INTO arrival (folder_id, name, size, added)
+                    SELECT ?1, ?2, ?3, ?4
+                    WHERE EXISTS (SELECT 1 FROM folder WHERE id = ?1 AND mtime IS NOT NULL)
+                      AND NOT EXISTS (SELECT 1 FROM file
+                                      WHERE folder_id = ?1 AND name = ?2 AND size = ?3)
+                    """, into: &note)
+                for item in arriving {
+                    sqlite3_reset(note)
+                    sqlite3_bind_int64(note, 1, id)
+                    bind(note, 2, item.name)
+                    sqlite3_bind_int64(note, 3, item.size)
+                    sqlite3_bind_double(note, 4, now)
+                    guard sqlite3_step(note) == SQLITE_DONE else { throw Failure.write(message) }
+                }
+            }
+
             if !results.isEmpty {
                 var statement: OpaquePointer?
                 defer { sqlite3_finalize(statement) }
@@ -385,27 +428,6 @@ actor IndexStore {
                     guard sqlite3_step(mark) == SQLITE_DONE else { throw Failure.write(message) }
                 }
             }
-            // `OR IGNORE` est toute la regle : une arrivee deja notee ne se renote pas. C'est
-            // ce qui fait qu'un second passage — ou une reconstruction complete, qui vide
-            // `file` mais pas cette table — ne deplace pas la date.
-            let arriving = results.map(\.item) + present
-            if !arriving.isEmpty {
-                var note: OpaquePointer?
-                defer { sqlite3_finalize(note) }
-                try prepare("""
-                    INSERT OR IGNORE INTO arrival (folder_id, name, size, added)
-                    VALUES (?, ?, ?, ?)
-                    """, into: &note)
-                for item in arriving {
-                    sqlite3_reset(note)
-                    sqlite3_bind_int64(note, 1, id)
-                    bind(note, 2, item.name)
-                    sqlite3_bind_int64(note, 3, item.size)
-                    sqlite3_bind_double(note, 4, now)
-                    guard sqlite3_step(note) == SQLITE_DONE else { throw Failure.write(message) }
-                }
-            }
-
             if sweep {
                 try exec("DELETE FROM file WHERE folder_id = \(id) AND gen < \(generation)")
             }
