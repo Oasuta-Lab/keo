@@ -47,7 +47,8 @@ struct TimelineRail: View {
                     // No tick after the text: a short dash right after "2025" reads as a
                     // label whose value is missing.
                     Text(label.year)
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .font(.caption2.weight(.semibold))
+                        .fontDesign(.rounded)
                         .foregroundStyle(.primary)
                         .fixedSize()
                         .padding(.horizontal, 7)
@@ -56,6 +57,10 @@ struct TimelineRail: View {
                         .offset(x: -Self.touchWidth + 14, y: label.y)
                 }
                 .allowsHitTesting(false)
+                // Each pill is placed at the pixel its year starts at, so past a point they
+                // stop growing and start colliding. The scrub bubble carries the precise
+                // value anyway, which is what someone using large type is reading.
+                .dynamicTypeSize(...DynamicTypeSize.accessibility1)
             }
             .overlay(alignment: .trailing) {
                 // This strip used to be 44 pt wide at rest, over a third of the right photo

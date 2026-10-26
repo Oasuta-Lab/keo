@@ -94,23 +94,23 @@ struct HomeView: View {
         .refreshable { await load() }
     }
 
+    /// The date rides above the name as an eyebrow, in the same treatment « CE JOUR-LÀ » wears
+    /// on the memory card below — so the screen opens on one typographic idea instead of two.
+    ///
+    /// No tile: the icon is already on the phone's home screen, one gesture away, and repeating
+    /// it here is a habit from the web. Dropping it also leaves a single left edge for the eye
+    /// to follow, which the badge-name-date arrangement never had — three objects, three
+    /// alignments, in the least stable shape there is.
     private var header: some View {
-        HStack(spacing: 12) {
-            Image("AppLogo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 42, height: 42)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tight, style: .continuous))
-                .accessibilityHidden(true)
-
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Keo").font(.wordmark(size: 32))
-                Text(Self.today)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 3) {
+            Text(Self.today)
+                .font(.caption2.weight(.semibold))
+                .tracking(1)
+                .textCase(.uppercase)
+                .foregroundStyle(.secondary)
+            Text("Keo").font(.wordmark(size: 34))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 4)
     }
 

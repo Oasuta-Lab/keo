@@ -173,7 +173,7 @@ struct OnThisDayView: View {
                     .foregroundStyle(.white)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(.black.opacity(0.45), in: Capsule())  // Theme.Scrim.chip, out of reach from this target
+                    .background(.black.opacity(Theme.Scrim.chip), in: Capsule())
                     .padding(5)
             }
     }

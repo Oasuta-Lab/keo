@@ -155,6 +155,11 @@ struct BrowserView: View {
                     ForEach(contents.documents) { document in
                         Button { tap(document) } label: {
                             Row(item: document, icon: "doc.fill",
+                                // In a folder listing the parent is the screen you are on.
+                                // Everywhere else — results, favourites, a collection — the
+                                // items come from all over, and two files can share a name.
+                                parent: source.isOnNAS
+                                    ? nil : BrowserSource.parent(of: document)?.title,
                                 selected: selecting ? selection.contains(document) : nil)
                         }
                         .buttonStyle(.plain)
@@ -1039,6 +1044,8 @@ struct PushTargets: ViewModifier {
 private struct Row: View {
     let item: Item
     let icon: String
+    /// The folder this item lives in, when the listing is not itself a folder.
+    var parent: String?
     let selected: Bool?
 
     var body: some View {
@@ -1053,10 +1060,13 @@ private struct Row: View {
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name).lineLimit(1)
-                if !item.isDirectory {
-                    Text(item.size.formatted(.byteCount(style: .file)))
+                // Parent first: it is what tells two identically named files apart, which is
+                // the whole reason the line exists.
+                if let detail {
+                    Text(detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             Spacer()
@@ -1064,5 +1074,12 @@ private struct Row: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 11)
         .contentShape(Rectangle())
+    }
+
+    /// "Papiers · 529 ko", trimmed to whatever applies.
+    private var detail: String? {
+        let parts = [parent, item.isDirectory
+                     ? nil : item.size.formatted(.byteCount(style: .file))].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

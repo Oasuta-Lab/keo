@@ -117,6 +117,11 @@ struct Badges: View {
         if !marks.isEmpty {
             HStack(spacing: 3) {
                 ForEach(marks, id: \.symbol) { mark in
+                    // The one size here that deliberately does not scale. These marks sit on
+                    // a thumbnail that can be 75 pt across, and at accessibility sizes they
+                    // would cover the photograph they annotate. Photos does the same with its
+                    // own badges. Their meaning is in the accessibility label, which VoiceOver
+                    // reads at any size — the glyph is a glance, not the information.
                     Image(systemName: mark.symbol)
                         .font(.system(size: 9, weight: .semibold))
                         .accessibilityLabel(mark.label)

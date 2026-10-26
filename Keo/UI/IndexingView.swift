@@ -214,7 +214,7 @@ struct IndexingView: View {
 
                 ForEach(benchResult, id: \.parallel) { run in
                     Text(run.line)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.caption.monospaced())
                 }
             } else {
                 Text("Rien d'indexé à mesurer")

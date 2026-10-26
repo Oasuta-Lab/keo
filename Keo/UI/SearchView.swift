@@ -63,7 +63,12 @@ struct SearchView: View {
             }
             .pickerStyle(.segmented)
 
+            // The row scrolls instead of squeezing. On a 12 Pro the four controls did not fit,
+            // and SwiftUI resolved it by wrapping inside the capsules — « Fa-voris », « Note s ».
+            // « Effacer » stays outside the scroller so it cannot drift off the edge.
             HStack(spacing: 8) {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
                 Menu {
                     Button("Toutes les périodes") { query.period = .any }
                     Button("Entre deux dates…") { pickingDates = true }
@@ -92,12 +97,16 @@ struct SearchView: View {
                     Chip(label: "Notes", icon: "text.quote", on: query.notedOnly)
                 }
                 .buttonStyle(.plain)
-
-                Spacer()
+                    }
+                    // The capsules would otherwise be clipped by the scroller's bounds.
+                    .padding(.vertical, 2)
+                }
+                .scrollIndicators(.hidden)
 
                 if !query.isEmpty {
                     Button("Effacer") { query = SearchQuery() }
                         .font(.footnote.weight(.medium))
+                        .fixedSize()
                 }
             }
         }
@@ -217,6 +226,8 @@ private struct Chip: View {
     var body: some View {
         Label(label, systemImage: icon)
             .font(.footnote.weight(.medium))
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             .background(on ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary),

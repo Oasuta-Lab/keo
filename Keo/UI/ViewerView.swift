@@ -650,6 +650,9 @@ private struct Transport: View {
     @State private var playing = true
     /// Pendant qu'un doigt tient la tête de lecture, l'horloge n'a pas son mot à dire.
     @State private var scrubbing = false
+    /// The play glyph swaps for a pause glyph of a different width; the fixed slot stops the
+    /// clock beside it from jumping. It has to grow with the type, or the glyph overflows it.
+    @ScaledMetric private var controlWidth: CGFloat = 28
 
     var body: some View {
         HStack(spacing: 12) {
@@ -658,8 +661,8 @@ private struct Transport: View {
                 playing.toggle()
             } label: {
                 Image(systemName: playing ? "pause.fill" : "play.fill")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 28)
+                    .font(.body.weight(.semibold))
+                    .frame(width: controlWidth)
             }
             .accessibilityLabel(playing ? "Pause" : "Lire")
 

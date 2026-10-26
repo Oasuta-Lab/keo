@@ -153,7 +153,7 @@ private struct TileView: View {
                     .padding(.bottom, 5)
                     .padding(.top, 20)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(LinearGradient(colors: [.clear, .black.opacity(0.75)],
+                    .background(LinearGradient(colors: [.clear, .black.opacity(Theme.Scrim.caption)],
                                                startPoint: .top, endPoint: .bottom))
             }
     }

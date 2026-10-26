@@ -17,7 +17,7 @@ enum BuildStamp {
 struct BuildStampLabel: View {
     var body: some View {
         Text(BuildStamp.text)
-            .font(.system(size: 10, weight: .regular, design: .monospaced))
+            .font(.caption2.monospaced())
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 3)

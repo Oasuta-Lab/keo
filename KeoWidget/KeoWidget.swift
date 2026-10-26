@@ -246,7 +246,7 @@ struct Caption: View {
         .padding(.bottom, 8)
         .padding(.top, 28)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(LinearGradient(colors: [.clear, .black.opacity(0.75)],
+        .background(LinearGradient(colors: [.clear, .black.opacity(Theme.Scrim.caption)],
                                    startPoint: .top, endPoint: .bottom))
     }
 }

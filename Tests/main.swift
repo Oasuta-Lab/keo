@@ -108,6 +108,24 @@ func checkTheManifestCopiesMatch() {
 
 checkTheManifestCopiesMatch()
 
+/// Même raison pour le thème : l'extension en porte sa copie, et deux voiles qui divergent
+/// donnent un widget qui ne ressemble plus à l'app sans que rien ne le signale.
+func checkTheThemeCopiesMatch() {
+    let app = "Keo/UI/Theme.swift"
+    let widget = "KeoWidget/Theme.swift"
+    guard let inApp = try? Data(contentsOf: URL(fileURLWithPath: app)),
+          let inWidget = try? Data(contentsOf: URL(fileURLWithPath: widget)) else {
+        assertionFailure("copies du thème introuvables — lance le check depuis la racine")
+        return
+    }
+    assert(inApp == inWidget,
+           "\(app) et \(widget) ont divergé : le widget cesserait de ressembler à l'app")
+    assert(inApp.count > 200,
+           "le thème fait \(inApp.count) octets, le scan a dû lire le mauvais fichier")
+}
+
+checkTheThemeCopiesMatch()
+
 // MARK: - Envelope
 
 struct Entry: Decodable {
