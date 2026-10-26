@@ -27,12 +27,13 @@ struct SearchView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Hidden until there is something to filter. At full weight above an empty
-            // screen they read as a form to fill in before being allowed to search.
-            if !query.isEmpty || !results.isEmpty {
-                filters
-                Divider()
-            }
+            // Always shown. They used to appear only once something was typed, on the
+            // grounds that a full-weight filter bar above an empty screen reads as a form to
+            // fill in. But that locked the door from the inside: a date range is a search on
+            // its own — « tout ce que j'ai pris en 2019 » — and there was no way to reach the
+            // filters without first typing something to throw away.
+            filters
+            Divider()
             content
         }
         .navigationTitle("Recherche")
