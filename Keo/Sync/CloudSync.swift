@@ -35,6 +35,20 @@ final class CloudSync: ObservableObject {
     private var engine: CKSyncEngine?
     private var accountAvailable = false
 
+    /// Nothing personal is handed to the engine before the account is identified. The status
+    /// check can say `.available` while `userRecordID()` still fails (offline), and nothing
+    /// guarantees the engine delivers `.switchAccounts` before its first send — so an early
+    /// enqueue could push the previous owner's journal to a freshly signed-in account, before
+    /// `adopt` has had a chance to wipe it.
+    private var identityBound = false
+
+    /// Raised when SQLite refused fetched changes. The engine counts them as consumed the
+    /// moment the event handler returns, and the next `.stateUpdate` would carve that into the
+    /// state file. Freezing the file instead keeps the pre-fetch change token, so the next
+    /// launch refetches exactly what was refused — losing state only ever costs a refetch,
+    /// never data (see `persist`).
+    private var holdStatePersistence = false
+
     init(store: IndexStore = .shared) {
         self.store = store
     }
@@ -66,15 +80,6 @@ final class CloudSync: ObservableObject {
         // events wake us if that ever changes.
         let reachable = (try? await container.accountStatus()) ?? .couldNotDetermine
         accountAvailable = reachable == .available
-        if accountAvailable {
-            // May fail offline; then the binding simply happens on the next launch or on the
-            // engine's sign-in event. Nothing is pushed to an unidentified account meanwhile
-            // only if it differs — see `adopt`.
-            if let user = try? await container.userRecordID() {
-                await adopt(accountID: user.recordName)
-            }
-            _ = try? await store.seedSyncJournalIfNeeded()
-        }
         await enqueueJournal()
         await settleStatus()
     }
@@ -85,6 +90,8 @@ final class CloudSync: ObservableObject {
     /// de-duplicates by record ID, and a row only leaves the journal once acknowledged.
     private func enqueueJournal() async {
         guard let engine else { return }
+        await bindAccountIfNeeded()
+        guard identityBound else { return }
         let pending = (try? await store.pendingSyncChanges()) ?? []
         guard !pending.isEmpty else { return }
         engine.state.add(pendingRecordZoneChanges: pending.map { change in
@@ -95,6 +102,17 @@ final class CloudSync: ObservableObject {
     }
 
     // MARK: Account identity
+
+    /// May fail offline; then it is simply retried on the next enqueue, and a sign-in that
+    /// happens while the app runs arrives through the engine's account events instead.
+    private func bindAccountIfNeeded() async {
+        guard accountAvailable, !identityBound else { return }
+        let container = CKContainer(identifier: Self.containerID)
+        guard let user = try? await container.userRecordID() else { return }
+        await adopt(accountID: user.recordName)
+        _ = try? await store.seedSyncJournalIfNeeded()
+        identityBound = true
+    }
 
     /// Binds the local personalisation to one iCloud account. If a *different* account shows
     /// up, everything personal is wiped first: favourites are personal, and two people must
@@ -147,6 +165,8 @@ final class CloudSync: ObservableObject {
     /// The engine's own memory of what has been sent and fetched. Losing it is not data loss
     /// — the journal is the belt to this suspender — but it would mean refetching everything.
     private func persist(_ serialization: CKSyncEngine.State.Serialization) {
+        // A failed local apply pins the file to its pre-fetch version — see `applyRemoteOrHold`.
+        guard !holdStatePersistence else { return }
         guard let data = try? JSONEncoder().encode(serialization) else { return }
         try? FileManager.default.createDirectory(
             at: Self.stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -246,6 +266,7 @@ extension CloudSync: CKSyncEngineDelegate {
         case .signIn(let user):
             accountAvailable = true
             await adopt(accountID: user.recordName)
+            identityBound = true
             _ = try? await store.seedSyncJournalIfNeeded()
             await enqueueJournal()
             await settleStatus()
@@ -253,12 +274,14 @@ extension CloudSync: CKSyncEngineDelegate {
         case .switchAccounts(_, let current):
             accountAvailable = true
             await adopt(accountID: current.recordName)   // wipes the previous person's data
+            identityBound = true
             await settleStatus()
 
         case .signOut:
             // Local data stays: it belongs to whoever holds the device, and losing favourites
             // because iCloud was turned off would be the silent loss this design refuses.
             accountAvailable = false
+            identityBound = false
             status = .off
 
         @unknown default:
@@ -284,7 +307,22 @@ extension CloudSync: CKSyncEngineDelegate {
         let saves = changes.modifications.compactMap { SyncPayload(record: $0.record) }
         let deletes = changes.deletions.map { $0.recordID.recordName }
         guard !saves.isEmpty || !deletes.isEmpty else { return }
-        try? await store.applyRemote(saves: saves, deletes: deletes)
+        _ = await applyRemoteOrHold(saves: saves, deletes: deletes)
+    }
+
+    /// Unlike a status that merely displays wrong, a swallowed error here is data loss: the
+    /// records exist nowhere but in these arguments once the engine moves on. So a refusal
+    /// freezes the engine state on disk (the refetch path) and is said out loud.
+    private func applyRemoteOrHold(saves: [SyncPayload], deletes: [String]) async -> Bool {
+        do {
+            try await store.applyRemote(saves: saves, deletes: deletes)
+            return true
+        } catch {
+            holdStatePersistence = true
+            status = .error("Impossible d'enregistrer les changements reçus d'iCloud — "
+                          + "ils seront récupérés au prochain lancement.")
+            return false
+        }
     }
 
     private func handle(sent: CKSyncEngine.Event.SentRecordZoneChanges) async {
@@ -314,8 +352,11 @@ extension CloudSync: CKSyncEngineDelegate {
                                                         to: id.recordName)
                     engine?.state.add(pendingRecordZoneChanges: [.saveRecord(id)])
                 } else {
+                    // The journal row only clears once the server's winning version is truly
+                    // stored: kept, it makes the engine retry, collide again, and come back
+                    // here with the data still in hand.
                     if let payload = SyncPayload(record: server) {
-                        try? await store.applyRemote(saves: [payload], deletes: [])
+                        guard await applyRemoteOrHold(saves: [payload], deletes: []) else { continue }
                     }
                     try? await store.clearSyncPendingSave(recordName: id.recordName,
                                                           ifUnchangedSince: ours)

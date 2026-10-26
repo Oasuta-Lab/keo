@@ -237,5 +237,8 @@ private struct Chip: View {
             // puce grossisse et fasse déborder la rangée. Même remède que `GridChip`.
             .contentShape(Capsule().inset(by: -6))
             .foregroundStyle(on ? AnyShapeStyle(Color("OnAccent")) : AnyShapeStyle(.primary))
+            // The active state was carried by colour alone: VoiceOver announced a button with
+            // no state at all.
+            .accessibilityAddTraits(on ? .isSelected : [])
     }
 }

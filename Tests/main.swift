@@ -63,6 +63,7 @@ checkNothingWritesToTheNAS()
 checkPrefetchWindow()
 checkDeepLinks()
 checkBreadcrumb()
+checkClimb()
 checkHumanDates()
 checkFilenameDates()
 
@@ -141,6 +142,52 @@ func checkThePluralCopiesMatch() {
 }
 
 checkThePluralCopiesMatch()
+
+/// Quatrième duplication vers l'extension, mais une logique et non un fichier entier : le
+/// widget recopie le décodage de `ImageDecoding.downsample(fileAt:)` sans pouvoir partager le
+/// fichier. Les deux copies avaient déjà divergé une fois, chacune ayant un garde que l'autre
+/// n'avait pas. On compare donc les décisions de décodage — les options `kCGImageSource…` et
+/// les gardes — plutôt que les octets.
+func checkTheDownsampleLogicMatches() {
+    func read(_ path: String) -> String {
+        guard let raw = try? String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8) else {
+            assertionFailure("\(path) introuvable — lance le check depuis la racine")
+            return ""
+        }
+        return strippingComments(raw)
+    }
+
+    /// Chaque ligne portant une option ImageIO, réduite à « clé=valeur » pour survivre aux
+    /// différences de forme (`options[…] = true` côté app, `…: true,` côté widget).
+    func decisions(_ source: String) -> Set<String> {
+        var found: Set<String> = []
+        for line in source.split(separator: "\n") {
+            guard let start = line.range(of: "kCGImageSource") else { continue }
+            let key = line[start.lowerBound...].prefix { $0.isLetter || $0.isNumber }
+            let rest = line[start.lowerBound...].dropFirst(key.count)
+            let value = ["true", "false", "maxPixel"].first { rest.contains($0) } ?? "?"
+            found.insert("\(key)=\(value)")
+        }
+        return found
+    }
+
+    let app = read("Keo/Media/ImageDecoding.swift")
+    let widget = read("KeoWidget/KeoWidget.swift")
+
+    let inApp = decisions(app)
+    assert(inApp.count >= 5, "le scan n'a vu que \(inApp.count) options côté app — mauvais fichier ?")
+    assert(inApp == decisions(widget),
+           "les options de décodage ont divergé — app : \(inApp.sorted()), "
+           + "widget : \(decisions(widget).sorted())")
+
+    // Les gardes ne portent pas de `kCGImageSource` : vérifiés par présence. Celui sur
+    // `maxPixel` n'existe que côté widget, où une proposition de taille nulle arrive vraiment.
+    assert(app.contains("image.width > 16"), "le garde « width > 16 » a disparu côté app")
+    assert(widget.contains("image.width > 16"), "le garde « width > 16 » a disparu côté widget")
+    assert(widget.contains("maxPixel > 0"), "le garde « maxPixel > 0 » a disparu du widget")
+}
+
+checkTheDownsampleLogicMatches()
 
 checkPreviewProbeTrust()
 checkFrenchPlural()
@@ -681,5 +728,6 @@ try await checkFolderCovers()
 try await checkStatistics()
 try await checkRootIsNotItsOwnChild()
 try await checkFolderExclusion()
+checkVideoRange()
 
 try await checkWidget()

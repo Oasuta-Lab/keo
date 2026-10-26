@@ -53,15 +53,30 @@ private func dataAtom(_ value: String) -> Data {
     atom("data", be32(1) + be32(0) + value.data(using: .utf8)!)
 }
 
-/// moov/meta façon iPhone : clés `mdta`, valeur `com.apple.quicktime.creationdate`.
-private func metaCreation(_ stamp: String, isoLayout: Bool) -> Data {
-    let key = "com.apple.quicktime.creationdate".data(using: .utf8)!
+/// iPhone-style moov/meta: `mdta` keys and their string values, in order (1-based index).
+private func metaKeyed(_ pairs: [(key: String, value: String)], isoLayout: Bool) -> Data {
     let hdlr = atom("hdlr", be32(0) + be32(0) + "mdta".data(using: .ascii)! + Data(count: 12))
-    let keys = atom("keys", be32(0) + be32(1)
-                          + be32(UInt32(8 + key.count)) + "mdta".data(using: .ascii)! + key)
-    let ilst = atom("ilst", atom(rawType: be32(1), dataAtom(stamp)))
+    var entries = Data()
+    for (key, _) in pairs {
+        let bytes = key.data(using: .utf8)!
+        entries += be32(UInt32(8 + bytes.count)) + "mdta".data(using: .ascii)! + bytes
+    }
+    let keys = atom("keys", be32(0) + be32(UInt32(pairs.count)) + entries)
+    var items = Data()
+    for (i, pair) in pairs.enumerated() {
+        items += atom(rawType: be32(UInt32(i + 1)), dataAtom(pair.value))
+    }
+    let ilst = atom("ilst", items)
     return atom("meta", (isoLayout ? be32(0) : Data()) + hdlr + keys + ilst)
 }
+
+/// moov/meta façon iPhone : clés `mdta`, valeur `com.apple.quicktime.creationdate`.
+private func metaCreation(_ stamp: String, isoLayout: Bool) -> Data {
+    metaKeyed([("com.apple.quicktime.creationdate", stamp)], isoLayout: isoLayout)
+}
+
+/// The key a Live Photo's video shares with its still.
+private let liveKey = "com.apple.quicktime.content.identifier"
 
 private func udtaDay(_ stamp: String) -> Data {
     let text = stamp.data(using: .utf8)!
@@ -188,4 +203,129 @@ func checkVideoDate() async throws {
 
     print("ok — dates vidéo : préférences, moov en fin, 64 bits, troncature => need, "
           + "corruption, pilote en deux requêtes")
+
+    // MARK: — Identifiant de photo live (contentIdentifier / scanIdentifier)
+    //
+    // Same three-valued contract as the date scanner, carrying the UUID that pairs a Live
+    // Photo's video with its still. A wrong verdict here welds two unrelated files into one
+    // moment, or silently splits a real pair.
+
+    func idVerdict(_ slices: [VideoDate.Slice], fileSize: Int64) -> VideoDate.Text {
+        VideoDate.scanIdentifier(slices, fileSize: fileSize)
+    }
+
+    let uuid = "F3E8A2D4-5B6C-4D7E-8F90-123456789ABC"
+
+    // The identifier is read as written, alone in the keys table.
+    let withId = ftyp + atom("moov", mvhd2001 + metaKeyed([(liveKey, uuid)], isoLayout: false))
+                      + atom("mdat", Data(count: 32))
+    assert(idVerdict([slice(withId)], fileSize: Int64(withId.count)) == .found(uuid),
+           "l'identifiant partagé d'une photo live est lu tel quel")
+
+    // Like a real iPhone file: several keys, the identifier is not the first. The 1-based
+    // index from `keys` must select the matching `ilst` entry — and the same meta still
+    // yields its date, the two scanners coexist.
+    let both = ftyp + atom("moov", metaKeyed([("com.apple.quicktime.creationdate",
+                                               "2021-06-19T17:12:43+0200"),
+                                              (liveKey, uuid)], isoLayout: true))
+    assert(idVerdict([slice(both)], fileSize: Int64(both.count)) == .found(uuid),
+           "l'index 1-based de keys doit viser la bonne entrée d'ilst")
+    assert(verdict([slice(both)], fileSize: Int64(both.count)) == .found(taken2021),
+           "la date reste lisible dans un meta qui porte aussi l'identifiant")
+
+    // No identifier is the sure verdict « lu, rien trouvé » — an ordinary video, not a
+    // read failure. Both shapes: a meta without the key, and no meta at all.
+    assert(idVerdict([slice(fastStart)], fileSize: Int64(fastStart.count)) == .absent,
+           "un meta sans la clé identifier donne absent, pas need")
+    assert(idVerdict([slice(only)], fileSize: Int64(only.count)) == .absent,
+           "un moov sans meta : pas d'identifiant, verdict sûr")
+
+    // A blank value must not pair anything.
+    let blank = ftyp + atom("moov", metaKeyed([(liveKey, "   ")], isoLayout: false))
+    assert(idVerdict([slice(blank)], fileSize: Int64(blank.count)) == .absent,
+           "un identifiant blanc ne fabrique pas de paire")
+
+    // Truncated mid-moov: ask for more bytes, never conclude.
+    guard case .need = idVerdict([slice(withId.prefix(24))], fileSize: Int64(withId.count))
+    else { assertionFailure("identifiant tronqué au milieu du moov : on ne conclut pas"); return }
+
+    // moov at the end of the file behind a never-materialised mdat, 32- and 64-bit sizes.
+    let idTail = atom("moov", metaKeyed([(liveKey, uuid)], isoLayout: false))
+    for large in [false, true] {
+        let head = ftyp + hollow("mdat", bodyBytes: bigBody, large: large)
+        let moovAt = Int64(head.count) + bigBody
+        let total = moovAt + Int64(idTail.count)
+        guard case .need(let askedId) = idVerdict([slice(head)], fileSize: total) else {
+            assertionFailure("identifiant, moov en fin (large=\(large)) : demander la suite")
+            return
+        }
+        assert(askedId.lowerBound == moovAt,
+               "le saut doit viser l'offset exact du moov — \(askedId) vs \(moovAt)")
+        assert(idVerdict([slice(head), slice(idTail, at: moovAt)], fileSize: total)
+               == .found(uuid),
+               "l'identifiant se lit en deux tranches, sans toucher le mdat (large=\(large))")
+    }
+
+    // Corruption: an aberrant atom size, a child overflowing its parent, or a foreign
+    // container — no crash, and no invented identifier.
+    assert(idVerdict([slice(corrupt)], fileSize: Int64(corrupt.count)) == .absent,
+           "une taille d'atome aberrante arrête l'identifiant proprement")
+    let idOverflow = ftyp + atom("moov", be32(0xFFFF_FFF0) + "meta".data(using: .ascii)!
+                                       + metaKeyed([(liveKey, uuid)], isoLayout: false))
+    assert(idVerdict([slice(idOverflow)], fileSize: Int64(idOverflow.count)) == .absent,
+           "un meta qui déborde son parent n'invente pas d'identifiant")
+    assert(idVerdict([slice(avi)], fileSize: 5_000_000) == .absent,
+           "un conteneur non ISO-BMFF est tranché sans autre requête")
+
+    // The driver: moov at the end resolved in exactly two in-file requests; nil is the sure
+    // "none" verdict; a short server answer throws Undecided rather than recording anything.
+    let realId = ftyp + atom("mdat", Data(count: 150_000))
+                      + atom("moov", metaKeyed([(liveKey, uuid)], isoLayout: false))
+    let realIdSize = Int64(realId.count)
+    var idAsked: [Range<Int64>] = []
+    let got = try await VideoDate.contentIdentifier(fileSize: realIdSize) { range in
+        idAsked.append(range)
+        assert(range.lowerBound >= 0 && range.upperBound <= realIdSize,
+               "identifiant : jamais de plage hors du fichier — \(range)")
+        let low = realId.startIndex + Int(range.lowerBound)
+        return realId[low ..< low + Int(range.upperBound - range.lowerBound)]
+    }
+    assert(got == uuid, "le pilote de l'identifiant aboutit")
+    assert(idAsked.count == 2, "préfixe puis moov : deux requêtes, pas plus — \(idAsked)")
+
+    let none = try await VideoDate.contentIdentifier(fileSize: Int64(only.count)) { range in
+        let low = only.startIndex + Int(range.lowerBound)
+        return only[low ..< low + Int(range.upperBound - range.lowerBound)]
+    }
+    assert(none == nil, "sans identifiant le pilote rend nil, le verdict sûr")
+
+    do {
+        _ = try await VideoDate.contentIdentifier(fileSize: realIdSize) { _ in Data() }
+        assertionFailure("une plage non honorée doit lever Undecided (identifiant)")
+    } catch is VideoDate.Undecided {}
+
+    // A moov bigger than the slurp threshold is walked header by header. Here every atom
+    // header is fetched but not the four probe bytes after the meta header: nothing can be
+    // concluded. The date scanner answers `.need` on this exact geometry.
+    let bigFree = hollow("free", bodyBytes: 600_000)
+    let gapMeta = metaKeyed([(liveKey, uuid)], isoLayout: false)
+    let gapBody = Int64(bigFree.count) + 600_000 + Int64(gapMeta.count)
+    let gapHead = ftyp + be32(UInt32(gapBody) + 8) + "moov".data(using: .ascii)! + bigFree
+    let metaAt = Int64(gapHead.count) + 600_000
+    let gapTotal = metaAt + Int64(gapMeta.count)
+    let gapSlices = [slice(gapHead), slice(gapMeta.prefix(8), at: metaAt)]
+    guard case .need = verdict(gapSlices, fileSize: gapTotal) else {
+        assertionFailure("date : un en-tête de meta sans son corps doit redemander, pas conclure")
+        return
+    }
+    // The identifier path used to collapse that same `.bail(.need)` into `.absent`: unfetched
+    // bytes became the sure verdict « no identifier », and the driver filed the `nil` as
+    // « ordinary video » — a real Live Photo un-paired for good.
+    guard case .need = idVerdict(gapSlices, fileSize: gapTotal) else {
+        assertionFailure("identifiant : un en-tête de meta sans son corps doit redemander")
+        return
+    }
+
+    print("ok — identifiant live : clé mdta et index, absence sûre, moov en fin, 64 bits, "
+          + "troncature => need, corruption, pilote en deux requêtes")
 }

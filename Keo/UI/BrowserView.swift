@@ -486,10 +486,12 @@ struct BrowserView: View {
     /// ancestor was never visited, so it is a push after all.
     private func climb(to crumb: Breadcrumb.Crumb, at step: Int, of depth: Int) {
         guard let stack = stackPath else { return }
-        let levels = depth - 1 - step
-        if stack.wrappedValue.count >= levels {
+        // The pop/push arithmetic lives in `Breadcrumb.move` (Keo/UI/Climb.swift), outside
+        // SwiftUI, where Tests/breadcrumb.swift can exercise it.
+        switch Breadcrumb.move(toStep: step, of: depth, stacked: stack.wrappedValue.count) {
+        case .pop(let levels):
             stack.wrappedValue.removeLast(levels)
-        } else {
+        case .push:
             stack.wrappedValue.append(BrowserSource.folder(path: crumb.path, title: crumb.name))
         }
     }
@@ -526,6 +528,12 @@ struct BrowserView: View {
                                 .lineLimit(1)
                                 .buttonStyle(.plain)
                                 .foregroundStyle(.secondary)
+                                // Same remedy as `Chip` and `GridChip`: the hit shape reaches
+                                // 44 pt, and the negative padding hands the extra height back
+                                // to layout so the 34 pt bar does not grow.
+                                .frame(minHeight: 44)
+                                .contentShape(Rectangle())
+                                .padding(.vertical, -13)
                             }
                         }
                     }

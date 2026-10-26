@@ -23,6 +23,23 @@ final class AuthenticatedAsset {
 
     /// Anything AVFoundation doesn't handle itself, so requests reach the delegate.
     private static let scheme = "keo-fbx"
+
+    /// `Content-Range: bytes 0-1/12345` — the part after the slash is the real file size.
+    ///
+    /// `expectedContentLength` is only a fallback, and a poor one now: on a ranged reply it
+    /// describes the window, not the file. A server that answers a range without
+    /// `Content-Range` would make the video look two bytes long, so `nil` is the honest
+    /// answer there and AVFoundation treats the length as unknown.
+    ///
+    /// Lives on the public type so `Tests/videorange.swift` can reach it; `Loader`, its only
+    /// caller, is private to this file.
+    static func totalLength(_ response: HTTPURLResponse) -> Int64? {
+        guard let range = response.value(forHTTPHeaderField: "Content-Range"),
+              let total = range.split(separator: "/").last, total != "*" else {
+            return response.statusCode == 206 ? nil : response.expectedContentLength
+        }
+        return Int64(total)
+    }
 }
 
 /// AVFoundation hands a loading request to exactly one delegate and does not touch it again
@@ -116,7 +133,8 @@ private final class Loader: NSObject, AVAssetResourceLoaderDelegate, @unchecked 
                 // From `Content-Range`, never from how much came back: the payload is now a
                 // window by design, and reporting its size as the file's would make
                 // AVFoundation believe the video is four megabytes long.
-                information.contentLength = Self.totalLength(response) ?? Int64(payload.count)
+                information.contentLength = AuthenticatedAsset.totalLength(response)
+                    ?? Int64(payload.count)
             }
             // Short answers are expected and fine: AVFoundation asks again from where this
             // one stopped. That is what makes the cap above safe.
@@ -124,22 +142,12 @@ private final class Loader: NSObject, AVAssetResourceLoaderDelegate, @unchecked 
             request.finishLoading()
         } catch is CancellationError {
             // AVFoundation already dropped the request.
+        } catch let error as URLError where error.code == .cancelled {
+            // Same thing in URLSession's dialect: cancelling the task surfaces as
+            // `URLError(.cancelled)`, not `CancellationError`, and finishing a request
+            // AVFoundation has already cancelled is an error of ours, not a report to it.
         } catch {
             request.finishLoading(with: error)
         }
-    }
-
-    /// `Content-Range: bytes 0-1/12345` — the part after the slash is the real file size.
-    ///
-    /// `expectedContentLength` is only a fallback, and a poor one now: on a ranged reply it
-    /// describes the window, not the file. A server that answers a range without
-    /// `Content-Range` would make the video look two bytes long, so `nil` is the honest
-    /// answer there and AVFoundation treats the length as unknown.
-    private static func totalLength(_ response: HTTPURLResponse) -> Int64? {
-        guard let range = response.value(forHTTPHeaderField: "Content-Range"),
-              let total = range.split(separator: "/").last, total != "*" else {
-            return response.statusCode == 206 ? nil : response.expectedContentLength
-        }
-        return Int64(total)
     }
 }

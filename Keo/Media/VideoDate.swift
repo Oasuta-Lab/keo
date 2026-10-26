@@ -503,6 +503,11 @@ extension VideoDate {
 
         let start: Int64
         switch metaChildrenStart(r, meta.lowerBound ..< meta.upperBound) {
+        // Propagated, not flattened: `.bail` carries `.need` as well as `.absent`, and
+        // answering « no identifier » for bytes nobody has read yet unpairs a real live photo
+        // for good — the driver records that `nil` as « ordinary video ». The date path next
+        // door has always propagated; this one swallowed.
+        case .bail(.need(let range)): return .need(range)
         case .bail: return .absent
         case .at(let at): start = at
         }

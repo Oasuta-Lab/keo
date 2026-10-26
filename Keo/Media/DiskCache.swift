@@ -50,6 +50,12 @@ struct DiskCache: Sendable {
     }
 
     /// Reading marks a file as fresh, so trimming keeps what the user actually browses.
+    ///
+    /// `trim` prefers the access date and falls back here, which looked like it could decay
+    /// into FIFO eviction — it does not. Measured with `stat(2)` on APFS: a
+    /// `Data(contentsOf:.mappedIfSafe)` read advances atime on its own, and this call advances
+    /// both. Measure the same way before believing otherwise; `URL` caches its resource
+    /// values, so reading them back through the same `URL` reports no change either way.
     private func touch(_ file: URL) {
         try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path)
     }

@@ -200,8 +200,12 @@ struct Photo: View {
     /// Copied from `Keo/Media/ImageDecoding.swift` rather than shared. Sharing would mean
     /// moving that file out of the app's synchronized group and editing the project, the
     /// check command, the README structure table and the read-only scan — a far larger blast
-    /// radius than a dozen duplicated lines.
+    /// radius than a dozen duplicated lines. The copies had quietly diverged once, one guard
+    /// each; `checkTheDownsampleLogicMatches` in `Tests/main.swift` now compares the decode
+    /// decisions of both.
     static func downsample(_ url: URL, maxPixel: CGFloat) -> CGImage? {
+        // A zero-size proposal happens while the overlay settles its frame; asking ImageIO
+        // for a zero-pixel thumbnail would be a decode for nothing.
         guard maxPixel > 0,
               let source = CGImageSourceCreateWithURL(
                   url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else {
@@ -213,7 +217,13 @@ struct Photo: View {
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceShouldCacheImmediately: true,
         ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        // Same floor as the app: a decode that small is a broken or truncated file, and the
+        // two copies must reach the same verdict on the same bytes.
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
+              image.width > 16 else {
+            return nil
+        }
+        return image
     }
 }
 

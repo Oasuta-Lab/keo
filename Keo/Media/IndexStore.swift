@@ -367,9 +367,13 @@ actor IndexStore {
     /// `present` is every file the listing showed. Bumping their generation before sweeping is
     /// what makes the sweep mean "gone from the NAS" rather than "not re-read this time" — a
     /// date picked up opportunistically by the thumbnail pipeline would otherwise be deleted.
+    /// `preservingCapture` is the opportunistic path's flag — a date noticed in passing may
+    /// add knowledge but never erase it, whereas the indexer's deliberate read keeps the
+    /// right to record "read, and there is no date" as NULL.
     func commit(_ results: [(item: Item, capture: Date?)], in folder: String,
                 generation: Int64, stamp: FolderStamp.Completion? = nil,
-                present: [Item] = [], sweep: Bool = false) throws {
+                present: [Item] = [], sweep: Bool = false,
+                preservingCapture: Bool = false) throws {
         try open()
         // One instant for the whole pass, not one per row: files that arrive together did
         // arrive together, and a shelf of "recent additions" reads better when a folder that
@@ -416,11 +420,16 @@ actor IndexStore {
             if !results.isEmpty {
                 var statement: OpaquePointer?
                 defer { sqlite3_finalize(statement) }
+                // No global coalesce on `capture`: the indexer must be able to write NULL —
+                // "read, carries no date" is a verdict, and keeping a stale date over it
+                // would freeze a wrong one for ever. Only the opportunistic path coalesces.
+                let capture = preservingCapture
+                    ? "coalesce(excluded.capture, file.capture)" : "excluded.capture"
                 try prepare("""
                     INSERT INTO file (folder_id, name, size, capture, read, kind, gen, cid)
                     VALUES (?, ?, ?, ?, 1, ?, ?, ?)
                     ON CONFLICT(folder_id, name, size)
-                    DO UPDATE SET capture = excluded.capture, read = 1,
+                    DO UPDATE SET capture = \(capture), read = 1,
                                   kind = excluded.kind, gen = excluded.gen,
                                   -- An unread pass must not erase what a read one learned.
                                   cid = coalesce(excluded.cid, file.cid)
@@ -622,10 +631,13 @@ actor IndexStore {
 
     /// A date noticed in passing by the thumbnail pipeline, which already holds the file's
     /// first bytes. Written with the folder's current generation so the next sweep keeps it.
+    /// Preserving: a thumbnail probe that sees no date must not erase the one a deliberate
+    /// indexing read already recorded — a side effect only ever adds knowledge.
     func note(_ capture: Date?, for item: Item, in folder: String) throws {
         try open()
         let generation = try folderGeneration(folder)
-        try commit([(item, capture)], in: folder, generation: generation)
+        try commit([(item, capture)], in: folder, generation: generation,
+                   preservingCapture: true)
     }
 
     private func folderGeneration(_ folder: String) throws -> Int64 {

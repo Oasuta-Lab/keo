@@ -23,14 +23,21 @@ enum Keychain {
     static func set(_ value: String, account: String) {
         var item = query(account)
         item[kSecAttrSynchronizable as String] = true
-        SecItemDelete(item as CFDictionary)   // its own predecessor, if any
 
-        item[kSecValueData as String] = Data(value.utf8)
         // Not a `…ThisDeviceOnly` class: those refuse to sync, and refuse in silence.
         // `AfterFirstUnlock` is the strictest class that still syncs, and it is what a download
         // resumed in the background after a reboot needs.
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { return }
+        let payload: [String: Any] = [
+            kSecValueData as String: Data(value.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock]
+
+        // Update in place rather than delete-then-add: a delete that succeeds followed by an
+        // add that fails would destroy the one copy of the token that travels through iCloud.
+        var status = SecItemUpdate(item as CFDictionary, payload as CFDictionary)
+        if status == errSecItemNotFound {
+            status = SecItemAdd(item.merging(payload) { _, new in new } as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else { return }
 
         var local = query(account)
         local[kSecAttrSynchronizable as String] = false

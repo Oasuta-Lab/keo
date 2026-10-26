@@ -218,4 +218,52 @@ func checkSync() async throws {
 
     print("ok — sync : noms déterministes, journal, acquittements, résurrection, renommage, "
         + "graine, zone, changement de compte")
+
+    checkFetchedChangesAreNeverDroppedSilently()
+    checkTheTokenSurvivesAFailedRewrite()
+}
+
+/// Source scan, same spirit as `checkTheAppTokenCanSync` in main.swift: once the event handler
+/// returns, the engine counts fetched records as consumed — records the store refused to write
+/// exist nowhere else, so swallowing that error with `try?` loses favourites and notes coming
+/// from another device until a full refetch.
+func checkFetchedChangesAreNeverDroppedSilently() {
+    let file = URL(fileURLWithPath: "Keo/Sync/CloudSync.swift")
+    guard let raw = try? String(contentsOf: file, encoding: .utf8) else {
+        assertionFailure("CloudSync.swift introuvable — lance le check depuis la racine du dépôt")
+        return
+    }
+    let source = strippingComments(raw)
+    assert(!source.contains("try? await store.applyRemote"),
+           "un échec d'écriture des changements reçus doit se traiter, pas se taire : "
+         + "le moteur les croit consommés et ils seraient perdus jusqu'au prochain refetch")
+    assert(source.contains("holdStatePersistence"),
+           "sans gel de l'état du moteur, l'acquittement d'un changement jamais stocké atteint le disque")
+}
+
+/// The promise in Keychain.swift — « an add that fails must cost nothing » — broke once by
+/// deleting the synchronizable token *before* rewriting it. Scanned at the source because the
+/// failure is silent: no error, no log, just a household asked to press ✓ on the box again.
+func checkTheTokenSurvivesAFailedRewrite() {
+    let file = URL(fileURLWithPath: "Keo/App/Keychain.swift")
+    guard let raw = try? String(contentsOf: file, encoding: .utf8) else {
+        assertionFailure("Keychain.swift introuvable — lance le check depuis la racine du dépôt")
+        return
+    }
+    let source = strippingComments(raw)
+    guard let set = source.range(of: "static func set"),
+          let get = source.range(of: "static func get") else {
+        assertionFailure("Keychain.swift ne ressemble plus à ce que ce scan sait lire")
+        return
+    }
+    let body = source[set.upperBound..<get.lowerBound]
+    assert(body.contains("SecItemUpdate"),
+           "écrire le jeton passe par une mise à jour en place : supprimer avant d'ajouter "
+         + "perd le jeton du foyer si l'ajout échoue")
+    guard let add = body.range(of: "SecItemAdd"), let delete = body.range(of: "SecItemDelete") else {
+        assertionFailure("set() ne contient plus les appels que ce scan sait ordonner")
+        return
+    }
+    assert(add.lowerBound < delete.lowerBound,
+           "rien ne se supprime avant que la nouvelle écriture ait réussi")
 }

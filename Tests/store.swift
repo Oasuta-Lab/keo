@@ -107,6 +107,29 @@ func checkIndexStore() async throws {
     assert(glanced[opportunistic.id] == shot,
            "une date relevée au passage par le pipeline de vignettes n'est pas balayée")
 
+    // --- une observation au passage n'efface jamais une date connue ---------------------
+    // Le pipeline de vignettes note ce qu'il voit dans les premiers octets ; quand il n'y
+    // voit pas de date, cela ne doit pas devenir « ce fichier n'a pas de date ».
+    try await store.note(nil, for: opportunistic, in: album)
+    let kept = try await store.known([opportunistic], in: album)
+    assert(kept[opportunistic.id] == shot,
+           "une vignette qui n'a pas vu de date n'écrase pas celle que l'indexation a lue")
+
+    // Dans l'autre sens, l'observation ajoute : une date vue au passage remplit un vide.
+    let blank = photo("f.jpg", in: album)
+    try await store.commit([(blank, nil)], in: album, generation: generation)
+    try await store.note(shot, for: blank, in: album)
+    let filled = try await store.known([blank], in: album)
+    assert(filled[blank.id] == shot, "une date vue au passage comble une capture inconnue")
+
+    // L'indexeur, lui, garde le droit d'écrire NULL : « lu, sans date EXIF » est un verdict,
+    // et garder une vieille date par-dessus figerait une date fausse pour toujours.
+    generation = try await store.beginGeneration()
+    try await store.commit([(blank, nil)], in: album, generation: generation)
+    let verdict = try await store.known([blank], in: album)
+    assert(verdict[blank.id] == nil,
+           "une lecture délibérée qui conclut « pas de date » efface bien la date en base")
+
     // --- revérifier : on reliste tout, on ne relit rien --------------------------------
     try await store.forgetWalk()
     unchanged = try await store.isUnchanged(album, modified: folderTime, childCount: 3)

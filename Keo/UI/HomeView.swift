@@ -23,6 +23,9 @@ struct HomeView: View {
 
     @State private var summary: HomeSummary?
     @State private var pins: [Item] = []
+    /// Pinned folders the index no longer finds on the NAS — same doctrine as the favourites:
+    /// said out loud, never purged behind the owner's back.
+    @State private var missingPins: [Item] = []
     @State private var pinStats: [String: FolderStats] = [:]
     @State private var pinCovers: [String: [Item]] = [:]
     @State private var recent: [Item] = []
@@ -32,7 +35,12 @@ struct HomeView: View {
     /// Combien d'entre elles n'avaient pas encore été montrées. Lu avant que l'étagère ne
     /// paraisse, donc le chiffre survit à la visite qui l'efface.
     @State private var unseenArrivals = 0
-    @State private var memoryPage = 0
+    /// The *year* on screen, not a page index. Identity and selection used to disagree: the
+    /// pages were identified by year but selected by position, so a year set rebuilt under
+    /// the carousel — which happens on every indexing batch — left the two naming different
+    /// pages. Zero matches no year and falls back to the first page; `load()` snaps it to a
+    /// real year as soon as there is one.
+    @State private var memoryYear = 0
     /// Advances once per auto-turn, and indexes into each year's photos — so a year that
     /// comes back round does not come back with the same picture.
     @State private var rotation = 0
@@ -65,12 +73,18 @@ struct HomeView: View {
     @State private var signingOut = false
     @State private var disk: (total: Int64, free: Int64, seen: Date)?
 
-    /// The page on screen. Clamped, because the list is rebuilt whenever the index moves and
-    /// a stale page number would read past the end.
+    /// Position of the selected year, for the dots and the auto-turn. Falls back to the first
+    /// page, which is also what the carousel shows while the selection matches no year.
+    private var shownIndex: Int {
+        memoriesByYear.firstIndex { $0.year == memoryYear } ?? 0
+    }
+
+    /// The page on screen. Looked up by year, never by a stored index: the list is rebuilt
+    /// whenever the index moves, and a stale position would name another year's page.
     private var shown: (year: Int, items: [Item])? {
         let years = memoriesByYear
         guard !years.isEmpty else { return nil }
-        return years[min(memoryPage, years.count - 1)]
+        return years[shownIndex]
     }
 
     private func subtitle(for group: (year: Int, items: [Item])) -> String {
@@ -299,8 +313,10 @@ struct HomeView: View {
             // carousel, not passengers in it — riding along, they read as part of the image
             // and the eye has to re-find them on every swipe.
             ZStack(alignment: .bottomLeading) {
-                TabView(selection: $memoryPage) {
-                    ForEach(Array(memoriesByYear.enumerated()), id: \.element.year) { page, group in
+                TabView(selection: $memoryYear) {
+                    // Identified *and* tagged by year, so identity and selection can never
+                    // disagree when the set of years changes under the carousel.
+                    ForEach(memoriesByYear, id: \.year) { group in
                         Color.clear
                             .overlay {
                                 if let cover = Self.cover(of: group.items, at: rotation) {
@@ -311,7 +327,7 @@ struct HomeView: View {
                                 }
                             }
                             .clipped()
-                            .tag(page)
+                            .tag(group.year)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
@@ -343,7 +359,7 @@ struct HomeView: View {
                         HStack(spacing: 5) {
                             ForEach(memoriesByYear.indices, id: \.self) { index in
                                 Circle()
-                                    .fill(.white.opacity(index == memoryPage ? 0.95 : 0.4))
+                                    .fill(.white.opacity(index == shownIndex ? 0.95 : 0.4))
                                     .frame(width: 6, height: 6)
                             }
                         }
@@ -376,7 +392,7 @@ struct HomeView: View {
                     .padding(12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
                     .allowsHitTesting(false)
-                    .accessibilityLabel("Année \(memoryPage + 1) sur \(memoriesByYear.count)")
+                    .accessibilityLabel("Année \(shownIndex + 1) sur \(memoriesByYear.count)")
                 }
             }
             .aspectRatio(4 / 3, contentMode: .fit)
@@ -394,15 +410,18 @@ struct HomeView: View {
             .accessibilityAction { openShownYear() }
             // Restarted by its own id on every change, so a manual swipe gets the full dwell
             // instead of being cut short by a timer that had kept running underneath.
-            .task(id: memoryPage) {
-                let years = memoriesByYear.count
-                guard years > 1, !reduceMotion else { return }
+            .task(id: memoryYear) {
+                guard memoriesByYear.count > 1, !reduceMotion else { return }
                 turnStarted = Date()
                 try? await Task.sleep(for: .seconds(Self.turnEvery))
                 guard !Task.isCancelled else { return }
+                // Read at wake time, not captured before the sleep: the set of years may
+                // have been rebuilt while the card was holding its turn.
+                let years = memoriesByYear
+                guard !years.isEmpty else { return }
                 withAnimation(.easeInOut(duration: 0.5)) {
                     rotation += 1
-                    memoryPage = (memoryPage + 1) % years
+                    memoryYear = years[(shownIndex + 1) % years.count].year
                 }
             }
         }
@@ -412,44 +431,74 @@ struct HomeView: View {
 
     @ViewBuilder
     private var pinned: some View {
-        if !pins.isEmpty {
+        // The section also stands when *every* pin is missing: hiding it with the shelf
+        // would hide the very line that explains where the pins went.
+        if !pins.isEmpty || !missingPins.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Épinglés").font(.title3.bold())
-                ScrollView(.horizontal) {
-                    // `HStack` et non `LazyHStack` : une pile paresseuse ne mesure que ce
-                    // qu'elle a matérialisé, donc la rangée prenait la hauteur de la première
-                    // carte visible — la plus courte — et tronquait le bas des suivantes, qui
-                    // ont une ligne de plus dès que l'index connaît leur poids et leur
-                    // période. Il y a une poignée d'épingles : la paresse ne rapportait rien.
-                    HStack(alignment: .top, spacing: 12) {
-                        ForEach(pins) { folder in
-                            NavigationLink(value: BrowserSource.folder(folder)) {
-                                FolderCard(folder: folder, stats: pinStats[folder.path],
-                                           covers: pinCovers[folder.path] ?? [],
-                                           client: client, width: 150)
-                            }
-                            .buttonStyle(.plain)
-                            // Pinning happens in Parcourir by long press; unpinning had no
-                            // gesture at all from the shelf the pins actually live on.
-                            .contextMenu {
-                                // Sans rôle destructif : désépingler s'annule en secouant,
-                                // et le même geste dans Parcourir n'en porte pas. Deux rouges
-                                // différents pour le même verbe, c'était l'écran qui décidait
-                                // de la gravité au lieu de l'action.
-                                Button("Désépingler", systemImage: "pin.slash") {
-                                    unpin(folder)
+                if !pins.isEmpty {
+                    ScrollView(.horizontal) {
+                        // `HStack` et non `LazyHStack` : une pile paresseuse ne mesure que ce
+                        // qu'elle a matérialisé, donc la rangée prenait la hauteur de la première
+                        // carte visible — la plus courte — et tronquait le bas des suivantes, qui
+                        // ont une ligne de plus dès que l'index connaît leur poids et leur
+                        // période. Il y a une poignée d'épingles : la paresse ne rapportait rien.
+                        HStack(alignment: .top, spacing: 12) {
+                            ForEach(pins) { folder in
+                                NavigationLink(value: BrowserSource.folder(folder)) {
+                                    FolderCard(folder: folder, stats: pinStats[folder.path],
+                                               covers: pinCovers[folder.path] ?? [],
+                                               client: client, width: 150)
+                                }
+                                .buttonStyle(.plain)
+                                // Pinning happens in Parcourir by long press; unpinning had no
+                                // gesture at all from the shelf the pins actually live on.
+                                .contextMenu {
+                                    // Sans rôle destructif : désépingler s'annule en secouant,
+                                    // et le même geste dans Parcourir n'en porte pas. Deux rouges
+                                    // différents pour le même verbe, c'était l'écran qui décidait
+                                    // de la gravité au lieu de l'action.
+                                    Button("Désépingler", systemImage: "pin.slash") {
+                                        unpin(folder)
+                                    }
                                 }
                             }
                         }
+                        .padding(.horizontal, 1)
                     }
-                    .padding(.horizontal, 1)
+                    .scrollIndicators(.hidden)
                 }
-                .scrollIndicators(.hidden)
+                if !missingPins.isEmpty {
+                    HStack(spacing: 10) {
+                        Image(systemName: "questionmark.folder")
+                            .foregroundStyle(Theme.warning)
+                        Text(missingPins.count == 1
+                             ? "1 dossier épinglé introuvable sur le NAS"
+                             : "\(missingPins.count) dossiers épinglés introuvables sur le NAS")
+                            .font(.footnote.weight(.medium))
+                        Spacer()
+                        Button("Retirer") { dropMissingPins() }
+                            .font(.footnote.weight(.medium))
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                }
             }
         } else if summary?.isEmpty == false {
             Text("Épingle un dossier — appui long dans Parcourir — pour le garder ici.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Mirrors `BrowserView.dropMissing`: removing a vanished pin stays a deliberate tap.
+    private func dropMissingPins() {
+        let doomed = missingPins
+        Task {
+            for folder in doomed {
+                try? await IndexStore.shared.setShortcut(folder, false)
+            }
+            await load()
         }
     }
 
@@ -649,7 +698,18 @@ struct HomeView: View {
 
     private func load() async {
         summary = try? await IndexStore.shared.homeSummary()
-        pins = (try? await IndexStore.shared.shortcuts()) ?? []
+        // Snap an unmatched selection — first launch, or a year gone from the index — onto a
+        // page that exists, so the dots and the caption never describe a phantom.
+        if !memoriesByYear.contains(where: { $0.year == memoryYear }) {
+            memoryYear = memoriesByYear.first?.year ?? 0
+        }
+        // The shelf shows what the index can still vouch for; a pinned folder it no longer
+        // finds goes to the banner instead of standing as a dead card. Same mechanism —
+        // `resolveFolders` — the favourites already use through `resolve`.
+        let shortcuts = (try? await IndexStore.shared.shortcuts()) ?? []
+        let verdict = try? await IndexStore.shared.resolveFolders(shortcuts)
+        pins = verdict?.present ?? shortcuts
+        missingPins = verdict?.missing ?? []
         let paths = pins.map(\.path)
         pinStats = (try? await IndexStore.shared.stats(for: paths)) ?? [:]
         pinCovers = (try? await IndexStore.shared.covers(for: paths, limit: 3)) ?? [:]

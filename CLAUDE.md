@@ -30,7 +30,8 @@ ajouté à la liste, le faire ici et nulle part ailleurs.
 rm -f /tmp/keocheck   # sinon un échec de compilation relance l'ancien binaire et ment
 swiftc -swift-version 6 -D DEBUG \
   Keo/Freebox/Item.swift Keo/Freebox/MediaSection.swift Keo/Freebox/Transport.swift \
-  Keo/Freebox/FreeboxClient.swift Keo/Downloads/DownloadJob.swift \
+  Keo/Freebox/FreeboxClient.swift Keo/Freebox/VideoAsset.swift \
+  Keo/Downloads/DownloadJob.swift \
   Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift Keo/Media/FolderStamp.swift \
   Keo/Media/WalkOutcome.swift Keo/Media/SearchQuery.swift Keo/Media/Statistics.swift \
   Keo/Media/LivePhotos.swift Keo/Media/FolderExclusion.swift Keo/Media/FilenameDate.swift \
@@ -38,11 +39,12 @@ swiftc -swift-version 6 -D DEBUG \
   Keo/Media/VideoDate.swift Keo/Media/WalkSummary.swift Keo/Media/LastPass.swift Keo/Media/WidgetManifest.swift Keo/Sync/SyncModel.swift \
   Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift Keo/UI/BrowserSource.swift \
   Keo/UI/DeepLink.swift Keo/UI/HumanDate.swift Keo/UI/IndexingLine.swift \
+  Keo/UI/Climb.swift \
   Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
   Tests/sync.swift Tests/search.swift Tests/covers.swift Tests/notes.swift \
   Tests/stats.swift Tests/widget.swift Tests/links.swift Tests/live.swift Tests/dates.swift \
   Tests/exclusions.swift Tests/prefetch.swift Tests/previews.swift Tests/summary.swift \
-  Tests/indexation.swift \
+  Tests/indexation.swift Tests/breadcrumb.swift Tests/videorange.swift \
   -o /tmp/keocheck && /tmp/keocheck
 ```
 

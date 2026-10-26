@@ -216,6 +216,14 @@ final class Indexer: ObservableObject {
     /// index must still know it has somewhere to pick up.
     @AppStorage("resumeIndexing") private(set) var resumeWanted = false
     @AppStorage("resumeIndexingRoot") private var resumeRoot = FreeboxClient.rootPath
+    /// Whether the interrupted pass was a `.discover`. It must survive with the intent to
+    /// resume: picked up as a plain read, a background listing pass would start paying one
+    /// network round-trip per file — dates nobody asked for. `recheck` and `rebuild` are
+    /// deliberately *not* carried: their wipe already ran when the pass began, and running it
+    /// again on resume would throw away everything the interrupted pass had just rebuilt.
+    @AppStorage("resumeIndexingDiscover") private var resumeDiscover = false
+
+    private var resumeScope: Scope? { resumeDiscover ? .discover : nil }
     private var background: UIBackgroundTaskIdentifier = .invalid
 
     var lastRun: Date? {
@@ -249,6 +257,7 @@ final class Indexer: ObservableObject {
             + "state=\(state) stalled=\(isStalled) queue=\(queue.count)")
         resumeRoot = root
         resumeWanted = true
+        resumeDiscover = scope == .discover
         current = client
         queue.append(.walk(root: root, client: client, scope: scope))
         watchAppState(root: root)
@@ -310,7 +319,7 @@ final class Indexer: ObservableObject {
     func resumeIfInterrupted(client: FreeboxClient) {
         if case .finished = state { return }      // a completed pass is not an interruption
         guard resumeWanted, !state.isRunning || isStalled else { return }
-        start(from: resumeRoot, client: client)
+        start(from: resumeRoot, client: client, scope: resumeScope)
     }
 
     /// True when the app believes work is in flight but no worker is actually alive — the
@@ -361,6 +370,9 @@ final class Indexer: ObservableObject {
 
     private func finishRun(_ token: Int) {
         trace("finishRun token=\(token) current=\(runToken) completed=\(walkCompleted)")
+        // Nothing below is a superseded worker's to decide — publishing included: it used to
+        // publish and then wipe `summary` while a fresh worker was still building its own.
+        guard token == runToken else { return }
         if walkCompleted, let summary { lastSummary = summary }
         if walkCompleted, let record {
             lastPass = record
@@ -368,13 +380,21 @@ final class Indexer: ObservableObject {
         }
         summary = nil
         record = nil
-        guard token == runToken else { return }   // a superseded worker decides nothing
         if walkCompleted { resumeWanted = false }
         runner = nil
         await_checkpoint()
         endBackgroundGrace()
         if case .running(let progress) = state {
-            state = walkCompleted ? .finished(progress) : .paused(progress)
+            if walkCompleted {
+                state = .finished(progress)
+            } else if resumeWanted {
+                state = .paused(progress)
+            } else {
+                // A run made only of targeted scans — the open folder jumping the queue —
+                // interrupted nothing: there is no pass waiting to resume, and "Interrompue"
+                // in amber over a healthy index teaches people to ignore the colour.
+                state = .idle
+            }
         }
     }
 
@@ -394,7 +414,16 @@ final class Indexer: ObservableObject {
     // MARK: Jobs
 
     private func walk(root: String, client: FreeboxClient, scope: Scope?) async {
-        var progress = state.progress ?? Progress()
+        // The reading tallies — `datesRead`, `dateless`, `adopted`, `unreadable` — are per
+        // *pass*, not per worker: a resumed pass skips its finished folders rather than
+        // re-reading them, so carrying the figures is what keeps them describing one pass.
+        // After a `finished` pass they must start over: carried across, one old failure kept
+        // `LastPass.hasTrouble` raised for ever and a second pass reported double the reads.
+        var progress: Progress
+        switch state {
+        case .running(let p), .paused(let p): progress = p
+        case .idle, .finished: progress = Progress()
+        }
         // Per-pass counters: carried over, they counted the same folders again at every
         // resume — 14 618 media became 29 213 then 43 808 without a single new file.
         progress.foldersVisited = 0
@@ -756,7 +785,7 @@ final class Indexer: ObservableObject {
         // ever touching the counter, and the screen sat at 0 / N for the whole folder — the
         // work was happening, it just had no way to say so.
         if !probe.isEmpty {
-            await withTaskGroup(of: (Item, Date?).self) { group in
+            await withTaskGroup(of: (Item, Result<Date?, Error>).self) { group in
                 var next = 0
                 func feed() {
                     guard next < probe.count else { return }
@@ -775,27 +804,38 @@ final class Indexer: ObservableObject {
                             return data
                         }
                         do {
-                            // `nil` back from a completed scan means the file carries none —
-                            // recorded as "" so it is never asked again. A thrown
-                            // `Undecided` means the bytes ran out: left `nil`, which reads
-                            // as "nobody has looked" and keeps the name rule in charge.
+                            // `nil` back from a completed scan is the sure verdict "this
+                            // file carries none" — recorded as "" so it is never asked
+                            // again. A throw — `Undecided` or the network's own — is "the
+                            // bytes would not come", and lands in the failure branch below:
+                            // same doctrine as the photographs, a dropped connection is
+                            // retried, never recorded. Committed anyway, the row went in
+                            // `read = 1` and the folder was stamped complete, so the
+                            // companion whose date arbitrates the one-sided pairs was
+                            // never looked at again.
                             stamped.contentID = try await VideoDate.contentIdentifier(
                                 fileSize: item.size, fetch: fetched) ?? ""
+                            let capture = try await VideoDate.capture(
+                                fileSize: item.size, fetch: fetched)
+                            return (stamped, .success(capture))
                         } catch {
-                            stamped.contentID = nil
+                            return (item, .failure(error))
                         }
-                        // The companion's own date arbitrates the one-sided pairs. A failed
-                        // scan leaves it unknown, which is safe: a missing date keeps the
-                        // pair, exactly what the old blind record did.
-                        let capture = (try? await VideoDate.capture(
-                            fileSize: item.size, fetch: fetched)) ?? nil
-                        return (stamped, capture)
                     }
                 }
                 for _ in 0..<min(Self.parallel, probe.count) { feed() }
-                while let (stamped, capture) = await group.next() {
+                while let (item, outcome) = await group.next() {
                     if Task.isCancelled { group.cancelAll(); break }
-                    batch.append((stamped, capture))
+                    switch outcome {
+                    case .success(let capture):
+                        batch.append((item, capture))
+                    case .failure(let error):
+                        failures += 1
+                        progress.unreadable += 1
+                        progress.note(IndexProblem(path: item.path,
+                                              reason: error.localizedDescription,
+                                              trouble: .fileUnreadable))
+                    }
                     done += 1
                     if batch.count >= IndexStore.batchSize { await flush(stamping: false) }
                     if done - published >= Self.publishEvery {
@@ -865,7 +905,7 @@ final class Indexer: ObservableObject {
                 trace("foreground: wanted=\(self.resumeWanted) state=\(self.state) "
                     + "stalled=\(self.isStalled)")
                 guard self.resumeWanted, let client = self.current else { return }
-                self.start(from: self.resumeRoot, client: client)
+                self.start(from: self.resumeRoot, client: client, scope: self.resumeScope)
             }
         })
     }
