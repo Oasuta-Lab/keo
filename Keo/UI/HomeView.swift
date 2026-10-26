@@ -17,14 +17,36 @@ struct HomeView: View {
     @EnvironmentObject private var indexer: Indexer
     @EnvironmentObject private var store: Store
     @EnvironmentObject private var undoer: Undoer
+    /// Content that moves on its own has to be something the reader can opt out of.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var summary: HomeSummary?
     @State private var pins: [Item] = []
     @State private var pinStats: [String: FolderStats] = [:]
-    @State private var pinCovers: [String: Item] = [:]
     @State private var recent: [Item] = []
     @State private var destination: BrowserSource?
     @State private var memoryPage = 0
+    /// Advances once per auto-turn, and indexes into each year's photos — so a year that
+    /// comes back round does not come back with the same picture.
+    @State private var rotation = 0
+    /// When the memory on screen took its turn. The progress bar is read from the clock
+    /// rather than animated: an animation that a swipe interrupts has to be unwound before it
+    /// can restart, and that unwinding is exactly what read as the bar being slow to resume.
+    @State private var turnStarted = Date()
+
+    /// How long a memory holds the card.
+    private static let turnEvery: TimeInterval = 6
+
+    /// How far through its turn the memory on screen is, from 0 to 1.
+    static func turnFraction(since start: Date, now: Date) -> CGFloat {
+        let elapsed = now.timeIntervalSince(start)
+        return min(max(elapsed / turnEvery, 0), 1)
+    }
+
+    /// Width of a row of `count` six-point dots spaced five apart.
+    private static func dotsWidth(_ count: Int) -> CGFloat {
+        CGFloat(count) * 6 + CGFloat(max(0, count - 1)) * 5
+    }
     @State private var showingIndexing = false
     @State private var disk: (total: Int64, free: Int64, seen: Date)?
 
@@ -108,10 +130,33 @@ struct HomeView: View {
                 .tracking(1)
                 .textCase(.uppercase)
                 .foregroundStyle(.secondary)
-            Text("Keo").font(.wordmark(size: 34))
+            // The mark stands in for the K — the mark itself, bays and all, not a simplified
+            // cut of it, and in the brand tint rather than the ink of the word: it is the
+            // logo, so it keeps the logo's colour. The bays stay knocked through, which on
+            // this screen is the same thing as filling them with the background.
+            //
+            // Sized to Montserrat's cap height (about 0.7 em) and sat on the baseline, so the
+            // three letters share one line.
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                CageMark.Filled(height: 24)
+                    .foregroundStyle(.tint)
+                    .alignmentGuide(.firstTextBaseline) { $0[.bottom] }
+                Text("eo").font(.wordmark(size: 34))
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Keo")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.top, 4)
+    }
+
+    /// Which of a year's photos to show on the `rotation`-th turn.
+    ///
+    /// A year with three photos and a rotation of seven shows its second — the wrap is what
+    /// makes a short year keep cycling rather than stick on its last picture.
+    static func cover(of items: [Item], at rotation: Int) -> Item? {
+        guard !items.isEmpty else { return nil }
+        return items[rotation % items.count]
     }
 
     private static var today: String {
@@ -137,9 +182,11 @@ struct HomeView: View {
                     ForEach(Array(memoriesByYear.enumerated()), id: \.element.year) { page, group in
                         Color.clear
                             .overlay {
-                                if let cover = group.items.first {
+                                if let cover = Self.cover(of: group.items, at: rotation) {
+                                    // The card is 4:3; a square thumbnail left bars down
+                                    // both sides of every memory.
                                     Thumb(item: cover, client: client, selected: nil,
-                                          lookahead: [])
+                                          lookahead: [], aspect: 4 / 3)
                                 }
                             }
                             .clipped()
@@ -171,11 +218,35 @@ struct HomeView: View {
                 }
 
                 if memoriesByYear.count > 1 {
-                    HStack(spacing: 5) {
-                        ForEach(memoriesByYear.indices, id: \.self) { index in
-                            Circle()
-                                .fill(.white.opacity(index == memoryPage ? 0.95 : 0.4))
-                                .frame(width: 6, height: 6)
+                    VStack(spacing: 5) {
+                        HStack(spacing: 5) {
+                            ForEach(memoriesByYear.indices, id: \.self) { index in
+                                Circle()
+                                    .fill(.white.opacity(index == memoryPage ? 0.95 : 0.4))
+                                    .frame(width: 6, height: 6)
+                            }
+                        }
+                        // Inside the same capsule as the dots, not beside it: it is the same
+                        // piece of information — which year, and how long it stays.
+                        if !reduceMotion {
+                            // Twelve frames a second is plenty for a bar sixty points wide,
+                            // and it keeps a permanent timeline on the home screen cheap.
+                            TimelineView(.animation(minimumInterval: 1.0 / 12)) { context in
+                                let width = Self.dotsWidth(memoriesByYear.count)
+                                Capsule()
+                                    .fill(.white.opacity(0.25))
+                                    // Exactly as wide as the row of dots. A capsule given
+                                    // only a height takes every point it is offered, and
+                                    // dragged the whole badge across the card.
+                                    .frame(width: width, height: 2)
+                                    .overlay(alignment: .leading) {
+                                        Capsule()
+                                            .fill(.white.opacity(0.9))
+                                            .frame(width: width * Self.turnFraction(
+                                                since: turnStarted, now: context.date))
+                                    }
+                                    .clipShape(Capsule())
+                            }
                         }
                     }
                     .padding(.horizontal, 8)
@@ -196,6 +267,19 @@ struct HomeView: View {
                 guard let shown else { return }
                 destination = .results(title: "Ce jour-là en \(shown.year)", items: shown.items)
             }
+            // Restarted by its own id on every change, so a manual swipe gets the full dwell
+            // instead of being cut short by a timer that had kept running underneath.
+            .task(id: memoryPage) {
+                let years = memoriesByYear.count
+                guard years > 1, !reduceMotion else { return }
+                turnStarted = Date()
+                try? await Task.sleep(for: .seconds(Self.turnEvery))
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeInOut(duration: 0.5)) {
+                    rotation += 1
+                    memoryPage = (memoryPage + 1) % years
+                }
+            }
         }
     }
 
@@ -210,9 +294,8 @@ struct HomeView: View {
                     LazyHStack(spacing: 12) {
                         ForEach(pins) { folder in
                             NavigationLink(value: BrowserSource.folder(folder)) {
-                                FolderCard(folder: folder, stats: pinStats[folder.path],
-                                           cover: pinCovers[folder.path], client: client,
-                                           width: 140)
+                                PinnedFolderCard(folder: folder,
+                                                 stats: pinStats[folder.path])
                             }
                             .buttonStyle(.plain)
                             // Pinning happens in Parcourir by long press; unpinning had no
@@ -387,7 +470,6 @@ struct HomeView: View {
         pins = (try? await IndexStore.shared.shortcuts()) ?? []
         let paths = pins.map(\.path)
         pinStats = (try? await IndexStore.shared.stats(for: paths)) ?? [:]
-        pinCovers = (try? await IndexStore.shared.covers(for: paths)) ?? [:]
         recent = (try? await IndexStore.shared.recentMedia(under: FreeboxClient.rootPath,
                                                            limit: 12)) ?? []
         disk = try? await IndexStore.shared.capacity()
@@ -433,6 +515,62 @@ private struct LibraryRow: View {
         .padding(.horizontal, 16)
         .frame(minHeight: 50)
         .contentShape(Rectangle())
+    }
+}
+
+/// A pinned folder on the home shelf.
+///
+/// Not `FolderCard`. That one leads with a photograph from inside the folder, which is right
+/// in the browser — you are among folders there and the cover is the only thing telling two
+/// apart. On the home shelf, between a carousel of photographs and a row of photographs, a
+/// cover made a pinned folder look like one more picture. So the card says what it is instead
+/// of what is in it: a folder glyph, the name, and the counts, with nothing to decode.
+private struct PinnedFolderCard: View {
+    let folder: Item
+    /// Absent until the folder has been indexed; the card simply says less.
+    let stats: FolderStats?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Image(systemName: "folder.fill")
+                .font(.title3)
+                .foregroundStyle(.tint)
+
+            Spacer(minLength: 10)
+
+            Text(folder.name)
+                .font(.subheadline.weight(.medium))
+                .lineLimit(2, reservesSpace: true)
+                .multilineTextAlignment(.leading)
+
+            if let count = stats?.mediaCount ?? folder.childCount, count > 0 {
+                Text(Undoer.count(count, "élément", "éléments"))
+                    .font(.caption2)
+                    .fontDesign(.rounded)
+                    .foregroundStyle(.secondary)
+            }
+            if let detail {
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+        }
+        .frame(width: 150, alignment: .topLeading)
+        .padding(12)
+        .background(.tint.opacity(0.14),
+                    in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .contentShape(Rectangle())
+    }
+
+    /// "136,69 Go · 2016 – 2023", trimmed to whatever is actually known.
+    private var detail: String? {
+        guard let stats else { return nil }
+        let parts = [
+            stats.bytes.map { Int64($0).formatted(.byteCount(style: .file)) },
+            stats.span,
+        ].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
 
