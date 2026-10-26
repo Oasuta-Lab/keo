@@ -163,7 +163,58 @@ struct HomeView: View {
             .accessibilityLabel("Keo")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .trailing) { capacity }
         .padding(.top, 4)
+    }
+
+    /// Ce qu'il reste sur le NAS, en anneau, à hauteur du mot.
+    ///
+    /// Remonté du bloc « Bibliothèque », où il était la dernière chose de la page : c'est un
+    /// état permanent et pas une destination, et un état se lit d'un coup d'oeil en arrivant.
+    /// Un anneau plutôt qu'une barre parce qu'il occupe la hauteur d'un logotype au lieu de la
+    /// largeur de l'écran, et parce qu'une barre horizontale à côté d'un mot se lirait comme
+    /// un chargement en cours.
+    @ViewBuilder
+    private var capacity: some View {
+        if let disk, disk.total > 0 {
+            let used = Double(disk.total - disk.free) / Double(disk.total)
+            // L'anneau a cote du texte et non au-dessus : trois lignes empilees sous un
+            // anneau auraient fait un en-tete plus haut que le logotype, et c'est le mot qui
+            // doit mener la page.
+            HStack(spacing: 8) {
+                Gauge(value: used) {
+                    EmptyView()
+                } currentValueLabel: {
+                    Text(used.formatted(.percent.precision(.fractionLength(0))))
+                        .font(.caption2.weight(.semibold))
+                        .fontDesign(.rounded)
+                }
+                .gaugeStyle(.accessoryCircularCapacity)
+                .scaleEffect(0.62)
+                .frame(width: 44, height: 44)
+                .tint(nearlyFull ? Theme.warning : Color.accentColor)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text((disk.total - disk.free).formatted(.byteCount(style: .file))
+                       + " sur " + disk.total.formatted(.byteCount(style: .file)))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(weightLabel + " lus")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .lineLimit(1)
+            }
+            // La couleur seule ne dit rien ici : l'etiquette porte la phrase entiere, et le
+            // chiffre sous l'anneau porte ce qui compte vraiment — ce qu'il reste.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Stockage")
+            .accessibilityValue(
+                (disk.total - disk.free).formatted(.byteCount(style: .file)) + " utilisés sur "
+                + disk.total.formatted(.byteCount(style: .file)) + ", dont "
+                + weightLabel + " lus par Keo"
+                + (nearlyFull ? ". Le disque est presque plein." : ""))
+        }
     }
 
     /// Which of a year's photos to show on the `rotation`-th turn.
@@ -445,8 +496,6 @@ struct HomeView: View {
                     LibraryRow(icon: "chart.bar", title: "Statistiques", detail: nil)
                 }
                 Divider().padding(.leading, 52)
-                storage
-                Divider().padding(.leading, 52)
                 Menu {
                     Button("Déconnexion", systemImage: "rectangle.portrait.and.arrow.right",
                            role: .destructive) { signingOut = true }
@@ -470,43 +519,6 @@ struct HomeView: View {
         return Double(disk.free) / Double(disk.total) < 0.1
     }
 
-    @ViewBuilder
-    private var storage: some View {
-        if let disk {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    // The gauge turning amber is not enough on its own: the glyph changes too,
-                    // so a disk running out still reads without relying on colour.
-                    Image(systemName: nearlyFull ? "internaldrive.badge.xmark" : "internaldrive")
-                        .foregroundStyle(nearlyFull ? AnyShapeStyle(Theme.warning)
-                                                    : AnyShapeStyle(.tint))
-                        .frame(width: 28)
-                    Text("Stockage")
-                    Spacer(minLength: 8)
-                    Text((disk.total - disk.free).formatted(.byteCount(style: .file))
-                       + " sur " + disk.total.formatted(.byteCount(style: .file)))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                ProgressView(value: Double(disk.total - disk.free), total: Double(disk.total))
-                    .tint(nearlyFull ? Theme.warning : .accentColor)
-                    .padding(.leading, 28)
-                Text("Dont \(weightLabel) lus par Keo")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .padding(.leading, 28)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-        } else {
-            LibraryRow(icon: "internaldrive", title: "Poids lu", detail: weightLabel,
-                       chevron: false)
-        }
-    }
-
-    /// « au moins » when some stamped folder has no weight: the total is a floor, not a
-    /// figure, and the index says which rather than quietly rounding up.
     private var weightLabel: String {
         guard let summary, summary.bytes > 0 else { return "—" }
         let size = summary.bytes.formatted(.byteCount(style: .file))
