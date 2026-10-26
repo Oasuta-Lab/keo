@@ -126,7 +126,24 @@ func checkTheThemeCopiesMatch() {
 
 checkTheThemeCopiesMatch()
 
+/// Troisième fichier dupliqué vers l'extension, même raison : une règle de pluriel qui dérive
+/// donne « 0 photos » dans un widget et « 0 photo » dans l'app, sans que rien ne le signale.
+func checkThePluralCopiesMatch() {
+    let app = "Keo/Media/Plural.swift"
+    let widget = "KeoWidget/Plural.swift"
+    guard let inApp = try? Data(contentsOf: URL(fileURLWithPath: app)),
+          let inWidget = try? Data(contentsOf: URL(fileURLWithPath: widget)) else {
+        assertionFailure("copies de la règle de pluriel introuvables — lance le check depuis la racine")
+        return
+    }
+    assert(inApp == inWidget, "\(app) et \(widget) ont divergé : deux règles de pluriel")
+    assert(inApp.count > 200, "le fichier fait \(inApp.count) octets, le scan a lu le mauvais")
+}
+
+checkThePluralCopiesMatch()
+
 checkPreviewProbeTrust()
+checkFrenchPlural()
 
 // MARK: - Envelope
 

@@ -283,7 +283,7 @@ struct IndexingView: View {
 
     private var rebuildWarning: String {
         let dates = knownCount.formatted()
-        return "Les \(dates) dates déjà lues seront effacées, puis chaque photo sera relue "
+        return "Les \(dates) dates déjà lues seront effacées, puis chaque fichier sera relu "
              + "une par une sur le NAS. Compte plusieurs minutes par millier de photos.\n\n"
              + "À ne faire que si les dates affichées sont fausses. Pour simplement détecter "
              + "des photos ajoutées, « Revérifier tous les dossiers » suffit et ne relit rien."
@@ -412,7 +412,7 @@ struct UnindexedChip: View {
     var body: some View {
         GridChip(open: open) {
             Image(systemName: "calendar.badge.exclamationmark")
-            Text(Undoer.count(count, "photo pas encore lue", "photos pas encore lues"))
+            Text(Undoer.count(count, "élément pas encore lu", "éléments pas encore lus"))
                 .fontDesign(.rounded)
                 .font(.caption.weight(.medium))
         }

@@ -330,7 +330,7 @@ struct KeoWidgetView: View {
         guard family != .systemSmall else { return nil }
         var parts: [String] = []
         if let count = entry.mediaCount {
-            parts.append("\(count.formatted()) photo\(count == 1 ? "" : "s")")
+            parts.append(Plural.count(count, "élément", "éléments"))
         }
         if let span = entry.span { parts.append(span) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")

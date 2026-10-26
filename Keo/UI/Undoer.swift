@@ -73,8 +73,10 @@ final class Undoer: ObservableObject {
     /// "1 favori retiré" / "3 favoris retirés". Written once because every call site needs
     /// it and none of them should be the place a plural rule is got wrong — note that French
     /// keeps the singular at zero, which `> 1` gets right and `!= 1` would not.
+    /// Gardé ici parce que tout l'écran l'appelle par ce nom ; la règle elle-même vit dans
+    /// `Plural`, que l'extension widget peut atteindre.
     static func count(_ n: Int, _ one: String, _ many: String) -> String {
-        "\(n.formatted()) \(n > 1 ? many : one)"
+        Plural.count(n, one, many)
     }
 
     /// Hides the banner without touching the stack: the action stays undoable by shaking,

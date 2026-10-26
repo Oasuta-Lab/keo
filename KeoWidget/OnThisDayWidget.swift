@@ -182,6 +182,6 @@ struct OnThisDayView: View {
     /// when more was found than is on screen.
     private var detail: String? {
         guard family != .systemSmall, entry.total > entry.shots.count else { return nil }
-        return "\(entry.total.formatted()) photos ce jour-là"
+        return Plural.count(entry.total, "élément", "éléments") + " ce jour-là"
     }
 }

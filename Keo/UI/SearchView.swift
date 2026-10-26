@@ -22,7 +22,7 @@ struct SearchView: View {
     @State private var to = Date()
 
     private var resultsTitle: String {
-        results.count == 1 ? "1 résultat" : "\(results.count) résultats"
+        Plural.count(results.count, "résultat", "résultats")
     }
 
     var body: some View {
@@ -233,6 +233,9 @@ private struct Chip: View {
             .padding(.vertical, 7)
             .background(on ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary),
                         in: Capsule())
+            // La capsule fait environ 33 pt de haut ; la cible doit atteindre 44 sans que la
+            // puce grossisse et fasse déborder la rangée. Même remède que `GridChip`.
+            .contentShape(Capsule().inset(by: -6))
             .foregroundStyle(on ? AnyShapeStyle(Color("OnAccent")) : AnyShapeStyle(.primary))
     }
 }

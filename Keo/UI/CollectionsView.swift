@@ -29,7 +29,7 @@ struct CollectionsView: View {
                         SyncRecoveryView()
                     } else {
                         ContentUnavailableView {
-                            Label("Aucune collection", systemImage: "square.stack")
+                            Label("Aucune collection pour l'instant", systemImage: "square.stack")
                         } description: {
                             Text("Range tes photos par thème. Une photo peut appartenir à plusieurs "
                                + "collections, et rien n'est écrit sur le NAS.")
@@ -73,10 +73,13 @@ struct CollectionsView: View {
         .refreshable { await reload() }
         // Every other personalisation — épingler, favoriser, annoter — is reversible by
         // shaking. This one is not: the collection and its contents go together.
-        .confirmationDialog(Text("Supprimer « \(deleting?.name ?? "") » ?"),
-                            isPresented: Binding(get: { deleting != nil },
-                                                 set: { if !$0 { deleting = nil } }),
-                            titleVisibility: .visible) {
+        // An alert rather than a confirmation dialog: a dialog slides up from the bottom
+        // edge, which read as badly placed for a question about the row under your finger.
+        // An alert is centred, frames its own text, and is what this screen already uses to
+        // create and rename — so the destructive question wears the same clothes.
+        .alert("Supprimer « \(deleting?.name ?? "") » ?",
+               isPresented: Binding(get: { deleting != nil },
+                                    set: { if !$0 { deleting = nil } })) {
             // The name belongs in the title, which wraps. A button label does not: a long
             // collection name was simply cut off mid-word.
             Button("Supprimer", role: .destructive) {
@@ -99,11 +102,16 @@ struct CollectionsView: View {
                                     set: { if !$0 { naming = false; renaming = nil } })) {
             TextField("Nom", text: $name)
             Button("Annuler", role: .cancel) { naming = false; renaming = nil }
-            Button("Valider") {
-                let typed = name
+            // Le verbe du bouton est celui de l'action, pas « Valider » : c'est le même mot
+            // du début à la fin du geste. Et le nom vide est refusé ici — il l'était déjà
+            // dans le sélecteur de collection, mais pas sur cet écran, où l'échec du store
+            // était avalé par un `try?` et ne disait rien.
+            Button(renaming == nil ? "Créer" : "Renommer") {
+                let typed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                 let target = renaming
                 naming = false
                 renaming = nil
+                guard !typed.isEmpty else { return }
                 act {
                     if let target {
                         try await IndexStore.shared.renameCollection(target.id, to: typed)

@@ -297,6 +297,11 @@ struct BrowserView: View {
             VStack(spacing: 0) {
                 DownloadBar(downloader: downloader)
                 if selecting { selectionBar }
+                // `SyncFootnote` se décrit comme « au pied des onglets de personnalisation ».
+                // Collections et l'accueil l'avaient, Favoris non — alors que c'est le même
+                // contenu, venu du même iCloud, et que cet écran gère déjà l'état de
+                // récupération. Pas sur un dossier du NAS, qui ne se synchronise pas.
+                if case .favourites = source, !selecting { SyncFootnote() }
             }
         }
         .sensoryFeedback(.selection, trigger: selection.count)
@@ -584,10 +589,19 @@ struct BrowserView: View {
         if !loaded {
             ProgressView()
         } else if let error {
-            ContentUnavailableView("Connexion impossible", systemImage: "externaldrive.badge.xmark",
-                                   description: Text("La Freebox ne répond pas. Ce que Keo a "
-                                                   + "déjà lu reste consultable — ce dossier-ci "
-                                                   + "n'a simplement jamais été vu.\n\n" + error))
+            // Deux pannes très différentes passaient par le même message. Un dossier du NAS
+            // qui ne répond pas, c'est la box ; une liste de favoris ou une collection qui
+            // échoue, c'est SQLite en local, et accuser la Freebox envoie chercher la panne
+            // à l'autre bout de la maison.
+            ContentUnavailableView(source.isOnNAS ? "Connexion impossible" : "Lecture impossible",
+                                   systemImage: source.isOnNAS
+                                       ? "externaldrive.badge.xmark" : "exclamationmark.triangle",
+                                   description: Text(source.isOnNAS
+                                       ? "La Freebox ne répond pas. Ce que Keo a déjà lu reste "
+                                       + "consultable — ce dossier-ci n'a simplement jamais été "
+                                       + "vu.\n\n" + error
+                                       : "L'index local n'a pas pu être lu. La Freebox n'y est "
+                                       + "pour rien.\n\n" + error))
         } else if contents.isEmpty {
             if source == .favourites, sync.status == .recovering {
                 // Empty because nothing has arrived yet, not because there is nothing.

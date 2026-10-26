@@ -63,7 +63,7 @@ struct HomeView: View {
     }
 
     private func subtitle(for group: (year: Int, items: [Item])) -> String {
-        let count = Undoer.count(group.items.count, "photo", "photos")
+        let count = Undoer.count(group.items.count, "élément", "éléments")
         guard let day = group.items.first?.captureDate else { return count }
         return "\(HumanDate.story(day)) · \(count)"
     }
@@ -114,8 +114,8 @@ struct HomeView: View {
         }
         .modifier(PushTargets(client: client, declare: true))
         .sheet(isPresented: $showingIndexing) { IndexingView(client: client) }
-        .confirmationDialog("Se déconnecter de la Freebox ?", isPresented: $signingOut,
-                            titleVisibility: .visible) {
+        // Centred, like the rest of the app's questions — see `CollectionsView`.
+        .alert("Se déconnecter de la Freebox ?", isPresented: $signingOut) {
             Button("Se déconnecter", role: .destructive) { store.signOut() }
             Button("Annuler", role: .cancel) {}
         } message: {
@@ -169,6 +169,11 @@ struct HomeView: View {
     static func cover(of items: [Item], at rotation: Int) -> Item? {
         guard !items.isEmpty else { return nil }
         return items[rotation % items.count]
+    }
+
+    private func openShownYear() {
+        guard let shown else { return }
+        destination = .results(title: "Ce jour-là en \(shown.year)", items: shown.items)
     }
 
     private static var today: String {
@@ -275,10 +280,14 @@ struct HomeView: View {
             // The overlays let taps through, so this opens the year on screen while the
             // carousel keeps its own swipe.
             .contentShape(Rectangle())
-            .onTapGesture {
-                guard let shown else { return }
-                destination = .results(title: "Ce jour-là en \(shown.year)", items: shown.items)
-            }
+            .onTapGesture { openShownYear() }
+            // Un `onTapGesture` n'est pas un bouton : VoiceOver annonçait une image et
+            // n'offrait aucune action, alors que « Derniers éléments » juste en dessous sont
+            // de vrais boutons. Les rangées de photos voisines se comportent déjà ainsi.
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(shown.map { "Ce jour-là en \($0.year)" } ?? "Ce jour-là")
+            .accessibilityAction { openShownYear() }
             // Restarted by its own id on every change, so a manual swipe gets the full dwell
             // instead of being cut short by a timer that had kept running underneath.
             .task(id: memoryPage) {
@@ -314,8 +323,11 @@ struct HomeView: View {
                             // Pinning happens in Parcourir by long press; unpinning had no
                             // gesture at all from the shelf the pins actually live on.
                             .contextMenu {
-                                Button("Désépingler", systemImage: "pin.slash",
-                                       role: .destructive) {
+                                // Sans rôle destructif : désépingler s'annule en secouant,
+                                // et le même geste dans Parcourir n'en porte pas. Deux rouges
+                                // différents pour le même verbe, c'était l'écran qui décidait
+                                // de la gravité au lieu de l'action.
+                                Button("Désépingler", systemImage: "pin.slash") {
                                     unpin(folder)
                                 }
                             }
@@ -332,18 +344,18 @@ struct HomeView: View {
         }
     }
 
-    // MARK: Dernières photos
+    // MARK: Derniers éléments
 
     @ViewBuilder
     private var latest: some View {
         if !recent.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Dernières photos").font(.title3.bold())
+                Text("Derniers éléments").font(.title3.bold())
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 3) {
                         ForEach(recent) { item in
                             Button {
-                                destination = .results(title: "Dernières photos", items: recent)
+                                destination = .results(title: "Derniers éléments", items: recent)
                             } label: {
                                 Thumb(item: item, client: client, selected: nil, lookahead: [])
                                     .frame(width: 96, height: 96)

@@ -34,7 +34,7 @@ swiftc -swift-version 6 -D DEBUG \
   Keo/Media/DiskCache.swift Keo/Media/PreviewPolicy.swift Keo/Media/FolderStamp.swift \
   Keo/Media/WalkOutcome.swift Keo/Media/SearchQuery.swift Keo/Media/Statistics.swift \
   Keo/Media/LivePhotos.swift Keo/Media/FolderExclusion.swift Keo/Media/FilenameDate.swift \
-  Keo/Media/IndexStore.swift Keo/Media/PrefetchWindow.swift \
+  Keo/Media/IndexStore.swift Keo/Media/PrefetchWindow.swift Keo/Media/Plural.swift \
   Keo/Media/VideoDate.swift Keo/Media/WidgetManifest.swift Keo/Sync/SyncModel.swift \
   Keo/UI/MediaDate.swift Keo/UI/RailLayout.swift Keo/UI/BrowserSource.swift \
   Keo/UI/DeepLink.swift Keo/UI/HumanDate.swift \

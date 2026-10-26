@@ -60,3 +60,19 @@ func checkPreviewProbeTrust() {
     print("ok — la sonde n'est crue que là où elle peut contenir un aperçu, "
         + "et la route choisie fait partie de la clé")
 }
+
+/// La règle de pluriel française, maintenant unique dans le projet.
+///
+/// Elle a dérivé une fois : l'app appliquait `n > 1`, le widget `n == 1 ? "" : "s"`, et
+/// affichait « 0 photos ». Zéro est singulier en français.
+func checkFrenchPlural() {
+    assert(Plural.count(0, "élément", "éléments") == "0 élément", "zéro est singulier")
+    assert(Plural.count(1, "élément", "éléments") == "1 élément", "un est singulier")
+    assert(Plural.count(2, "élément", "éléments") == "2 éléments", "deux est pluriel")
+    assert(Plural.count(8_380, "élément", "éléments").hasSuffix(" éléments"),
+           "les milliers restent pluriels")
+    // Le séparateur de milliers vient de la locale, donc on ne le compare pas à un littéral :
+    // on vérifie seulement que le nombre a été formaté et non interpolé brut.
+    assert(Plural.count(8_380, "é", "é") != "8380 é", "le nombre passe par formatted()")
+    print("ok — pluriel français : zéro et un au singulier, et les milliers formatés")
+}
