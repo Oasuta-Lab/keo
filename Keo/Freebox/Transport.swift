@@ -91,15 +91,27 @@ struct ReadOnlyTransport: Sendable {
 
     func json<T: Decodable>(_ url: URL, token: String? = nil, as type: T.Type) async throws -> T {
         let (data, response) = try await session.data(for: request(url, token: token))
-        try Self.checkStatus(response)
+        try Self.checkStatus(response, body: data)
         return try Envelope.unwrap(data, as: type)
     }
 
     /// Without this, a 504 hands its HTML error page to `JSONDecoder` and the user is told
     /// "the data couldn't be read because it isn't in the correct format".
-    static func checkStatus(_ response: URLResponse) throws {
+    ///
+    /// `body` est passé quand on l'a : la box explique son refus dans la réponse —
+    /// `auth_required`, `insufficient_rights`, `invalid_token` — et sans lui, un 403 devenait
+    /// « Erreur réseau (403) », ce qui est faux deux fois : ce n'est pas le réseau, et ça ne
+    /// dit pas laquelle des trois pannes on a. Les requêtes d'octets lisaient déjà ce corps ;
+    /// les requêtes JSON, non.
+    static func checkStatus(_ response: URLResponse, body: Data = Data()) throws {
         guard let http = response as? HTTPURLResponse else { throw FreeboxError.http(0) }
-        guard (200..<300).contains(http.statusCode) else { throw FreeboxError.http(http.statusCode) }
+        guard (200..<300).contains(http.statusCode) else {
+            if !body.isEmpty, let status = try? JSONSerialization.jsonObject(with: body),
+               status is [String: Any] {
+                throw Envelope.failure(body)
+            }
+            throw FreeboxError.http(http.statusCode)
+        }
     }
 
     /// `prefix` caps the download to the first N bytes, for embedded-preview probes.
@@ -176,7 +188,7 @@ struct LoginTransport: Sendable {
 
     func get<T: Decodable>(_ url: URL, as type: T.Type) async throws -> T {
         let (data, response) = try await session.data(from: url)
-        try ReadOnlyTransport.checkStatus(response)
+        try ReadOnlyTransport.checkStatus(response, body: data)
         return try Envelope.unwrap(data, as: type)
     }
 
@@ -187,7 +199,8 @@ struct LoginTransport: Sendable {
         call.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await session.data(for: call)
-        try ReadOnlyTransport.checkStatus(response)
+        // C'est ici que l'ouverture de session échoue, et c'est là que la box nomme la cause.
+        try ReadOnlyTransport.checkStatus(response, body: data)
         return try Envelope.unwrap(data, as: type)
     }
 }

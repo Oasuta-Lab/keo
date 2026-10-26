@@ -283,6 +283,10 @@ actor FreeboxClient {
         do {
             return try await work(try await currentSession())
         } catch let error as FreeboxError where error.isSessionProblem || error.isForbidden {
+            // Rien à tracer ici : `trace` vit dans l'indexeur, qui dépend de SwiftUI et ne
+            // peut pas entrer dans la liste vérifiée dont ce fichier fait partie. Et il n'y
+            // en a plus besoin — l'erreur qui remonte porte désormais le mot de la box, que
+            // l'appelant journalise déjà (« list FAILED … »).
             sessionToken = nil
             return try await work(try await openSession())
         }
