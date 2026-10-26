@@ -99,15 +99,28 @@ struct Item: Identifiable, Hashable, Sendable {
 
     private static func classify(path: String, isDirectory: Bool, mimeType: String?) -> Kind {
         if isDirectory { return .folder }
+        let ext = (path as NSString).pathExtension.lowercased()
+        // Checked before the mime type, which says `image/svg+xml` and would otherwise put a
+        // drawing in the photo library. Nothing in the app can decode one — ImageIO does not
+        // know the format at all: no type, no image, no thumbnail — so as a photo it is a
+        // grey cell that never resolves, and as a *counted* photo it also lands in the
+        // timeline, in « Dernières photos » and in the queue of files whose capture date is
+        // worth a network round trip. It has none.
+        if drawingExtensions.contains(ext) { return .other }
         if let mimeType {
             if mimeType.hasPrefix("image/") { return .image }
             if mimeType.hasPrefix("video/") { return .video }
         }
-        let ext = (path as NSString).pathExtension.lowercased()
         if imageExtensions.contains(ext) { return .image }
         if videoExtensions.contains(ext) { return .video }
         return .other
     }
+
+    /// Vector drawings: `image/*` by mime type, documents by every other measure. They are
+    /// not photographs, they carry no capture date, and no system framework here renders them.
+    /// Non privé : le magasin reclasse les lignes déjà écrites à partir de cette liste, et
+    /// deux listes finiraient par diverger.
+    static let drawingExtensions: Set<String> = ["svg", "svgz", "ai", "eps"]
 
     private static let imageExtensions: Set<String> =
         ["jpg", "jpeg", "png", "heic", "heif", "gif", "webp", "tif", "tiff", "bmp",

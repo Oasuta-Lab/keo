@@ -146,6 +146,8 @@ checkPreviewProbeTrust()
 checkFrenchPlural()
 try await checkRecentKinds()
 try await checkArrivalDate()
+checkWalkSummary()
+try await checkSweepCounts()
 try await checkUnseenArrivals()
 
 // MARK: - Envelope
@@ -236,6 +238,17 @@ assert(item("/a/x.jpg", mime: "image/jpeg").kind == .image)
 assert(item("/a/clip.MOV").kind == .video, "sans mimetype on retombe sur l'extension")
 assert(item("/a/scan.CR3").kind == .image, "les RAW comptent comme des photos")
 assert(item("/a/notes.pdf", mime: "application/pdf").kind == .other)
+// Un dessin vectoriel s'annonce `image/*` et n'est pas une photo. Rien ici ne sait le rendre
+// — ImageIO ne connaît pas le format du tout — et compté comme photo il remonte en tête de la
+// timeline et de « Dernières photos » sous la forme d'une case grise qui n'arrive jamais.
+assert(item("/a/logo.svg", mime: "image/svg+xml").kind == .other,
+       "le mime dit image : c'est l'extension qui doit trancher, et avant lui")
+assert(item("/a/LOGO.SVG", mime: "image/svg+xml").kind == .other, "casse indifférente")
+assert(item("/a/planche.ai").kind == .other)
+assert(!item("/a/logo.svg", mime: "image/svg+xml").isMedia,
+       "sinon la file des dates de prise de vue lui offre un aller-retour réseau pour rien")
+assert(item("/a/vraie.png", mime: "image/png").kind == .image,
+       "les images matricielles restent des photos")
 assert(item("/a/x.jpg", mime: "image/jpeg").isMedia)
 assert(!item("/a/notes.pdf", mime: "application/pdf").isMedia)
 

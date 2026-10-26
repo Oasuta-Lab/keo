@@ -79,6 +79,21 @@ actor IndexStore {
             try? exec("PRAGMA user_version = 1")
         }
 
+        // Les dessins vectoriels étaient rangés parmi les photos, parce que la box les annonce
+        // en `image/svg+xml`. Sans ce rattrapage, les lignes déjà écrites garderaient leur
+        // ancien genre jusqu'à une réindexation complète — c'est-à-dire des photos qui ne
+        // s'affichent jamais, en tête de la timeline et de « Dernières photos ».
+        //
+        // Un `UPDATE` ciblé, pas une valeur par défaut sur la colonne : c'est une colonne
+        // `kind` et un `DEFAULT` qui avaient transformé toute la bibliothèque en dossiers.
+        if (try? scalar("PRAGMA user_version")) ?? 0 == 1 {
+            let drawings = Item.drawingExtensions.sorted()
+                .map { "lower(name) LIKE '%.\($0)'" }.joined(separator: " OR ")
+            try? exec("UPDATE file SET kind = \(Item.Kind.other.code) "
+                    + "WHERE kind = \(Item.Kind.image.code) AND (\(drawings))")
+            try? exec("PRAGMA user_version = 2")
+        }
+
         // Readable while the phone is locked after the first unlock, like the rest of our data.
         try? FileManager.default.setAttributes(
             [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
@@ -210,10 +225,34 @@ actor IndexStore {
         return next
     }
 
-    func sweepFolders(generation: Int64) throws {
+    /// Returns how many files went with the folders it removed.
+    ///
+    /// Counted before the delete rather than after, because `file` rows go by cascade and are
+    /// unreachable a statement later. It is the only honest source for "N fichiers disparus":
+    /// the walk itself never sees a file that is no longer listed.
+    @discardableResult
+    func sweepFolders(generation: Int64) throws -> Int {
         try open()
         // Keeps folders never walked (gen 0) so an interrupted first pass isn't wiped.
+        let doomed = "SELECT id FROM folder WHERE gen > 0 AND gen < \(generation)"
+        let losing = Int(try scalar("SELECT count(*) FROM file WHERE folder_id IN (\(doomed))") ?? 0)
         try exec("DELETE FROM folder WHERE gen > 0 AND gen < \(generation)")
+        return losing
+    }
+
+    /// Arrivals recorded at or after `stamp` — the count for one pass.
+    ///
+    /// Taken from the timestamp rather than by subtracting a before and an after count,
+    /// because the sweep in the same pass can take arrival rows with it by cascade and the
+    /// difference would come out short, or negative.
+    func arrivalsSince(_ stamp: Double) throws -> Int {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        try prepare("SELECT count(*) FROM arrival WHERE added >= ?", into: &statement)
+        sqlite3_bind_double(statement, 1, stamp)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+        return Int(sqlite3_column_int64(statement, 0))
     }
 
     // MARK: Reading
