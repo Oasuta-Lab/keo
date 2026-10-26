@@ -344,18 +344,18 @@ struct HomeView: View {
         }
     }
 
-    // MARK: Derniers éléments
+    // MARK: Dernières photos
 
     @ViewBuilder
     private var latest: some View {
         if !recent.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Derniers éléments").font(.title3.bold())
+                Text("Dernières photos").font(.title3.bold())
                 ScrollView(.horizontal) {
                     LazyHStack(spacing: 3) {
                         ForEach(recent) { item in
                             Button {
-                                destination = .results(title: "Derniers éléments", items: recent)
+                                destination = .results(title: "Dernières photos", items: recent)
                             } label: {
                                 Thumb(item: item, client: client, selected: nil, lookahead: [])
                                     .frame(width: 96, height: 96)
@@ -496,8 +496,10 @@ struct HomeView: View {
         let paths = pins.map(\.path)
         pinStats = (try? await IndexStore.shared.stats(for: paths)) ?? [:]
         pinCovers = (try? await IndexStore.shared.covers(for: paths, limit: 3)) ?? [:]
+        // Des photos, pas des médias : l'étagère s'appelle « Dernières photos », et une vidéo
+        // sous ce titre est un contenu qui ne correspond pas à ce qui l'annonce.
         recent = (try? await IndexStore.shared.recentMedia(under: FreeboxClient.rootPath,
-                                                           limit: 12)) ?? []
+                                                           limit: 12, kinds: [.image])) ?? []
         disk = try? await IndexStore.shared.capacity()
 
         // Refreshed in the background, and only when the box answers. A failure here is not

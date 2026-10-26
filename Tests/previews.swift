@@ -76,3 +76,41 @@ func checkFrenchPlural() {
     assert(Plural.count(8_380, "é", "é") != "8380 é", "le nombre passe par formatted()")
     print("ok — pluriel français : zéro et un au singulier, et les milliers formatés")
 }
+
+/// L'étagère de l'accueil s'appelle « Dernières photos » : elle ne doit rendre que des photos.
+///
+/// Le filtre est une liste de genres interpolée dans du SQL, donc une liste vide ou mal
+/// composée ne se verrait qu'à l'écran — sur un vrai SQLite, comme le reste du magasin.
+func checkRecentKinds() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("keo-recent-\(ProcessInfo.processInfo.processIdentifier)")
+    try? FileManager.default.removeItem(at: home)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    func file(_ name: String) -> Item {
+        Item(path: "/NAS/Mix/\(name)", name: name, isDirectory: false, size: 2_048,
+             modified: nil, mimeType: nil)
+    }
+    let store = IndexStore(directory: home)
+    let generation = try await store.beginGeneration()
+    let day = Date(timeIntervalSince1970: 1_600_000_000)
+    try await store.commit([
+        (file("a.jpg"), day), (file("b.png"), day),
+        (file("film.mov"), day), (file("notes.txt"), day),
+    ], in: "/NAS/Mix", generation: generation)
+
+    let photos = try await store.recentMedia(under: "/NAS/Mix", limit: 12, kinds: [.image])
+    assert(photos.allSatisfy { $0.kind == .image },
+           "« Dernières photos » ne doit ramener que des images — \(photos.map(\.name))")
+    assert(Set(photos.map(\.name)) == ["a.jpg", "b.png"],
+           "les deux images, et rien d'autre — \(photos.map(\.name))")
+
+    let media = try await store.recentMedia(under: "/NAS/Mix", limit: 12)
+    assert(media.contains { $0.kind == .video },
+           "par défaut le widget prend aussi les vidéos")
+    assert(!media.contains { $0.kind == .other },
+           "un document n'est jamais un média")
+
+    print("ok — l'étagère « Dernières photos » ne ramène que des photos")
+}

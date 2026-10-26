@@ -144,6 +144,7 @@ checkThePluralCopiesMatch()
 
 checkPreviewProbeTrust()
 checkFrenchPlural()
+try await checkRecentKinds()
 
 // MARK: - Envelope
 

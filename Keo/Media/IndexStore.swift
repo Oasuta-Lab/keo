@@ -2419,7 +2419,11 @@ actor IndexStore {
     /// a folder the date reader has not reached yet, rather than as the headline.
     /// Named apart from `covers(for:)`, which answers "one tile image per folder" — same
     /// ordering, a different question, and two overloads of one name would read as the same.
-    func recentMedia(under folder: String, limit: Int = 12) throws -> [Item] {
+    /// `kinds` restreint ce qui remonte. L'étagère de l'accueil s'appelle « Dernières
+    /// photos » : elle ne doit donc montrer que des photos, pas des vidéos sous un titre qui
+    /// n'est pas le leur. Le widget, lui, prend les deux.
+    func recentMedia(under folder: String, limit: Int = 12,
+                     kinds: [Item.Kind] = [.image, .video]) throws -> [Item] {
         try open()
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
@@ -2429,7 +2433,7 @@ actor IndexStore {
             SELECT d.path, fi.name, fi.size, fi.capture, fi.kind
             FROM file fi JOIN folder d ON d.id = fi.folder_id
             WHERE (\(scope)) AND fi.live = 0
-              AND fi.kind IN (\(Item.Kind.image.code), \(Item.Kind.video.code))
+              AND fi.kind IN (\(kinds.map { String($0.code) }.joined(separator: ", ")))
             ORDER BY fi.kind, fi.capture DESC, d.path, fi.name
             LIMIT ?3
             """, into: &statement)
