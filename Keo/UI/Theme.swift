@@ -50,7 +50,7 @@ enum Theme {
 struct CageMark: Shape {
 
     /// The mark alone, without the tile the app icon sits on.
-    private static let design = CGRect(x: 56, y: 58, width: 143, height: 136)
+    fileprivate static let design = CGRect(x: 56, y: 58, width: 143, height: 136)
 
     private static let aspect = design.width / design.height
 
@@ -76,14 +76,31 @@ struct CageMark: Shape {
                                 cornerSize: CGSize(width: 5 * scale, height: 5 * scale))
         }
 
-        // The arm is the outline of a 26-wide round-capped stroke. Letting the framework expand
-        // it beats hand-computing the caps and the mitre, and it cannot drift from the icon.
-        var arm = Path()
-        arm.move(to: point(186, 78))
-        arm.addLine(to: point(138, 126))
-        arm.addLine(to: point(186, 174))
-        path.addPath(arm.strokedPath(
-            StrokeStyle(lineWidth: 26 * scale, lineCap: .round, lineJoin: .round)))
+        return path
+    }
+}
+
+/// The arm of the K, as a bare polyline meant to be stroked.
+///
+/// Deliberately not folded into `CageMark`: that path is filled even-odd so the bays read as
+/// holes, and the outline of a round-capped stroke overlaps itself at the apex. Even-odd
+/// cancels overlapping area, which punched a triangular hole in the corner of the V.
+struct CageMarkArm: Shape {
+    func path(in rect: CGRect) -> Path {
+        let design = CageMark.design
+        let scale = min(rect.width / design.width, rect.height / design.height)
+        let size = CGSize(width: design.width * scale, height: design.height * scale)
+        let origin = CGPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2)
+
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: origin.x + (x - design.minX) * scale,
+                    y: origin.y + (y - design.minY) * scale)
+        }
+
+        var path = Path()
+        path.move(to: point(186, 78))
+        path.addLine(to: point(138, 126))
+        path.addLine(to: point(186, 174))
         return path
     }
 }
@@ -100,12 +117,18 @@ extension CageMark {
         var opacity: Double = 1
 
         var body: some View {
-            CageMark()
-                .fill(style: FillStyle(eoFill: true))
-                .aspectRatio(CageMark.aspect, contentMode: .fit)
-                .frame(height: height)
-                .opacity(opacity)
-                .accessibilityLabel("Keo")
+            // Two shapes rather than one: the cage needs an even-odd fill to keep its bays
+            // hollow, and the arm needs an ordinary stroke. Sharing a path made them fight.
+            ZStack {
+                CageMark().fill(style: FillStyle(eoFill: true))
+                CageMarkArm().stroke(style: StrokeStyle(
+                    lineWidth: 26 * height / CageMark.design.height,
+                    lineCap: .round, lineJoin: .round))
+            }
+            .aspectRatio(CageMark.aspect, contentMode: .fit)
+            .frame(height: height)
+            .opacity(opacity)
+            .accessibilityLabel("Keo")
         }
     }
 }
