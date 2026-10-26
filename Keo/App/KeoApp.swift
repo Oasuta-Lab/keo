@@ -11,6 +11,7 @@ struct KeoApp: App {
     /// Held here rather than in `Shelf`: a `keo://` URL can land before the box
     /// has answered, and the shelf does not exist yet at that point.
     @State private var link: DeepLink?
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
@@ -26,6 +27,18 @@ struct KeoApp: App {
             .environmentObject(indexer)
             .environmentObject(sync)
             .environmentObject(undoer)
+            // Une seule bannière, à la racine, pour une panne qui peut surgir de partout :
+            // une grille, la visionneuse, une marche d'indexation, un réveil en arrière-plan.
+            // Les vues n'en savent rien et continuent de montrer l'index local.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if store.authorizationLost { AuthorizationBanner() }
+            }
+            // Le jeton peut arriver par iCloud pendant que l'app est en arrière-plan, et le
+            // trousseau met parfois des minutes. Au retour, on retente en silence.
+            .task(id: scenePhase) {
+                guard scenePhase == .active else { return }
+                await store.retryWithFreshToken()
+            }
             // Independent of the Freebox pairing: favourites can come back from iCloud
             // before the box has ever answered.
             .task { await sync.start() }
@@ -42,6 +55,100 @@ struct KeoApp: App {
     }
 }
 
+
+/// Dit la seule panne que le propriétaire doit traiter lui-même, et ce qu'elle veut dire.
+///
+/// Elle ne couvre pas « la box est hors de portée » : être ailleurs que chez soi est l'état
+/// normal de cette app, et tout ce qui est indexé reste consultable. Elle ne paraît que sur un
+/// refus **nommé** par la Freebox, qui a survécu à une réouverture de session et à une
+/// relecture du trousseau.
+///
+/// Le premier mot va à l'explication la plus probable, et c'est celle qui a mordu : un autre
+/// appareil vient de s'associer, la box ne reconnaît qu'un jeton par application, et le jeton
+/// neuf arrive par iCloud quelques minutes plus tard. Appuyer sur ✓ marche aussi, mais
+/// révoque à son tour l'autre appareil — autant le dire avant de l'envoyer le faire.
+private struct AuthorizationBanner: View {
+    @EnvironmentObject private var store: Store
+    @State private var repairing = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("La Freebox ne reconnaît plus Keo", systemImage: "exclamationmark.triangle.fill")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Theme.warning)
+
+            Text("Si un autre appareil vient d'être associé, l'autorisation voyage par "
+               + "iCloud : attends une minute, ça se remet seul. Sinon, il faut réassocier "
+               + "Keo en appuyant sur ✓ sur la face avant de la box.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 12) {
+                Button("Réessayer") { Task { await store.retryWithFreshToken() } }
+                Button("Réassocier") { repairing = true }
+            }
+            .font(.footnote.weight(.medium))
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.bar)
+        .sheet(isPresented: $repairing) { ReassociateSheet() }
+    }
+}
+
+/// Réutilise `pair()` tel quel : il sait déjà découvrir la box, attendre le ✓, ranger le jeton
+/// dans le trousseau et valider par une lecture. Rien à réécrire, et une seule façon
+/// d'associer dans tout le projet.
+private struct ReassociateSheet: View {
+    @EnvironmentObject private var store: Store
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 18) {
+                CageMark.Filled(height: 84).foregroundStyle(.tint)
+                Text("Réassocier Keo")
+                    .font(.title2.bold())
+                switch store.phase {
+                case .waitingForButton:
+                    ProgressView()
+                    Text("Appuie sur « ✓ » sur l'écran de la Freebox.")
+                        .font(.headline)
+                        .multilineTextAlignment(.center)
+                case .discovering:
+                    ProgressView()
+                case .failed(let message):
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(Theme.warning)
+                        .multilineTextAlignment(.center)
+                    Button("Réessayer") { Task { await store.pair() } }
+                        .buttonStyle(.borderedProminent)
+                        .foregroundStyle(Color("OnAccent"))
+                case .idle:
+                    Text("Keo va demander l'autorisation à la box. Garde-la à portée de main.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    Button("Demander l'autorisation") { Task { await store.pair() } }
+                        .buttonStyle(.borderedProminent)
+                        .foregroundStyle(Color("OnAccent"))
+                }
+                Spacer()
+            }
+            .padding(24)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Fermer") { dismiss() }
+                }
+            }
+        }
+        // Elle se ferme d'elle-même dès que l'autorisation est revenue, par ✓ ou par iCloud.
+        .onChange(of: store.authorizationLost) { _, lost in if !lost { dismiss() } }
+    }
+}
 /// The top-level places, as a tab bar.
 ///
 /// A side drawer would have been the obvious shape for this, and it is exactly what Apple's

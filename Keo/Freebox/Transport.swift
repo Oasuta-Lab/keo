@@ -24,7 +24,25 @@ enum FreeboxError: LocalizedError, Sendable {
     /// The session token expired or was never opened — worth exactly one retry.
     var isSessionProblem: Bool {
         if case .api(let code, _) = self {
+            // `invalid_session` n'est documenté nulle part chez Free ; gardé par prudence.
             return code == "auth_required" || code == "invalid_session"
+        }
+        return false
+    }
+
+    /// La box refuse l'**application**, pas la session : rouvrir n'y changera rien.
+    ///
+    /// `invalid_token` est le jeton révoqué — celui qu'un réappairage ailleurs produit, car la
+    /// Freebox ne reconnaît qu'un jeton par `app_id`. `pending_token` est un jeton délivré
+    /// dont le ✓ n'a jamais été pressé. Les deux demandent un geste physique sur la box, ou
+    /// un jeton plus frais venu du trousseau.
+    ///
+    /// `insufficient_rights` n'est délibérément pas ici : le jeton y est bon, c'est la
+    /// permission « Accès aux fichiers » qui manque, et réappairer n'y changerait rien.
+    var isAuthorizationLost: Bool {
+        if case .api(let code, _) = self {
+            return code == "invalid_token" || code == "pending_token"
+                || code == "new_apps_denied" || code == "apps_denied"
         }
         return false
     }

@@ -64,8 +64,16 @@ enum PeriodicDiscovery {
         // interrompu par l'expiration emporterait la chaîne avec lui.
         schedule()
 
-        guard let client = Store.shared?.client else {
+        guard let store = Store.shared, let client = store.client else {
             trace("discovery skipped: pas de client")
+            task.setTaskCompleted(success: false)
+            return
+        }
+        // Rien à tenter tant que la box refuse l'application : la marche échouerait au premier
+        // dossier, et il n'y a personne devant l'écran pour y répondre. L'état est dit à la
+        // prochaine ouverture, par la bannière.
+        guard !store.authorizationLost else {
+            trace("discovery skipped: autorisation perdue")
             task.setTaskCompleted(success: false)
             return
         }

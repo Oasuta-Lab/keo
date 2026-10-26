@@ -112,7 +112,19 @@ actor FreeboxClient {
     /// launch opens fifty sessions against the box.
     private var opening: Task<String, Error>?
 
-    init(endpoint: FreeboxEndpoint, appToken: String) {
+    /// Prévenue une fois quand la box refuse l'application elle-même. Posée par `Store`, qui
+    /// est le seul à savoir quoi en faire ; `Freebox` ne connaît pas SwiftUI et n'a pas à
+    /// savoir qu'il existe un écran.
+    private let onAuthorizationLost: (@Sendable () -> Void)?
+
+    /// Vrai une fois la box ayant refusé l'application. Tant qu'il l'est, plus aucune session
+    /// n'est rouverte : cinquante vignettes qui redemandent chacune un jeton mort fabriquent
+    /// le `ratelimited` de la Freebox, qui gênerait ensuite le réappairage lui-même.
+    private var refused = false
+
+    init(endpoint: FreeboxEndpoint, appToken: String,
+         onAuthorizationLost: (@Sendable () -> Void)? = nil) {
+        self.onAuthorizationLost = onAuthorizationLost
         self.endpoint = endpoint
         self.appToken = appToken
 
@@ -275,7 +287,14 @@ actor FreeboxClient {
 
     func currentSession() async throws -> String {
         if let sessionToken { return sessionToken }
+        if refused { throw FreeboxError.denied }
         return try await openSession()
+    }
+
+    /// Remise en marche après un réappairage, ou après qu'un jeton plus frais a été trouvé.
+    func allowRetry() {
+        refused = false
+        sessionToken = nil
     }
 
     /// Runs a read with the session header, reopening the session once if it went stale.
@@ -288,7 +307,15 @@ actor FreeboxClient {
             // en a plus besoin — l'erreur qui remonte porte désormais le mot de la box, que
             // l'appelant journalise déjà (« list FAILED … »).
             sessionToken = nil
-            return try await work(try await openSession())
+            do {
+                return try await work(try await openSession())
+            } catch let again as FreeboxError where again.isAuthorizationLost {
+                // Un refus qui survit à la réouverture ne vient pas de la session. On arrête
+                // de redemander, et on le dit une fois.
+                refused = true
+                onAuthorizationLost?()
+                throw again
+            }
         }
     }
 

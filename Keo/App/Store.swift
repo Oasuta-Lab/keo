@@ -9,6 +9,14 @@ final class Store: ObservableObject {
     @Published private(set) var client: FreeboxClient?
     @Published private(set) var phase: Phase = .idle
 
+    /// La box refuse l'application, et relire le trousseau n'a rien donné de plus frais.
+    ///
+    /// Séparé de `phase` et surtout de `client`, qu'il ne faut **pas** mettre à nil : la
+    /// racine bascule sur l'écran d'appairage dès que le client disparaît, ce qui démonterait
+    /// la navigation et couperait l'accès à l'index local — alors que tout ce qui est déjà
+    /// indexé reste parfaitement consultable sans la box.
+    @Published private(set) var authorizationLost = false
+
     @AppStorage("host") var host = "mafreebox.freebox.fr"
     @AppStorage("apiBase") private var apiBase = ""
     @AppStorage("boxName") var boxName = "Freebox"
@@ -25,8 +33,43 @@ final class Store: ObservableObject {
         Self.shared = self
         guard let token = Keychain.get(account: host) else { return }
         guard let base = URL(string: apiBase) else { return }
-        client = FreeboxClient(endpoint: FreeboxEndpoint(base: base, boxName: boxName),
-                               appToken: token)
+        client = build(FreeboxEndpoint(base: base, boxName: boxName), token: token)
+    }
+
+    /// Le jeton que porte le client en service. Sert à savoir si le trousseau en a un autre.
+    private var tokenInUse: String?
+
+    /// Construit un client branché sur la reprise, et retient son jeton.
+    private func build(_ endpoint: FreeboxEndpoint, token: String) -> FreeboxClient {
+        tokenInUse = token
+        return FreeboxClient(endpoint: endpoint, appToken: token) { [weak self] in
+            Task { @MainActor in await self?.authorizationRefused() }
+        }
+    }
+
+    /// Appelé quand la box a refusé l'application et que rouvrir une session n'y a rien fait.
+    ///
+    /// Avant de dire quoi que ce soit : **relire le trousseau**. C'est là que se trouve la
+    /// réparation dans le cas le plus fréquent — un autre appareil du foyer vient de
+    /// s'associer, la Freebox ne reconnaît qu'un jeton par application, et le jeton tout neuf
+    /// arrive par iCloud quelques minutes plus tard. Sans cette relecture, l'app envoie
+    /// appuyer sur ✓ pour un problème qui se serait réglé seul — et ce ✓ révoquerait à son
+    /// tour l'autre appareil, en boucle.
+    private func authorizationRefused() async {
+        if let fresh = Keychain.get(account: host), fresh != tokenInUse,
+           let base = URL(string: apiBase) {
+            client = build(FreeboxEndpoint(base: base, boxName: boxName), token: fresh)
+            authorizationLost = false
+            return
+        }
+        authorizationLost = true
+    }
+
+    /// À appeler au retour au premier plan tant que l'autorisation est perdue : le jeton peut
+    /// être arrivé entre-temps, et le trousseau iCloud met parfois des minutes.
+    func retryWithFreshToken() async {
+        guard authorizationLost else { return }
+        await authorizationRefused()
     }
 
     /// Reconnects without asking the box again after a reinstall — or on a device that has
@@ -49,16 +92,24 @@ final class Store: ObservableObject {
         phase = .discovering
         do {
             let endpoint = try await FreeboxEndpoint.discover(host: host, using: login)
-            let candidate = FreeboxClient(endpoint: endpoint, appToken: token)
+            let candidate = build(endpoint, token: token)
             _ = try await candidate.list(FreeboxClient.rootPath)   // the token may have been revoked
 
             apiBase = endpoint.base.absoluteString
             boxName = endpoint.boxName
             client = candidate
+            authorizationLost = false
+            phase = .idle
+        } catch let error as FreeboxError where error.isAuthorizationLost {
+            // Seul un refus *nommé* par la box justifie de jeter la clé. L'ancienne version
+            // la supprimait sur n'importe quelle erreur, y compris un simple échec réseau :
+            // un premier lancement dans le métro effaçait donc du trousseau iCloud le jeton
+            // de tout le foyer.
+            Keychain.delete(account: host)
             phase = .idle
         } catch {
-            // Stale key, or the box is away: fall back to pairing rather than nagging.
-            Keychain.delete(account: host)
+            // La box est hors de portée — l'état normal de cette app quand on n'est pas chez
+            // soi. On garde la clé et on se tait.
             phase = .idle
         }
     }
@@ -79,9 +130,12 @@ final class Store: ObservableObject {
             apiBase = endpoint.base.absoluteString
             boxName = endpoint.boxName
 
-            let client = FreeboxClient(endpoint: endpoint, appToken: request.app_token)
+            let client = build(endpoint, token: request.app_token)
             _ = try await client.list(FreeboxClient.rootPath)   // surfaces a missing permission now
             self.client = client
+            // Un appairage réussi est la seule chose qui efface vraiment l'état : le jeton
+            // vient d'être accordé par un geste physique sur la box.
+            authorizationLost = false
             phase = .idle
         } catch {
             phase = .failed(error.localizedDescription)
