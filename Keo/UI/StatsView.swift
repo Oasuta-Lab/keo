@@ -19,15 +19,28 @@ struct StatsView: View {
     /// Read once when the screen opens: a dozen scans of the index are cheap, but not cheap
     /// enough to redo on every redraw.
     @State private var stats: LibraryStats?
-    @State private var destination: BrowserSource?
+    /// Its own path only when it owns its stack; pushed, it borrows the one the stack
+    /// already publishes. Declaring a destination here instead would make a second one for
+    /// `BrowserSource` in the home stack — the trap that rebuilt the screen under the user.
+    @State private var sheetPath = NavigationPath()
+    @Environment(\.stackPath) private var stackPath
     @State private var showingIndexing = false
 
     var body: some View {
         if standalone {
-            NavigationStack { content }
+            NavigationStack(path: $sheetPath) {
+                content.modifier(PushTargets(client: client, declare: true))
+            }
+            // A sheet inherits the presenting view's environment, so without this the pushes
+            // below would land in the tab's stack, behind the sheet.
+            .environment(\.stackPath, $sheetPath)
         } else {
             content
         }
+    }
+
+    private func push(_ source: BrowserSource) {
+        stackPath?.wrappedValue.append(source)
     }
 
     private var content: some View {
@@ -46,9 +59,6 @@ struct StatsView: View {
             }
             .navigationTitle("Statistiques")
             .navigationBarTitleDisplayMode(standalone ? .inline : .large)
-            .navigationDestination(item: $destination) { source in
-                BrowserView(client: client, source: source)
-            }
             .toolbar {
                 if standalone {
                     ToolbarItem(placement: .confirmationAction) {
@@ -197,7 +207,7 @@ struct StatsView: View {
             let heaviest = stats.subtrees.map(\.bytes).max() ?? 0
             Section {
                 ForEach(stats.subtrees) { subtree in
-                    row { destination = .folder(path: subtree.path, title: subtree.name) } label: {
+                    row { push(.folder(path: subtree.path, title: subtree.name)) } label: {
                         bar(subtree, heaviest: heaviest)
                     }
                 }
@@ -279,7 +289,7 @@ struct StatsView: View {
         if !stats.biggest.isEmpty {
             Section("Plus gros fichiers") {
                 ForEach(stats.biggest) { item in
-                    row { destination = BrowserSource.parent(of: item) } label: {
+                    row { if let parent = BrowserSource.parent(of: item) { push(parent) } } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(item.name).font(.subheadline).lineLimit(1)
                                 .truncationMode(.middle)
@@ -323,7 +333,7 @@ struct StatsView: View {
     private func onThisDay(_ stats: LibraryStats) -> some View {
         if !stats.onThisDay.isEmpty {
             Section {
-                row { destination = .results(title: "Ce jour-là", items: stats.onThisDay) } label: {
+                row { push(.results(title: "Ce jour-là", items: stats.onThisDay)) } label: {
                     LabeledContent("Les années précédentes") {
                         Text(stats.onThisDay.count, format: .number).monospacedDigit()
                     }
@@ -369,21 +379,21 @@ struct StatsView: View {
     private func open(search query: SearchQuery, title: String) {
         Task {
             let found = (try? await IndexStore.shared.search(query, limit: 2_000)) ?? []
-            destination = .results(title: title, items: found)
+            push(.results(title: title, items: found))
         }
     }
 
     private func openDateless() {
         Task {
             let found = (try? await IndexStore.shared.datelessFiles()) ?? []
-            destination = .results(title: "Sans date", items: found)
+            push(.results(title: "Sans date", items: found))
         }
     }
 
     private func open(group: DuplicateGroup) {
         Task {
             let found = (try? await IndexStore.shared.copies(of: group)) ?? []
-            destination = .results(title: group.name, items: found)
+            push(.results(title: group.name, items: found))
         }
     }
 }

@@ -87,6 +87,14 @@ func checkIndexStore() async throws {
     assert(survived[deep.id] == shot,
            "un dossier ignoré car intact garde tout son sous-arbre, sinon le balayage l'effacerait")
 
+    // Les dossiers remontaient de génération, pas leurs fichiers : la borne haute du
+    // sous-arbre n'était pas liée, `path < NULL` ne rendait rien, et seul le dossier touché
+    // lui-même était marqué. Un balayage de fichiers à cette génération vidait le reste.
+    try await store.commit([], in: "/NAS/Photos/2024/Juin", generation: generation, sweep: true)
+    let stillThere = try await store.known([deep], in: "/NAS/Photos/2024/Juin")
+    assert(stillThere[deep.id] == shot,
+           "touchSubtree marque aussi les fichiers des sous-dossiers, pas seulement les dossiers")
+
     // --- la date glanée par les vignettes survit au balayage ---------------------------
     let opportunistic = photo("e.jpg", in: album)
     try await store.note(shot, for: opportunistic, in: album)

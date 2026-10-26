@@ -438,21 +438,17 @@ private struct BarSurface: ViewModifier {
 
 private struct Glyph: View {
     let name: String
-    let large: Bool
 
-    /// 44 pt is the floor Apple's guidelines set for a tap target; the small variant sat at
-    /// about 37. The bottom actions get more than that — they are the ones you reach for.
-    init(_ name: String, large: Bool = false) {
-        self.name = name
-        self.large = large
-    }
+    init(_ name: String) { self.name = name }
 
+    /// 20 pt of symbol in 12 pt of padding clears the 44 pt floor Apple's guidelines set for
+    /// a tap target — an earlier cut sat at about 37.
     var body: some View {
         Image(systemName: name)
-            .font(large ? .title2.weight(.medium) : .body.weight(.semibold))
+            .font(.body.weight(.semibold))
             .foregroundStyle(.white)
-            .frame(width: large ? 30 : 20, height: large ? 30 : 20)
-            .padding(large ? 15 : 12)
+            .frame(width: 20, height: 20)
+            .padding(12)
             .background(.ultraThinMaterial, in: Circle())
             .contentShape(Circle())
     }
@@ -873,9 +869,11 @@ private struct LivePlayback: View {
         .task(id: player == nil) {
             guard let player else { return }
             // One pass, then back to the still, exactly like letting go in Photos.
+            // Pinned to this player's own item: unfiltered, any other AV playback ending
+            // on screen cut the Live Photo short.
             for await _ in NotificationCenter.default.notifications(
-                named: AVPlayerItem.didPlayToEndTimeNotification) {
-                _ = player
+                named: AVPlayerItem.didPlayToEndTimeNotification,
+                object: player.currentItem) {
                 onEnd()
                 break
             }

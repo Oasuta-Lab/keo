@@ -151,6 +151,9 @@ final class Store: ObservableObject {
         apiBase = ""
         client = nil
         phase = .idle
+        // Otherwise the banner outlives the pairing it was about, and sits on top of
+        // ConnectView offering to retry a connection that no longer has a token.
+        authorizationLost = false
     }
 
     /// The box shows its prompt for about a minute and a half before giving up.

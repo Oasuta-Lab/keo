@@ -67,7 +67,7 @@ actor IndexStore {
         // migration already taught this file what a wrong default costs.
         try? exec("ALTER TABLE file ADD COLUMN cid TEXT")
         // Rows written before the column existed were all read ones.
-        try? exec("UPDATE file SET read = 1 WHERE read = 0 AND gen >= 0 AND capture IS NOT NULL")
+        try? exec("UPDATE file SET read = 1 WHERE read = 0 AND capture IS NOT NULL")
 
         // La première version des arrivées notait tout le contenu d'un dossier dès son
         // premier passage, faute de demander si Keo le connaissait déjà. Les lignes qu'elle a
@@ -664,7 +664,7 @@ actor IndexStore {
             let sql = "UPDATE file SET gen = ?2 WHERE folder_id IN "
                     + "(SELECT id FROM folder WHERE " + scope + ")"
             try prepare(sql, into: &files)
-            bind(files, 1, Statistics.scopePrefix(folder))
+            bindSubtree(files, folder, low: 1, high: 4)
             sqlite3_bind_int64(files, 2, generation)
             bind(files, 3, folder)
             guard sqlite3_step(files) == SQLITE_DONE else { throw Failure.write(message) }

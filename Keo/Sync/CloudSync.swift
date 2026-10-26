@@ -1,5 +1,5 @@
 import CloudKit
-import SwiftUI
+import Combine
 
 /// Mirrors the personalisation tables — favourites, shortcuts, collections — to the user's
 /// private CloudKit database, through `CKSyncEngine`.
@@ -73,7 +73,7 @@ final class CloudSync: ObservableObject {
             if let user = try? await container.userRecordID() {
                 await adopt(accountID: user.recordName)
             }
-            try? await store.seedSyncJournalIfNeeded()
+            _ = try? await store.seedSyncJournalIfNeeded()
         }
         await enqueueJournal()
         await settleStatus()
@@ -246,7 +246,7 @@ extension CloudSync: CKSyncEngineDelegate {
         case .signIn(let user):
             accountAvailable = true
             await adopt(accountID: user.recordName)
-            try? await store.seedSyncJournalIfNeeded()
+            _ = try? await store.seedSyncJournalIfNeeded()
             await enqueueJournal()
             await settleStatus()
 

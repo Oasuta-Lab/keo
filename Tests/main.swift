@@ -356,8 +356,8 @@ assert(FolderStamp.stamp(for: nil) == nil,
 assert(!WalkOutcome.isComplete(cancelled: false, visited: 40, limit: 5_000,
                                listingFailures: 37, queueEmpty: true),
        "un parcours dont des dossiers étaient injoignables n'est pas complet")
-assert(!WalkOutcome.maySweep(cancelled: false, visited: 40, limit: 5_000,
-                             listingFailures: 1, queueEmpty: true),
+assert(!WalkOutcome.isComplete(cancelled: false, visited: 40, limit: 5_000,
+                               listingFailures: 1, queueEmpty: true),
        "et un seul échec suffit à interdire le balayage : il effacerait des dossiers bien vivants")
 
 assert(WalkOutcome.isComplete(cancelled: false, visited: 40, limit: 5_000,

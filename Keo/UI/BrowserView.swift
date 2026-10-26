@@ -21,7 +21,6 @@ struct BrowserView: View {
     /// Pushing and popping without owning the destination — see `StackPath`.
     @Environment(\.stackPath) private var stackPath
 
-    @EnvironmentObject private var store: Store
     @EnvironmentObject private var downloader: Downloader
     @EnvironmentObject private var sync: CloudSync
     @EnvironmentObject private var undoer: Undoer
@@ -80,7 +79,6 @@ struct BrowserView: View {
     @State private var choosingCollection = false
     /// Paths of folders already pinned, so a tile's menu can say the right thing.
     @State private var pinned: Set<String> = []
-    /// Set by « Aller au dossier » — a search result says nothing about where it lives.
     /// Paths carrying a note, so a cell can be marked without one query per cell.
     @State private var noted: Set<String> = []
     /// Marked on the tiles, like the notes. One query each per load, not per cell.

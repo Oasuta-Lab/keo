@@ -291,12 +291,6 @@ actor FreeboxClient {
         return try await openSession()
     }
 
-    /// Remise en marche après un réappairage, ou après qu'un jeton plus frais a été trouvé.
-    func allowRetry() {
-        refused = false
-        sessionToken = nil
-    }
-
     /// Runs a read with the session header, reopening the session once if it went stale.
     private func authorized<T: Sendable>(_ work: (String) async throws -> T) async throws -> T {
         do {

@@ -19,6 +19,7 @@ struct HomeView: View {
     @EnvironmentObject private var undoer: Undoer
     /// Content that moves on its own has to be something the reader can opt out of.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.stackPath) private var stackPath
 
     @State private var summary: HomeSummary?
     @State private var pins: [Item] = []
@@ -31,7 +32,6 @@ struct HomeView: View {
     /// Combien d'entre elles n'avaient pas encore été montrées. Lu avant que l'étagère ne
     /// paraisse, donc le chiffre survit à la visite qui l'efface.
     @State private var unseenArrivals = 0
-    @State private var destination: BrowserSource?
     @State private var memoryPage = 0
     /// Advances once per auto-turn, and indexes into each year's photos — so a year that
     /// comes back round does not come back with the same picture.
@@ -120,9 +120,6 @@ struct HomeView: View {
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .toolbarVisibility(.hidden, for: .navigationBar)
-        .navigationDestination(item: $destination) { source in
-            BrowserView(client: client, source: source)
-        }
         .modifier(PushTargets(client: client, declare: true))
         .sheet(isPresented: $showingIndexing) { IndexingView(client: client) }
         // Centred, like the rest of the app's questions — see `CollectionsView`.
@@ -148,6 +145,13 @@ struct HomeView: View {
         }
     }
 
+    /// Through the path the stack publishes, never through a destination of its own: this
+    /// screen and `StatsView` push into the same stack, and a second declaration for
+    /// `BrowserSource` is what rebuilds the one already on screen.
+    private func push(_ source: BrowserSource) {
+        stackPath?.wrappedValue.append(source)
+    }
+
     /// The date rides above the name as an eyebrow, in the same treatment « CE JOUR-LÀ » wears
     /// on the memory card below — so the screen opens on one typographic idea instead of two.
     ///
@@ -155,6 +159,7 @@ struct HomeView: View {
     /// it here is a habit from the web. Dropping it also leaves a single left edge for the eye
     /// to follow, which the badge-name-date arrangement never had — three objects, three
     /// alignments, in the least stable shape there is.
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(Self.today)
@@ -163,18 +168,19 @@ struct HomeView: View {
                 .textCase(.uppercase)
                 .foregroundStyle(.secondary)
             // The mark stands in for the K — the mark itself, bays and all, not a simplified
-            // cut of it, and in the brand tint rather than the ink of the word: it is the
-            // logo, so it keeps the logo's colour. The bays stay knocked through, which on
-            // this screen is the same thing as filling them with the background.
+            // cut of it. The whole word carries the brand tint: the mark is the logo, and a
+            // logo whose letters change colour halfway reads as two objects beside each other
+            // rather than one name. The bays stay knocked through, which on this screen is the
+            // same thing as filling them with the background.
             //
             // Sized to Montserrat's cap height (about 0.7 em) and sat on the baseline, so the
             // three letters share one line.
             HStack(alignment: .firstTextBaseline, spacing: 2) {
                 CageMark.Filled(height: 24)
-                    .foregroundStyle(.tint)
                     .alignmentGuide(.firstTextBaseline) { $0[.bottom] }
                 Text("eo").font(.wordmark(size: 34))
             }
+            .foregroundStyle(.tint)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Keo")
             .onTapGesture(perform: knock)
@@ -271,7 +277,7 @@ struct HomeView: View {
 
     private func openShownYear() {
         guard let shown else { return }
-        destination = .results(title: "Ce jour-là en \(shown.year)", items: shown.items)
+        push(.results(title: "Ce jour-là en \(shown.year)", items: shown.items))
     }
 
     private static var today: String {
@@ -458,7 +464,7 @@ struct HomeView: View {
                     LazyHStack(spacing: 3) {
                         ForEach(recent) { item in
                             Button {
-                                destination = .results(title: "Dernières photos", items: recent)
+                                push(.results(title: "Dernières photos", items: recent))
                             } label: {
                                 Thumb(item: item, client: client, selected: nil, lookahead: [])
                                     .frame(width: 96, height: 96)
@@ -474,9 +480,6 @@ struct HomeView: View {
             }
         }
     }
-
-    // MARK: Chronologie
-
 
     // MARK: Derniers ajouts
 
@@ -510,7 +513,7 @@ struct HomeView: View {
                     let shown = Array(arrivals.prefix(Self.shownArrivals))
                     ForEach(Array(shown.enumerated()), id: \.element.id) { index, item in
                         Button {
-                            destination = BrowserSource.parent(of: item)
+                            if let parent = BrowserSource.parent(of: item) { push(parent) }
                         } label: {
                             LibraryRow(icon: Self.glyph(for: item.kind),
                                        title: item.name,
@@ -554,7 +557,7 @@ struct HomeView: View {
         let all = (try? await IndexStore.shared.recentlyAdded(under: FreeboxClient.rootPath,
                                                               limit: 200)) ?? arrivals
         guard !all.isEmpty else { return }
-        destination = .results(title: "Derniers ajouts", items: all)
+        push(.results(title: "Derniers ajouts", items: all))
     }
 
     private static func glyph(for kind: Item.Kind) -> String {

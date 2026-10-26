@@ -22,6 +22,10 @@ struct OnThisDayWidget: Widget {
 
 struct MemoryEntry: TimelineEntry, Sendable {
     let date: Date
+    /// The day the app rendered these for — not `date`, which walks forward through the
+    /// timeline and crosses midnight before the entries are replaced. Taking the link and the
+    /// « il y a N ans » from `date` made the last tiles of the night point at tomorrow.
+    let day: Date
     let shots: [Shot]
     /// « 25 octobre », already localised by the app.
     let label: String
@@ -54,7 +58,8 @@ struct MemoryProvider: TimelineProvider {
     }
 
     private func blank(_ size: CGSize, _ message: String?) -> MemoryEntry {
-        MemoryEntry(date: Date(), shots: [], label: "", total: 0, size: size, message: message)
+        MemoryEntry(date: Date(), day: Date(), shots: [], label: "", total: 0,
+                    size: size, message: message)
     }
 
     private func entries(in context: Context) -> [MemoryEntry] {
@@ -89,6 +94,7 @@ struct MemoryProvider: TimelineProvider {
         return (0..<WidgetStore.steps).map { step in
             let offset = (step * 4) % shots.count
             return MemoryEntry(date: start.addingTimeInterval(TimeInterval(step) * WidgetStore.stride),
+                               day: manifest.stamped,
                                shots: Array(shots[offset...] + shots[..<offset]),
                                label: memory.label, total: memory.total,
                                size: size, message: nil)
@@ -108,7 +114,7 @@ struct OnThisDayView: View {
     var body: some View {
         content
             .containerBackground(.black, for: .widget)
-            .widgetURL(entry.shots.isEmpty ? nil : WidgetManifest.link(day: entry.date))
+            .widgetURL(entry.shots.isEmpty ? nil : WidgetManifest.link(day: entry.day))
     }
 
     @ViewBuilder
@@ -167,7 +173,7 @@ struct OnThisDayView: View {
     private func cell(_ shot: MemoryEntry.Shot, side: CGFloat) -> some View {
         Photo(file: shot.file, side: side)
             .overlay(alignment: .topLeading) {
-                Text(WidgetStore.ago(shot.year, now: entry.date))
+                Text(WidgetStore.ago(shot.year, now: entry.day))
                     .font(.caption2)
                     .fontWeight(.medium)
                     .foregroundStyle(.white)

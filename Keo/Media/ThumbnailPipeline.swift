@@ -190,7 +190,7 @@ private final class MemoryCache: @unchecked Sendable {
         NotificationCenter.default.addObserver(
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil, queue: nil
-        ) { [cache] _ in
+        ) { [self] _ in
             cache.removeAllObjects()
         }
     }

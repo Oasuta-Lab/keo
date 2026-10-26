@@ -41,8 +41,6 @@ final class Undoer: ObservableObject {
     private static let depth = 8
     private static let linger: Duration = .seconds(5)
 
-    var canUndo: Bool { !stack.isEmpty }
-
     func record(_ label: String, revert: @escaping @Sendable () async -> Void) {
         let step = Step(label: label, revert: revert)
         stack.append(step)

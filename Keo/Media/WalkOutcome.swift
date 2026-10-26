@@ -14,11 +14,4 @@ enum WalkOutcome {
         guard listingFailures == 0 else { return false } // a folder we never saw may still exist
         return queueEmpty                               // nothing left to visit
     }
-
-    /// Only a complete pass may delete what it did not encounter.
-    static func maySweep(cancelled: Bool, visited: Int, limit: Int,
-                         listingFailures: Int, queueEmpty: Bool) -> Bool {
-        isComplete(cancelled: cancelled, visited: visited, limit: limit,
-                   listingFailures: listingFailures, queueEmpty: queueEmpty)
-    }
 }

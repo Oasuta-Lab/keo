@@ -49,7 +49,11 @@ enum PeriodicDiscovery {
         }
     }
 
-    private static func register() {
+    /// Called from `KeoApp.init`, never from a view: `BGTaskScheduler` requires every handler
+    /// to be registered before launch ends, and it terminates the app when it wakes it for an
+    /// identifier nobody claimed. A `.task` runs after the first render, which a background
+    /// launch may never reach.
+    static func register() {
         guard !registered else { return }
         registered = true
         BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier,

@@ -13,6 +13,8 @@ struct KeoApp: App {
     @State private var link: DeepLink?
     @Environment(\.scenePhase) private var scenePhase
 
+    init() { PeriodicDiscovery.register() }
+
     var body: some Scene {
         WindowGroup {
             Group {
@@ -60,7 +62,8 @@ struct KeoApp: App {
             .task { await sync.start() }
             // Une demande en attente, toujours : `submit` remplace celle de même identifiant,
             // donc relancer l'app n'en empile pas deux. C'est ce qui permet à Keo d'apprendre
-            // qu'un fichier est arrivé sans qu'on ait eu à y penser.
+            // qu'un fichier est arrivé sans qu'on ait eu à y penser. Le *handler*, lui, est
+            // enregistré dans `init` — voir `PeriodicDiscovery.register`.
             .task { PeriodicDiscovery.schedule() }
             // Le bilan du dernier passage vit dans l'index, pas en mémoire : sans ça, l'écran
             // Indexation et la rangée de l'accueil repartent muets à chaque lancement.

@@ -30,7 +30,7 @@ func trace(_ message: @autoclosure () -> String) {
 #if DEBUG
 /// Wall clock to the millisecond, because the order of two events is often the whole answer.
 private enum TraceClock {
-    nonisolated(unsafe) private static let formatter: DateFormatter = {
+    private static let formatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "HH:mm:ss.SSS"
@@ -337,7 +337,7 @@ final class Indexer: ObservableObject {
         trace("pump token=\(token) queue=\(queue.count)")
 
         runner = Task { [weak self] in
-            while let job = await self?.nextJob(token) {
+            while let job = self?.nextJob(token) {
                 switch job {
                 case .walk(let root, let client, let scope):
                     await self?.walk(root: root, client: client, scope: scope)
@@ -346,7 +346,7 @@ final class Indexer: ObservableObject {
                 }
                 if Task.isCancelled { break }
             }
-            await self?.finishRun(token)
+            self?.finishRun(token)
         }
     }
 
@@ -873,7 +873,7 @@ final class Indexer: ObservableObject {
     private func beginBackgroundGrace() {
         guard background == .invalid else { return }
         background = UIApplication.shared.beginBackgroundTask(withName: "keo.indexing") {
-            Task { @MainActor [weak self] in self?.halt() }
+            [weak self] in Task { @MainActor in self?.halt() }
         }
     }
 

@@ -17,8 +17,9 @@ suppression, pas d'écriture. Ce n'est pas une intention, c'est une contrainte s
   à ce type.
 - La poignée de main de login, seul endroit qui fait un `POST`, vit dans `LoginTransport`,
   hors de portée du chemin de données.
-- `Tests/main.swift` relit les sources et échoue si un `PUT`/`DELETE`/`MOVE` ou une route
-  `fs/mv`, `fs/rm`, `fs/mkdir`… apparaît ailleurs que dans un commentaire.
+- `Tests/main.swift` relit les sources et échoue si un `PUT`/`DELETE`/`PATCH`/`MOVE`/
+  `MKCOL`/`COPY` ou une route `fs/mv`, `fs/rm`, `fs/rename`, `fs/mkdir`… apparaît ailleurs
+  que dans un commentaire. L'extension widget est relue aussi.
 
 ## Lancer
 
@@ -145,8 +146,11 @@ build 42 avec un `.appex` resté à 1. L'échec est à l'installation, pas à la
 Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copié dans
 `Keo/Assets.xcassets` :
 
-- **`AppIcon`** ← `keo-icon.png`, la version à fond plein. Une icône iOS ne peut pas avoir de
-  canal alpha, donc la variante détourée ne convient pas ici.
+- **`AppIcon`** ← généré par `Design/icon/build.py` depuis les SVG maîtres, en trois
+  apparences (claire, sombre, teintée). Une icône iOS ne peut pas avoir de canal alpha, donc
+  la variante détourée ne convient pas ici. Le même script sort `MarkGlyph.imageset` depuis
+  `keo-glyph.svg` : la marque redessinée pour la taille d'un onglet. Voir
+  `Design/icon/README.md`, qui est la référence pour tout ce qui touche à l'icône.
 - **`AccentColor`** ← `#e9a178`, la pêche de la marque, **une seule valeur pour les deux
   apparences**. Elle teinte toute l'app : boutons, dossiers, rail de la timeline.
 
@@ -233,14 +237,18 @@ image *template* qui reçoit sa couleur au lieu de la porter. (La mascotte a dep
 voir plus bas.) Les blancs restants sont tous posés **sur des photos**, où ils sont justes
 dans les deux modes.
 
-### La mascotte
+### La mascotte, et pourquoi elle n'est plus là
 
-La loutre en rendu 3D n'entre jamais dans l'app : de la fourrure photoréaliste à côté de SF
-Symbols et de verre liquide se lit comme un écran-titre de jeu free-to-play, et ça daterait en
-deux ans. Elle reste sur l'icône. La silhouette crème plate apparaît dans **trois endroits**,
-tous des moments « l'app n'a encore rien de toi à montrer » : l'association, la carte de
-bienvenue au premier lancement, et l'indexation jamais commencée. Jamais sur un écran qui
-contient des photos — là, les photos gagnent.
+La loutre en rendu 3D n'est jamais entrée dans l'app : de la fourrure photoréaliste à côté de
+SF Symbols et de verre liquide se lit comme un écran-titre de jeu free-to-play, et ça daterait
+en deux ans. Elle reste sur l'icône, et nulle part ailleurs.
+
+La silhouette crème plate, elle, a vécu dans trois écrans « l'app n'a encore rien de toi à
+montrer » : l'association, la carte de bienvenue, l'indexation jamais commencée. Elle est
+partie avec eux. Ce qui la remplace n'est pas un autre dessin mais **moins de dessin** : ces
+écrans disent ce qu'ils attendent, en texte, et la marque ne paraît plus que sur l'icône et
+sur l'onglet Accueil (`MarkGlyph`, la cage redessinée pour 30 pt). Une mascotte qui n'apparaît
+que là où l'app est vide est une mascotte qu'on associe au vide.
 
 ## Structure
 
@@ -318,14 +326,16 @@ incrémental non finalisé ImageIO refuse de parser les métadonnées HEIF et ne
 que soit le nombre d'octets fournis.
 
 - À l'ouverture d'un dossier, les dates déjà connues sont appliquées **avant le premier rendu**.
-- Les fichiers jamais vus sont analysés en tâche de fond, 3 en parallèle, 4 Ko chacun. Un
-  dossier de 10 000 photos coûte donc environ 40 Mo, **une seule fois**.
+- Les fichiers jamais vus sont lus en tâche de fond, `Indexer.parallel` à la fois — **4**,
+  mesuré, voir « Banc d'essai des lectures » — et 24 Ko chacun. Un dossier de 10 000 photos
+  coûte donc environ 240 Mo de lectures, **une seule fois**.
 - Le pipeline de vignettes enregistre la date au passage : il télécharge déjà 256 Ko par image,
   la lecture est gratuite.
-- `CaptureDateIndex` persiste tout dans Application Support, y compris les fichiers **sans**
+- `IndexStore` persiste tout dans Application Support, y compris les fichiers **sans**
   date — sinon chaque visite les réanalyserait indéfiniment.
 - Le réordonnancement n'a lieu **qu'à la fin du scan**, pas pendant : la grille ne se réorganise
-  jamais sous le doigt. Une pastille discrète affiche l'avancement.
+  jamais sous le doigt. L'avancement se lit sur le contour de la barre d'onglets
+  (`TabBarGlow`) et dans la rangée « Indexation » de l'accueil.
 
 ### 6,9 % sans date : mesurer avant de corriger
 
@@ -923,7 +933,14 @@ Mais la correction évidente en réintroduit un autre dans l'autre sens : à la 
 satisfait son propre préfixe, et la racine s'est mise à figurer **parmi ses propres
 sous-dossiers** — une tuile dans laquelle on entrait indéfiniment. D'où la garde de longueur,
 `length(path) > length(?1)`, qui rend « strictement à l'intérieur » vrai dans les deux cas.
-`Tests/stats.swift` épingle les trois comportements.
+`Tests/stats.swift` épingle les trois comportements, sur la vraie base, pas en raisonnement.
+
+Le même préfixe sert les cinq requêtes de sous-arbre — totaux de tuile, couvertures, listing,
+génération, poids. Les deux bornes se lient ensemble, par `bindSubtree`, et c'est tout l'objet
+de cette fonction : la borne haute oubliée donne `path < NULL`, qui ne rend rien et ne dit
+rien. `touchSubtree` l'avait oubliée sur sa branche fichiers — les dossiers d'un sous-arbre
+sauté remontaient de génération, leurs fichiers non. `Tests/store.swift` l'épingle
+maintenant.
 
 ## Favoris, collections, raccourcis
 
@@ -936,7 +953,7 @@ Deux niveaux, parce qu'ils répondent à deux gestes différents :
 - **Raccourcis** — des dossiers épinglés par appui long sur leur tuile, avec leur chemin
   parent et les totaux que l'index a déjà comptés.
 
-Quatre onglets : **Parcourir · Raccourcis · Favoris · Collections**.
+Cinq onglets : **Accueil · Parcourir · Favoris · Collections · Recherche**. Les raccourcis n'en ont plus : ils sont une étagère de l'accueil, là où on les cherche en arrivant.
 
 Un tiroir latéral aurait été la forme évidente, et c'est précisément ce que les guidelines
 d'Apple écartent : une navigation cachée derrière une icône est une navigation que personne ne
@@ -978,8 +995,9 @@ trie et se regroupe exactement comme un dossier.
 
 ## Synchronisation iCloud de la personnalisation
 
-`Keo/Sync/` miroite les quatre tables de personnalisation — `favourite`, `shortcut`,
-`collection`, `collection_item` — dans la base **privée** CloudKit, via `CKSyncEngine`.
+`Keo/Sync/` miroite les cinq natures de personnalisation — `favourite`, `shortcut`,
+`collection`, `collection_item` et `note` — dans la base **privée** CloudKit, via
+`CKSyncEngine`.
 Framework système, donc toujours zéro dépendance. L'index, lui, **n'est pas synchronisé** :
 il est volumineux et se reconstruit depuis le NAS ; la personnalisation, elle, est
 irremplaçable et pèse quelques centaines de Ko.
@@ -1033,8 +1051,9 @@ Trois idées portent tout le reste :
 ### Configuration — ce que le propriétaire doit faire à la main
 
 Le dépôt contient déjà `Keo/Keo.entitlements` (CloudKit, conteneur
-`iCloud.com.oasutalab.keo`, `aps-environment`, groupe d'app) et le mode background
-`remote-notification`. Le build **simulateur** passe tel quel. Pour un appareil, une fois,
+`iCloud.com.oasutalab.keo`, `aps-environment`, groupe d'app) et les modes background
+`remote-notification`, `processing` et `fetch` — les deux derniers pour
+`ContinuedIndexing` et `PeriodicDiscovery`. Le build **simulateur** passe tel quel. Pour un appareil, une fois,
 dans Xcode avec le compte de l'équipe ton équipe Apple :
 
 1. Cible Keo → *Signing & Capabilities* → vérifier que les capacités **iCloud → CloudKit**
@@ -1624,10 +1643,45 @@ reste faux, aucun balayage n'a lieu et la reprise au prochain lancement fonction
   kill) que `resumeWanted` couvre déjà.
 - **L'entitlement multicast** : inutile. Keo fait de l'HTTP unicast vers un nom d'hôte qui
   résout en IP publique — le trafic n'est même pas classé « réseau local » par iOS.
-- **Une tâche nocturne `BGProcessingTask`** : possible plus tard, mais c'est un confort et non
-  une promesse, iOS décidant seul s'il l'exécute. Son risque principal est nommé d'avance : un
-  réveil à 3 h du matin ne doit **jamais** passer par `Store.reconnectIfPossible`, dont le
-  chemin d'échec supprime le jeton du trousseau et dé-apparierait l'app en silence.
+- **Une tâche nocturne `BGProcessingTask`** : écartée au profit d'un `BGAppRefreshTask`, la
+  tâche courte et fréquente qu'iOS accorde volontiers — voir « La découverte périodique »
+  juste en dessous. Le risque nommé d'avance est tenu : un réveil à 3 h du matin ne passe
+  **jamais** par `Store.reconnectIfPossible`, dont le chemin d'échec supprime le jeton du
+  trousseau et dé-apparierait l'app en silence. `PeriodicDiscovery` abandonne sans rien tenter
+  si `Store.shared?.client` est nil.
+
+### La découverte périodique
+
+Sans elle, Keo n'apprenait l'existence d'un fichier qu'en ouvrant le dossier qui le contient,
+ou en lançant une indexation à la main. Tant qu'on n'avait fait ni l'un ni l'autre, rien ne
+signalait qu'il y avait du neuf — il fallait y penser.
+
+`PeriodicDiscovery` (`Keo/Media/PeriodicDiscovery.swift`) demande un `BGAppRefreshTask` au
+plus tôt dans l'heure, et **liste seulement**. Elle ne lit aucune date : lire coûte un
+aller-retour réseau par fichier, et ce geste-là reste celui du propriétaire. Ce qu'elle fait
+tenir, c'est la connaissance de ce qui existe — après quoi l'accueil dit « N fichiers à lire »
+tout seul et la rangée « Indexation » passe à l'ambre.
+
+Un passage coûte peu sur une bibliothèque qui n'a pas bougé : un dossier dont la date de
+modification et le nombre d'enfants sont inchangés est sauté sans être listé, les sous-arbres
+techniques ne sont jamais parcourus, rien n'est téléchargé. Sur une bibliothèque qui a bougé,
+seules les branches qui ont bougé sont listées.
+
+Quatre garde-fous, dans cet ordre : la demande suivante est soumise **avant** de travailler
+(sinon une expiration emporte la chaîne) ; pas de client ou autorisation perdue → abandon
+immédiat ; un passage déjà en cours gagne ; et une expiration passe par `pauseKeepingResume`,
+donc jamais par un chemin de complétion — aucun balayage ne peut venir d'un réveil.
+
+Le *handler* est enregistré dans `KeoApp.init`, pas dans un `.task` : `BGTaskScheduler` exige
+l'enregistrement avant la fin du lancement et **termine l'app** s'il la réveille pour un
+identifiant que personne n'a réclamé, or un `.task` ne tourne qu'après le premier rendu.
+
+**Ce qui reste à mesurer sur l'appareil.** `Store.shared` est une référence faible posée à la
+construction du `Store`, et `@StateObject` ne construit rien tant que le `body` n'a pas été
+évalué. Sur un réveil à froid, où iOS peut lancer le processus sans jamais créer la scène, la
+découverte abandonne proprement (`success: false`) au lieu de tourner. Autrement dit : acquis
+sur une app encore en mémoire, non vérifié sur un lancement de fond pur. À brancher à la
+console avant de l'écrire autrement — règle « mesurer, pas supposer ».
 
 ## Banc d'essai des lectures
 
@@ -1694,16 +1748,24 @@ par au moins deux valeurs plus hautes. Retenu **4** plutôt que 8, qui a le mêm
 l'écart est dans le bruit et le plus petit nombre laisse davantage de box aux vignettes,
 seul coût que le banc ne mesure pas.
 
-### Le banc reste
+### Ce qu'il faut garder de la méthode
 
-La mesure est faite et le chiffre est dans le code. Le banc sert quand même, parce que le bon
-nombre est une propriété de la box et du réseau : il redeviendra faux le jour où la Freebox
-change, où le disque du NAS change, ou où la taille du préfixe lu passe de 24 Ko à autre chose —
-le coût par lecture décide de la concurrence optimale. Ce jour-là, ce qui manquerait n'est pas
-le chiffre, c'est la méthode : il a fallu **trois résultats faux** avant d'en obtenir un honnête,
-et ces trois leçons (une tranche de fichiers par niveau, fenêtre contiguë à décalage tiré au
-sort, ordre des niveaux tiré au sort) sont dans le code du banc, pas dans le tableau. 118 lignes
-qui ne compilent qu'en debug, contre deux heures et trois mesures fausses à refaire : il reste.
+Le banc est parti ; le chiffre et la façon de le réobtenir restent ici. Le bon nombre est une
+propriété de la box et du réseau : il redeviendra faux le jour où la Freebox change, où le
+disque du NAS change, ou où la taille du préfixe lu passe de 24 Ko à autre chose — le coût par
+lecture décide de la concurrence optimale. Ce jour-là, ce qui manquerait n'est pas le chiffre,
+c'est la méthode : il a fallu **trois résultats faux** avant d'en obtenir un honnête, et ces
+trois leçons sont les seules choses à ne pas reperdre.
+
+1. **Une tranche de fichiers distincte par niveau de parallélisme** — rejouer les mêmes
+   fichiers mesure le cache, pas la box.
+2. **Fenêtre contiguë à décalage tiré au sort** — une tranche prise toujours au même endroit
+   mesure un endroit, pas une bibliothèque.
+3. **Ordre des niveaux tiré au sort** — sans ça, la dérive du réseau pendant la mesure se lit
+   comme un effet du parallélisme.
+
+Une centaine de lignes à réécrire ce jour-là, contre quatre cents à porter en attendant un
+jour qui n'est peut-être jamais venu.
 
 ## Enregistrer dans Photos : un piège de Swift 6
 
@@ -1963,7 +2025,8 @@ est l'affichage progressif — petit aperçu tout de suite, remplacé par la bon
 
 ## Statistiques
 
-`StatsView`, dans le menu « … » de la racine. Tout est lu dans l'index local, jamais sur la
+`StatsView`, ouvert depuis la carte Bibliothèque de l'accueil — poussé dans la pile — et par
+`keo://stats`, en feuille. Tout est lu dans l'index local, jamais sur la
 box : l'écran s'ouvre instantanément et fonctionne NAS éteint. Une seule requête d'actrice au
 `.task`, le résultat est gardé tant que la feuille est ouverte — douze balayages de la table
 `file` ne se refont pas à chaque rendu.
@@ -2007,19 +2070,6 @@ pas aller vérifier est un chiffre qu'il ne faut pas croire.
 Cette règle est aussi ce qui a décidé le contenu du widget « Index Keo » : un widget ne se
 tape pas vers une grille, donc un seul chiffre de cet écran pouvait y monter. Voir
 « Widget », section « Index Keo ».
-
-### La racine n'est pas un dossier comme les autres
-
-L'idiome de portée utilisé partout dans `IndexStore` était
-`substr(path, 1, length(?1) + 1) = ?1 || '/'`. À la racine, `?1` vaut `/` et l'expression
-cherche les chemins qui commencent par `//` : **aucun**. Vérifié sur la vraie base dans
-`Tests/stats.swift`, pas déduit.
-
-Ce n'était pas qu'un problème à venir pour les statistiques : `hasChildFolders("/")` répondait
-déjà « pas d'enfants » et `listing("/")` ne rendait aucun sous-dossier depuis le cache. Le
-préfixe est donc maintenant calculé en Swift (`Statistics.scopePrefix`, qui laisse `/`
-tranquille et ajoute la barre ailleurs) et lié comme paramètre, pour les cinq requêtes de
-sous-arbre à la fois — totaux de tuile, couvertures, listing, génération, poids.
 
 ### Ce qui n'est délibérément pas calculé
 

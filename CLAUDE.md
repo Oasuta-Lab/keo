@@ -53,6 +53,11 @@ xcodebuild -project Keo.xcodeproj -scheme Keo -configuration Debug \
   -destination 'generic/platform=iOS' build 2>&1 | grep -E "error:|\*\* BUILD"
 ```
 
+Trois fichiers existent en double, à l'octet près, parce que les deux cibles ne partagent
+aucun fichier : `WidgetManifest.swift`, `Theme.swift` et `Plural.swift`, dans `Keo/` et dans
+`KeoWidget/`. Éditer l'un sans l'autre fait échouer la vérification, et c'est voulu — c'est
+le seul garde-fou. Les copier, ne pas les faire diverger.
+
 Un fichier de `Tests/` ne doit pas porter le nom d'un fichier de `Keo/` à la casse près :
 le système de fichiers est insensible à la casse, les deux produisent le même fichier objet,
 et l'édition de liens échoue sur des symboles introuvables sans jamais nommer la cause.
@@ -142,9 +147,15 @@ base plutôt que le demander.
   secondes et la position de lecture est perdue. Les destinations se déclarent **une fois, à
   la racine de la pile** (`PushTargets`), les vues poussées en héritent. **La variante
   `navigationDestination(item:)` compte aussi** : le piège a été refermé pour `for:` et laissé
-  ouvert pour `item:`, et il est revenu intact — le fil d'Ariane bouclait. Une vue récursive ne
-  déclare aucune destination ; pour pousser ou dépiler elle lit `\.stackPath`, le chemin que la
-  pile publie dans l'environnement.
+  ouvert pour `item:`, et il est revenu intact — le fil d'Ariane bouclait. **Il est revenu une
+  troisième fois** : `HomeView` déclarait un `item:` *en plus* du `PushTargets` de la même
+  racine, et `StatsView`, qui est poussée dans cette pile, en déclarait un troisième. La règle
+  est donc sans exception : **aucune vue ne déclare de destination sauf la racine de sa
+  propre pile**. Pour pousser ou dépiler, une vue lit `\.stackPath`, le chemin que la pile
+  publie dans l'environnement. Une vue qui peut être *soit* poussée *soit* présentée en
+  feuille (`StatsView`) ouvre sa propre pile avec son propre chemin et republie
+  `\.stackPath` dessus — sinon elle hérite du chemin de la pile qui l'a présentée et pousse
+  derrière la feuille.
 - **La date de modification n'est pas une date de prise de vue.** Sur un NAS c'est la date de
   copie. Ne jamais la laisser alimenter le tri, les sections ou la timeline — elle y fait
   remonter en tête des photos que personne n'a prises ce jour-là. Elle se dit sous la photo,
