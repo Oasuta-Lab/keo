@@ -101,6 +101,10 @@ enum PeriodicDiscovery {
             while indexer.state.isRunning {
                 try? await Task.sleep(for: .seconds(2))
             }
+            // Personne n'a rien demandé : un réveil qui ne trouve rien ne doit pas accueillir
+            // le propriétaire, deux heures plus tard, par une carte qui dit « rien de neuf ».
+            // Un réveil qui trouve quelque chose, si — c'est tout l'intérêt du passage.
+            if indexer.lastSummary?.changedNothing == true { indexer.lastSummary = nil }
             trace("discovery end")
             task.setTaskCompleted(success: true)
         }

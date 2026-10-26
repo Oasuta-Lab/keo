@@ -33,6 +33,17 @@ struct KeoApp: App {
             .safeAreaInset(edge: .top, spacing: 0) {
                 if store.authorizationLost { AuthorizationBanner() }
             }
+            // Flottants plutôt qu'insérés : une marche dure des minutes et traverse tous les
+            // écrans, et un bandeau qui pousse le contenu de trois points le fait sauter deux
+            // fois par passage. L'un et l'autre se posent au-dessus, et ne déplacent rien.
+            .overlay(alignment: .top) {
+                Group {
+                    if let report = indexer.lastSummary {
+                        WalkReportCard(summary: report) { indexer.lastSummary = nil }
+                    }
+                }
+                .animation(.snappy, value: indexer.lastSummary)
+            }
             .environmentObject(store)
             .environmentObject(downloader)
             .environmentObject(indexer)
@@ -100,6 +111,64 @@ private struct AuthorizationBanner: View {
         .padding(.vertical, 10)
         .background(.bar)
         .sheet(isPresented: $repairing) { ReassociateSheet() }
+    }
+}
+
+/// Ce qu'une marche terminée a changé, dit une fois puis oublié.
+///
+/// Il ne paraît qu'après une passe **complète**. Une passe interrompue sait ce qu'elle a vu,
+/// pas ce qu'elle a manqué, et « Rien de neuf » venant d'une marche qui a atteint quatre
+/// dossiers sur huit mille est le genre de réconfort qui ne coûte qu'une fois.
+private struct WalkReportCard: View {
+    let summary: WalkSummary
+    let dismiss: () -> Void
+
+    /// Assez pour lire quatre lignes sans se presser, assez peu pour ne pas rester dans le
+    /// chemin de quelqu'un qui fait autre chose.
+    private static let linger: Duration = .seconds(8)
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: summary.changedNothing
+                  ? "checkmark.circle.fill" : "sparkles")
+                .foregroundStyle(.tint)
+                .font(.subheadline)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(summary.headline)
+                    .font(.subheadline.weight(.semibold))
+                ForEach(summary.details, id: \.self) { line in
+                    Text(line)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial,
+                    in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+        .padding(.horizontal, 14)
+        .padding(.top, 6)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: dismiss)
+        // Vers le haut : le geste va dans la direction d'où la carte est venue, et il ne peut
+        // pas être confondu avec le défilement de ce qu'elle recouvre.
+        .gesture(DragGesture(minimumDistance: 12).onEnded { move in
+            if move.translation.height < 0 { dismiss() }
+        })
+        .transition(.move(edge: .top).combined(with: .opacity))
+        .task(id: summary) {
+            try? await Task.sleep(for: Self.linger)
+            guard !Task.isCancelled else { return }
+            dismiss()
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Toucher pour fermer")
     }
 }
 
@@ -251,6 +320,11 @@ private struct Shelf: View {
             }
         }
         .modifier(ModernTabBar())
+        // Zéro par zéro, et seulement là pour trouver la barre d'onglets depuis SwiftUI, qui
+        // n'en donne aucune prise. Ce qui est dessiné l'est dans la barre elle-même.
+        .background {
+            TabBarGlow(running: indexer.state.isRunning).frame(width: 0, height: 0)
+        }
         .overlay(alignment: .bottom) {
             UndoBanner().padding(.bottom, 8)
         }

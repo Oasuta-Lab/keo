@@ -210,6 +210,14 @@ final class Indexer: ObservableObject {
     /// decide the final state after a fresh worker has taken over.
     private var runToken = 0
     private var walkCompleted = false
+
+    /// Built at the end of a complete pass, published once the run is actually over so the
+    /// card cannot appear while the bar is still moving.
+    private var summary: WalkSummary?
+
+    /// The last complete pass's report, for whoever wants to show it. Cleared by the reader:
+    /// a card that dismisses itself must not come back on the next redraw.
+    @Published var lastSummary: WalkSummary?
     private var observers: [NSObjectProtocol] = []
     /// Survives a relaunch: iOS may terminate a suspended app outright, and an interrupted
     /// index must still know it has somewhere to pick up.
@@ -352,6 +360,8 @@ final class Indexer: ObservableObject {
 
     private func finishRun(_ token: Int) {
         trace("finishRun token=\(token) current=\(runToken) completed=\(walkCompleted)")
+        if walkCompleted, let summary { lastSummary = summary }
+        summary = nil
         guard token == runToken else { return }   // a superseded worker decides nothing
         if walkCompleted { resumeWanted = false }
         runner = nil
@@ -389,6 +399,9 @@ final class Indexer: ObservableObject {
         progress.problems.removeAll()
         progress.folder = root
         state = .running(progress)
+        // Read before anything is written, so `arrivalsSince` can tell this pass's arrivals
+        // from the ones a previous pass left unseen.
+        let startedAt = Date().timeIntervalSince1970
 
         do {
             switch scope {
@@ -513,13 +526,29 @@ final class Indexer: ObservableObject {
                 + "visited=\(visited) failures=\(listingFailures) "
                 + "pendingEmpty=\(pending.isEmpty) skipped=\(progress.foldersSkipped) "
                 + "excluded=\(progress.foldersExcluded)")
+            var vanished = 0
             if complete {
-                try await IndexStore.shared.sweepFolders(generation: generation)
+                vanished = try await IndexStore.shared.sweepFolders(generation: generation)
                 lastIndexedAt = Date().timeIntervalSince1970
                 walkCompleted = true
                 resumeWanted = false   // nothing left to pick up
             }
             progress.indexedOverall = (try? await IndexStore.shared.fileCount()) ?? 0
+
+            // Only a complete pass gets to report. An interrupted one knows what it found but
+            // not what it missed, and "rien de neuf" from a walk that reached four folders out
+            // of eight thousand is the kind of reassurance that costs trust once.
+            if complete {
+                let arrived = (try? await IndexStore.shared.arrivalsSince(startedAt)) ?? 0
+                summary = WalkSummary(
+                    arrived: arrived, vanished: vanished,
+                    foldersVisited: progress.foldersVisited,
+                    foldersSkipped: progress.foldersSkipped,
+                    datesRead: progress.datesRead, dateless: progress.dateless,
+                    unreadable: progress.unreadable,
+                    indexedOverall: progress.indexedOverall)
+                trace("walk summary arrived=\(arrived) vanished=\(vanished)")
+            }
             // Never republish `.running` after a pause: that is what left the app claiming to
             // work with nobody behind it.
             if !Task.isCancelled { state = .running(progress) }
