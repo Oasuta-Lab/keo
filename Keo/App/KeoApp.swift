@@ -22,17 +22,22 @@ struct KeoApp: App {
                     ConnectView()
                 }
             }
+            // Une seule bannière, à la racine, pour une panne qui peut surgir de partout :
+            // une grille, la visionneuse, une marche d'indexation, un réveil en arrière-plan.
+            // Les vues n'en savent rien et continuent de montrer l'index local.
+            //
+            // **Avant** les `environmentObject`, et ce n'est pas un détail de mise en forme :
+            // le contenu d'un `safeAreaInset` posé après eux n'est pas dans le sous-arbre
+            // qu'ils peuplent. La bannière s'affichait, puis `@EnvironmentObject` piégeait au
+            // premier appui — « Réessayer » fermait l'app.
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if store.authorizationLost { AuthorizationBanner() }
+            }
             .environmentObject(store)
             .environmentObject(downloader)
             .environmentObject(indexer)
             .environmentObject(sync)
             .environmentObject(undoer)
-            // Une seule bannière, à la racine, pour une panne qui peut surgir de partout :
-            // une grille, la visionneuse, une marche d'indexation, un réveil en arrière-plan.
-            // Les vues n'en savent rien et continuent de montrer l'index local.
-            .safeAreaInset(edge: .top, spacing: 0) {
-                if store.authorizationLost { AuthorizationBanner() }
-            }
             // Le jeton peut arriver par iCloud pendant que l'app est en arrière-plan, et le
             // trousseau met parfois des minutes. Au retour, on retente en silence.
             .task(id: scenePhase) {

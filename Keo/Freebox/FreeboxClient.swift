@@ -300,23 +300,32 @@ actor FreeboxClient {
     /// Runs a read with the session header, reopening the session once if it went stale.
     private func authorized<T: Sendable>(_ work: (String) async throws -> T) async throws -> T {
         do {
-            return try await work(try await currentSession())
-        } catch let error as FreeboxError where error.isSessionProblem || error.isForbidden {
-            // Rien à tracer ici : `trace` vit dans l'indexeur, qui dépend de SwiftUI et ne
-            // peut pas entrer dans la liste vérifiée dont ce fichier fait partie. Et il n'y
-            // en a plus besoin — l'erreur qui remonte porte désormais le mot de la box, que
-            // l'appelant journalise déjà (« list FAILED … »).
-            sessionToken = nil
             do {
+                return try await work(try await currentSession())
+            } catch let error as FreeboxError where error.isSessionProblem || error.isForbidden {
+                // Rien à tracer ici : `trace` vit dans l'indexeur, qui dépend de SwiftUI et ne
+                // peut pas entrer dans la liste vérifiée dont ce fichier fait partie. Et il n'y
+                // en a plus besoin — l'erreur qui remonte porte désormais le mot de la box, que
+                // l'appelant journalise déjà (« list FAILED … »).
+                sessionToken = nil
                 return try await work(try await openSession())
-            } catch let again as FreeboxError where again.isAuthorizationLost {
-                // Un refus qui survit à la réouverture ne vient pas de la session. On arrête
-                // de redemander, et on le dit une fois.
-                refused = true
-                onAuthorizationLost?()
-                throw again
             }
+        } catch let lost as FreeboxError where lost.isAuthorizationLost {
+            // Le refus est examiné **aux deux tentatives**, pas seulement à la seconde.
+            // Enfermé dans la branche de reprise, il ne sortait que si la première erreur
+            // était un problème de session — alors que le cas courant est l'inverse : le
+            // jeton révoqué fait échouer l'ouverture elle-même, donc la première tentative,
+            // et le refus filait vers l'appelant sans que personne ne soit prévenu.
+            noteRefusal()
+            throw lost
         }
+    }
+
+    /// Un refus définitif : on cesse de redemander, et on le dit une fois.
+    private func noteRefusal() {
+        guard !refused else { return }
+        refused = true
+        onAuthorizationLost?()
     }
 
     private func openSession() async throws -> String {
@@ -349,7 +358,18 @@ actor FreeboxClient {
         opening = task
         defer { opening = nil }
 
-        let token = try await task.value
+        let token: String
+        do {
+            token = try await task.value
+        } catch let error as FreeboxError where error.refusesTheApplication {
+            // La poignée de main elle-même a été refusée. À ce stade il n'y a pas de session
+            // à rouvrir — c'est le jeton d'application qui n'est pas reconnu, et aucune
+            // insistance n'y changera quoi que ce soit. Dit ici plutôt que dans `authorized`,
+            // parce que c'est le seul endroit qui sait que l'échec vient de l'ouverture et
+            // non de la lecture qui la suit.
+            noteRefusal()
+            throw error
+        }
         sessionToken = token
         return token
     }

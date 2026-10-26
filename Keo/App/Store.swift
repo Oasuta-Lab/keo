@@ -42,9 +42,13 @@ final class Store: ObservableObject {
     /// Construit un client branché sur la reprise, et retient son jeton.
     private func build(_ endpoint: FreeboxEndpoint, token: String) -> FreeboxClient {
         tokenInUse = token
-        return FreeboxClient(endpoint: endpoint, appToken: token) { [weak self] in
+        let made = FreeboxClient(endpoint: endpoint, appToken: token) { [weak self] in
             Task { @MainActor in await self?.authorizationRefused() }
         }
+        // Sinon l'indexeur reprendrait avec celui que la box vient de refuser : il est retenu
+        // dans sa file et dans son observateur de premier plan, et réappairer ne l'en sort pas.
+        Indexer.shared.adopt(made)
+        return made
     }
 
     /// Appelé quand la box a refusé l'application et que rouvrir une session n'y a rien fait.

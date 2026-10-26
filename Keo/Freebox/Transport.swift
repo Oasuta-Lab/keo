@@ -46,6 +46,33 @@ enum FreeboxError: LocalizedError, Sendable {
         }
         return false
     }
+
+    /// Le mot exact de la box, pour la trace. Le message affiché ne dit pas lequel des
+    /// refus on a — « Erreur d'authentification de l'application » peut sortir de plus d'un
+    /// code, et c'est le code qui décide si la bannière doit paraître.
+    var apiCode: String? {
+        if case .api(let code, _) = self { return code }
+        return nil
+    }
+
+    /// Le même refus, vu depuis la poignée de main — et là, la liste ci-dessus est trop
+    /// courte pour servir de garde.
+    ///
+    /// Ouvrir une session ne demande qu'une chose : que la box reconnaisse le jeton
+    /// d'application. Si elle refuse en le nommant, **quel que soit le mot**, c'est que ce
+    /// jeton ne vaut plus rien ; il n'y a pas de session à rouvrir derrière et insister ne
+    /// peut rien donner. Une liste blanche de codes y serait un pari sur le vocabulaire de
+    /// Free, alors que la question est déjà tranchée par l'endroit où l'erreur est née.
+    ///
+    /// `ratelimited` est la seule exception, et c'est important : il est temporaire, se lève
+    /// tout seul, et le prendre pour une révocation enverrait appuyer sur ✓ — ce qui
+    /// révoquerait les autres appareils du foyer pour une minute d'attente.
+    ///
+    /// `noFileAccess` n'est pas concerné : ce n'est pas un `.api`, et le jeton y est bon.
+    var refusesTheApplication: Bool {
+        if case .api(let code, _) = self { return code != "ratelimited" }
+        return false
+    }
 }
 
 /// Every Freebox answer is wrapped in `{success, result}`; unwrap it in one place.

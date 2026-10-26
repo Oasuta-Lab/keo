@@ -248,8 +248,9 @@ final class Indexer: ObservableObject {
             + "state=\(state) stalled=\(isStalled) queue=\(queue.count)")
         resumeRoot = root
         resumeWanted = true
+        current = client
         queue.append(.walk(root: root, client: client, scope: scope))
-        watchAppState(root: root, client: client)
+        watchAppState(root: root)
         pump()
     }
 
@@ -286,6 +287,21 @@ final class Indexer: ObservableObject {
         resumeWanted = false
         queue.removeAll()
         halt()
+    }
+
+    /// Le client en service. Il était capturé par l'observateur de premier plan, posé une
+    /// seule fois et pour toujours : après un réappairage, le retour au premier plan
+    /// repartait donc avec le client que la box venait de refuser, et qui refuse désormais
+    /// tout seul sans même demander.
+    private var current: FreeboxClient?
+
+    /// Appelé par `Store` dès qu'il construit un client neuf — réappairage, ou jeton plus
+    /// frais trouvé dans le trousseau. La file est vidée parce que ses entrées portent chacune
+    /// l'ancien client ; ce qui reste à faire est dans `resumeRoot`, et repartira avec le bon.
+    func adopt(_ client: FreeboxClient) {
+        guard current !== client else { return }
+        current = client
+        queue.removeAll()
     }
 
     /// Picks up an index interrupted by a suspension or a termination. Safe to call on every
@@ -424,7 +440,8 @@ final class Indexer: ObservableObject {
                     contents = try await client.list(folder.path, order: .name)
                     consecutiveFailures = 0
                 } catch {
-                    trace("list FAILED \(folder.path): \(error.localizedDescription)")
+                    let code = (error as? FreeboxError)?.apiCode.map { " [\($0)]" } ?? ""
+                    trace("list FAILED \(folder.path): \(error.localizedDescription)\(code)")
                     // A failed listing is not an empty folder. Counting it keeps the pass from
                     // calling itself complete — and from sweeping away everything it never
                     // reached, which is how a suspended app used to destroy its own index.
@@ -766,7 +783,7 @@ final class Indexer: ObservableObject {
 
     /// iOS suspends a backgrounded app and terminates it if it is still busy. Pause, commit,
     /// and pick up again on return.
-    private func watchAppState(root: String, client: FreeboxClient) {
+    private func watchAppState(root: String) {
         guard observers.isEmpty else { return }
         let centre = NotificationCenter.default
 
@@ -802,7 +819,7 @@ final class Indexer: ObservableObject {
                 guard let self else { return }
                 trace("foreground: wanted=\(self.resumeWanted) state=\(self.state) "
                     + "stalled=\(self.isStalled)")
-                guard self.resumeWanted else { return }
+                guard self.resumeWanted, let client = self.current else { return }
                 self.start(from: self.resumeRoot, client: client)
             }
         })

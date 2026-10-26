@@ -179,6 +179,34 @@ do {
     assert(error.errorDescription == "Vous devez vous connecter")
 }
 
+// Le refus que la box oppose à l'application, par opposition à la session périmée.
+do {
+    _ = try Envelope.unwrap(Data("""
+    {"success":false,"msg":"Erreur d'authentification de l'application","error_code":"invalid_token","result":{}}
+    """.utf8), as: Listing.self)
+    assertionFailure("un envelope success:false doit lever")
+} catch let error as FreeboxError {
+    assert(error.isAuthorizationLost, "invalid_token est une révocation, pas une session expirée")
+    assert(!error.isSessionProblem, "rouvrir une session n'y changerait rien")
+    assert(error.apiCode == "invalid_token", "le code doit rester lisible pour la trace")
+}
+
+// Ce que la poignée de main doit considérer comme un refus. La liste blanche de codes y est
+// trop courte : l'ouverture de session ne demande que la reconnaissance du jeton, donc tout
+// refus nommé y est définitif. `ratelimited` est la seule exception, parce qu'il se lève seul
+// et que le prendre pour une révocation enverrait appuyer sur ✓ pour rien.
+for code in ["invalid_token", "pending_token", "new_apps_denied", "insufficient_rights",
+             "un_code_que_free_ajoutera_demain"] {
+    assert(FreeboxError.api(code: code, message: "").refusesTheApplication,
+           "\(code) refusé à l'ouverture de session est définitif")
+}
+assert(!FreeboxError.api(code: "ratelimited", message: "").refusesTheApplication,
+       "ratelimited est temporaire : il ne doit pas déclencher de réassociation")
+assert(!FreeboxError.http(403).refusesTheApplication,
+       "un 403 sans enveloppe ne nomme rien — on ne devine pas")
+assert(!FreeboxError.noFileAccess.refusesTheApplication,
+       "le jeton est bon, c'est la permission « Accès aux fichiers » qui manque")
+
 // MARK: - Chemins base64
 
 for path in ["/", "/NAS", "/NAS/Photos/Noël 2024", "/NAS/aoé"] {
