@@ -64,6 +64,10 @@
 	<string>Keo se connecte à votre NAS sur le réseau local pour afficher vos photos et vidéos.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Pour enregistrer dans votre pellicule les photos et vidéos téléchargées depuis la Freebox.</string>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Montserrat-Bold.ttf</string>
+	</array>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UIApplicationSupportsShakeToEdit</key>

@@ -39,6 +39,21 @@ enum Theme {
     static let warning = Color.orange
 }
 
+extension Font {
+    /// Montserrat Bold — the studio's face, on the word "Keo" and nowhere else.
+    ///
+    /// It stops there on purpose. Keo prints a great deal of metadata, and San Francisco is
+    /// optically sized and carries tabular figures; the app leans on `.monospacedDigit()` in a
+    /// dozen places where a counter must not jitter as it climbs, and Montserrat has no
+    /// tabular numerals. Setting the interface in it would trade legibility at `.caption2`
+    /// for a brand tie that one word already makes.
+    ///
+    /// `relativeTo:` is what keeps it scaling with Dynamic Type like everything else.
+    static func wordmark(size: CGFloat) -> Font {
+        .custom("Montserrat-Bold", size: size, relativeTo: .largeTitle)
+    }
+}
+
 /// Keo's mark: four bays in a cage, and the arm of a K coming out of them.
 ///
 /// A shape rather than an image, because it has to work at 20 pt in a header and at 96 pt on an

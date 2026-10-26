@@ -104,7 +104,7 @@ struct HomeView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 0) {
-                Text("Keo").font(.largeTitle.bold())
+                Text("Keo").font(.wordmark(size: 32))
                 Text(Self.today)
                     .font(.caption)
                     .foregroundStyle(.secondary)

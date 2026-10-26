@@ -16,7 +16,7 @@ struct ConnectView: View {
             CageMark.Filled(height: 110).foregroundStyle(.tint)
 
             VStack(spacing: 8) {
-                Text("Keo").font(.largeTitle.bold())
+                Text("Keo").font(.wordmark(size: 32))
                 Text("Tes photos et vidéos, depuis la Freebox.")
                     .foregroundStyle(.secondary)
             }
