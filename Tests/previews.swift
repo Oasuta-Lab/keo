@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 /// À qui la sonde de 256 Ko a le droit de servir de vignette.
 ///
@@ -113,4 +114,61 @@ func checkRecentKinds() async throws {
            "un document n'est jamais un média")
 
     print("ok — l'étagère « Dernières photos » ne ramène que des photos")
+}
+
+/// La date d'arrivée : posée une fois, jamais déplacée, jamais inventée.
+///
+/// Les trois propriétés qui comptent, et qui ne se voient qu'au bout de plusieurs passages :
+/// un fichier neuf reçoit sa date ; un fichier revu la garde — sinon un ré-indexage ferait
+/// remonter toute la bibliothèque d'un coup ; et ce qui était là avant la colonne n'en reçoit
+/// aucune, plutôt que d'hériter de l'instant de la mise à jour.
+func checkArrivalDate() async throws {
+    let home = FileManager.default.temporaryDirectory
+        .appendingPathComponent("keo-added-\(ProcessInfo.processInfo.processIdentifier)")
+    try? FileManager.default.removeItem(at: home)
+    try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: home) }
+
+    func file(_ name: String, size: Int64 = 2_048) -> Item {
+        Item(path: "/NAS/Boîte/\(name)", name: name, isDirectory: false, size: size,
+             modified: nil, mimeType: nil)
+    }
+    let store = IndexStore(directory: home)
+    let folder = "/NAS/Boîte"
+
+    // --- premier passage : trois fichiers de genres différents ------------------------
+    var generation = try await store.beginGeneration()
+    try await store.commit([(file("a.jpg"), nil)], in: folder, generation: generation,
+                           present: [file("a.jpg"), file("notes.txt"), file("clip.mov")])
+    let first = try await store.recentlyAdded(under: folder, limit: 10)
+    assert(first.count == 3, "les trois arrivées sont vues — \(first.map(\.name))")
+    assert(first.contains { $0.kind == .other },
+           "un document compte comme un ajout : c'est tout l'intérêt de cette étagère")
+
+    // --- deuxième passage sur les mêmes : la date ne bouge pas ------------------------
+    try await Task.sleep(for: .milliseconds(1_100))
+    generation = try await store.beginGeneration()
+    try await store.commit([(file("a.jpg"), nil)], in: folder, generation: generation,
+                           present: [file("a.jpg"), file("notes.txt"), file("clip.mov"),
+                                     file("neuf.pdf")])
+    let second = try await store.recentlyAdded(under: folder, limit: 10)
+    assert(second.count == 4, "le nouveau s'ajoute aux trois — \(second.map(\.name))")
+    assert(second.first?.name == "neuf.pdf",
+           "le dernier arrivé passe devant, sinon la colonne a été réécrite — \(second.map(\.name))")
+
+    // --- une ligne écrite avant la colonne n'a pas de date, et n'apparaît pas ----------
+    // Écrit à même le fichier : c'est exactement l'état d'une base antérieure à la colonne,
+    // et `exec` est privé — on n'ouvre pas une API du magasin pour le confort d'un test.
+    var raw: OpaquePointer?
+    let dbPath = home.appendingPathComponent("index.sqlite").path
+    assert(sqlite3_open(dbPath, &raw) == SQLITE_OK, "la base de test doit s'ouvrir")
+    assert(sqlite3_exec(raw, "UPDATE file SET added = NULL WHERE name = 'clip.mov'",
+                        nil, nil, nil) == SQLITE_OK, "mise à NULL de la date d'arrivée")
+    sqlite3_close(raw)
+    let third = try await store.recentlyAdded(under: folder, limit: 10)
+    assert(!third.contains { $0.name == "clip.mov" },
+           "sans date d'arrivée, un fichier n'est pas un ajout récent")
+    assert(third.count == 3, "les autres restent — \(third.map(\.name))")
+
+    print("ok — date d'arrivée : posée une fois, conservée au ré-indexage, jamais inventée")
 }

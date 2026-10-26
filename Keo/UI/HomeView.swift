@@ -25,6 +25,9 @@ struct HomeView: View {
     @State private var pinStats: [String: FolderStats] = [:]
     @State private var pinCovers: [String: [Item]] = [:]
     @State private var recent: [Item] = []
+    /// Ce qui est arrivé depuis que Keo regarde. Vide tant que rien n'est arrivé, et alors
+    /// l'étagère ne s'affiche pas — une section vide sur un accueil est une promesse non tenue.
+    @State private var arrivals: [Item] = []
     @State private var destination: BrowserSource?
     @State private var memoryPage = 0
     /// Advances once per auto-turn, and indexes into each year's photos — so a year that
@@ -91,6 +94,7 @@ struct HomeView: View {
                     memories
                     pinned
                     latest
+                    arrived
                 }
                 library
                 VStack(spacing: 6) {
@@ -374,6 +378,51 @@ struct HomeView: View {
 
     // MARK: Chronologie
 
+
+    // MARK: Derniers ajouts
+
+    /// Ce que le NAS a reçu depuis la dernière fois, tous genres confondus.
+    ///
+    /// Une liste et non une bande de vignettes : c'est le seul endroit de l'accueil où un
+    /// document peut apparaître, et un document n'a pas d'image à montrer. La ligne mène au
+    /// dossier d'accueil du fichier, qui est la question qu'on se pose en voyant arriver
+    /// quelque chose — « c'est tombé où ? ».
+    @ViewBuilder
+    private var arrived: some View {
+        if !arrivals.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Derniers ajouts").font(.title3.bold())
+                VStack(spacing: 0) {
+                    ForEach(Array(arrivals.enumerated()), id: \.element.id) { index, item in
+                        Button {
+                            destination = BrowserSource.parent(of: item)
+                        } label: {
+                            LibraryRow(icon: Self.glyph(for: item.kind),
+                                       title: item.name,
+                                       detail: BrowserSource.parent(of: item)?.title)
+                        }
+                        .buttonStyle(.plain)
+                        if index < arrivals.count - 1 {
+                            Divider().padding(.leading, 56)
+                        }
+                    }
+                }
+                .background(.quaternary.opacity(0.4),
+                            in: RoundedRectangle(cornerRadius: Theme.Radius.panel,
+                                                 style: .continuous))
+            }
+        }
+    }
+
+    private static func glyph(for kind: Item.Kind) -> String {
+        switch kind {
+        case .image: return "photo"
+        case .video: return "film"
+        case .folder: return "folder"
+        case .other: return "doc"
+        }
+    }
+
     // MARK: Bibliothèque
 
     private var library: some View {
@@ -500,6 +549,8 @@ struct HomeView: View {
         // sous ce titre est un contenu qui ne correspond pas à ce qui l'annonce.
         recent = (try? await IndexStore.shared.recentMedia(under: FreeboxClient.rootPath,
                                                            limit: 12, kinds: [.image])) ?? []
+        arrivals = (try? await IndexStore.shared.recentlyAdded(under: FreeboxClient.rootPath,
+                                                               limit: 6)) ?? []
         disk = try? await IndexStore.shared.capacity()
 
         // Refreshed in the background, and only when the box answers. A failure here is not

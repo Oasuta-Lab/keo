@@ -145,6 +145,7 @@ checkThePluralCopiesMatch()
 checkPreviewProbeTrust()
 checkFrenchPlural()
 try await checkRecentKinds()
+try await checkArrivalDate()
 
 // MARK: - Envelope
 

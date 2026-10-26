@@ -66,6 +66,11 @@ actor IndexStore {
         // NULL on purpose, and nullable: "nobody has looked" is a third state, and the `kind`
         // migration already taught this file what a wrong default costs.
         try? exec("ALTER TABLE file ADD COLUMN cid TEXT")
+        // When Keo first saw the file. Nullable, and deliberately never backfilled: everything
+        // already in the index arrived before anyone was counting, and stamping it all with
+        // the moment of the upgrade would make "Derniers ajouts" a list of 23 000 files that
+        // all landed in the same second. NULL means "was already here".
+        try? exec("ALTER TABLE file ADD COLUMN added REAL")
         // Rows written before the column existed were all read ones.
         try? exec("UPDATE file SET read = 1 WHERE read = 0 AND gen >= 0 AND capture IS NOT NULL")
 
@@ -103,6 +108,8 @@ actor IndexStore {
       name      TEXT    NOT NULL,
       size      INTEGER NOT NULL,
       capture   REAL,
+      -- When Keo first saw it. NULL for everything that predates the column.
+      added     REAL,
       -- 0 = seen in a listing but never read. Distinguishes "no EXIF date" from "not read
       -- yet", which a nullable capture alone cannot express.
       read      INTEGER NOT NULL DEFAULT 0,
@@ -306,6 +313,10 @@ actor IndexStore {
                 generation: Int64, stamp: FolderStamp.Completion? = nil,
                 present: [Item] = [], sweep: Bool = false) throws {
         try open()
+        // One instant for the whole pass, not one per row: files that arrive together did
+        // arrive together, and a shelf of "recent additions" reads better when a folder that
+        // landed in one copy keeps its order by name rather than by microsecond.
+        let now = Date().timeIntervalSince1970
         try exec("BEGIN IMMEDIATE")
         do {
             let id = try folderID(folder, create: true)!
@@ -315,13 +326,16 @@ actor IndexStore {
                 var statement: OpaquePointer?
                 defer { sqlite3_finalize(statement) }
                 try prepare("""
-                    INSERT INTO file (folder_id, name, size, capture, read, kind, gen, cid)
-                    VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+                    INSERT INTO file (folder_id, name, size, capture, read, kind, gen, cid,
+                                      added)
+                    VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
                     ON CONFLICT(folder_id, name, size)
                     DO UPDATE SET capture = excluded.capture, read = 1,
                                   kind = excluded.kind, gen = excluded.gen,
                                   -- An unread pass must not erase what a read one learned.
                                   cid = coalesce(excluded.cid, file.cid)
+                                  -- `added` is absent on purpose: a second pass over a file
+                                  -- that was already here must not move the day it arrived.
                     """, into: &statement)
 
                 for (item, capture) in results {
@@ -341,6 +355,7 @@ actor IndexStore {
                     } else {
                         sqlite3_bind_null(statement, 7)
                     }
+                    sqlite3_bind_double(statement, 8, now)
                     guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
                 }
             }
@@ -351,8 +366,8 @@ actor IndexStore {
                 // Insert rather than update: the database then mirrors the whole listing, which
                 // is what lets a folder be painted before the box has answered.
                 try prepare("""
-                    INSERT INTO file (folder_id, name, size, capture, read, kind, gen)
-                    VALUES (?, ?, ?, NULL, 0, ?, ?)
+                    INSERT INTO file (folder_id, name, size, capture, read, kind, gen, added)
+                    VALUES (?, ?, ?, NULL, 0, ?, ?, ?)
                     ON CONFLICT(folder_id, name, size) DO UPDATE SET gen = excluded.gen
                     """, into: &mark)
                 for item in present {
@@ -362,6 +377,7 @@ actor IndexStore {
                     sqlite3_bind_int64(mark, 3, item.size)
                     sqlite3_bind_int64(mark, 4, Int64(item.kind.code))
                     sqlite3_bind_int64(mark, 5, generation)
+                    sqlite3_bind_double(mark, 6, now)
                     guard sqlite3_step(mark) == SQLITE_DONE else { throw Failure.write(message) }
                 }
             }
@@ -2422,6 +2438,47 @@ actor IndexStore {
     /// `kinds` restreint ce qui remonte. L'étagère de l'accueil s'appelle « Dernières
     /// photos » : elle ne doit donc montrer que des photos, pas des vidéos sous un titre qui
     /// n'est pas le leur. Le widget, lui, prend les deux.
+    /// Ce qui est arrivé depuis que Keo regarde, tous genres confondus — documents compris.
+    ///
+    /// `added IS NOT NULL` fait le tri tout seul : les fichiers indexés avant l'existence de
+    /// la colonne n'ont pas de date d'arrivée, et il vaut mieux une étagère qui se remplit au
+    /// fil des jours qu'une étagère qui ment sur ses 23 000 premiers éléments.
+    func recentlyAdded(under folder: String, limit: Int = 6) throws -> [Item] {
+        try open()
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        let scope = "d.path = ?2 OR " + Self.subtree("d.path", low: 1, high: 4)
+        try prepare("""
+            SELECT d.path, fi.name, fi.size, fi.capture, fi.kind
+            FROM file fi JOIN folder d ON d.id = fi.folder_id
+            WHERE (\(scope)) AND fi.live = 0 AND fi.added IS NOT NULL
+            ORDER BY fi.added DESC, d.path, fi.name
+            LIMIT ?3
+            """, into: &statement)
+        bindSubtree(statement, folder, low: 1, high: 4)
+        bind(statement, 2, folder)
+        sqlite3_bind_int64(statement, 3, Int64(limit))
+
+        var found: [Item] = []
+        while sqlite3_step(statement) == SQLITE_ROW,
+              let rawFolder = sqlite3_column_text(statement, 0),
+              let rawName = sqlite3_column_text(statement, 1) {
+            let name = String(cString: rawName)
+            let capture = sqlite3_column_type(statement, 3) == SQLITE_NULL
+                ? nil : Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))
+            found.append(Item(
+                path: String(cString: rawFolder) + "/" + name,
+                name: name,
+                isDirectory: false,
+                size: sqlite3_column_int64(statement, 2),
+                modified: nil,
+                mimeType: Item.Kind(code: Int(sqlite3_column_int64(statement, 4)))?.mimeHint,
+                captureDate: capture
+            ))
+        }
+        return found
+    }
+
     func recentMedia(under folder: String, limit: Int = 12,
                      kinds: [Item.Kind] = [.image, .video]) throws -> [Item] {
         try open()
