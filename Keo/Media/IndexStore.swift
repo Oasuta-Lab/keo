@@ -2535,13 +2535,16 @@ actor IndexStore {
         return found
     }
 
-    /// A photo to show on each folder tile, taken from the subtree like the totals above.
+    /// The photos to show on each folder card, taken from the subtree like the totals above.
     ///
     /// An image beats a video: decoding a video cover costs an AVFoundation session, a still
     /// costs the 256 KB probe the pipeline already does. Among images, the most recent capture
     /// says more about the folder than an arbitrary one. The trailing path and name make the
-    /// order total, so the same folder never comes back with a different cover.
-    func covers(for folders: [String]) throws -> [String: Item] {
+    /// order total, so the same folder never comes back with a different set.
+    ///
+    /// `limit` is how many the caller can show — one for a single cover, three for the fan in
+    /// the corner of a card. They come back in order, best first.
+    func covers(for folders: [String], limit: Int = 1) throws -> [String: [Item]] {
         try open()
         guard !folders.isEmpty else { return [:] }
 
@@ -2553,26 +2556,30 @@ actor IndexStore {
             WHERE file.kind IN (1, 2) AND file.live = 0
               AND (folder.path = ?2 OR \(Self.subtree("folder.path", low: 1, high: 3)))
             ORDER BY file.kind, file.capture DESC, folder.path, file.name
-            LIMIT 1
+            LIMIT ?4
             """, into: &statement)
 
-        var found: [String: Item] = [:]
+        var found: [String: [Item]] = [:]
         for folder in folders {
             sqlite3_reset(statement)
             bindSubtree(statement, folder, low: 1, high: 3)
             bind(statement, 2, folder)
-            guard sqlite3_step(statement) == SQLITE_ROW,
+            sqlite3_bind_int64(statement, 4, Int64(max(1, limit)))
+            var picks: [Item] = []
+            while sqlite3_step(statement) == SQLITE_ROW,
                   let rawFolder = sqlite3_column_text(statement, 0),
-                  let rawName = sqlite3_column_text(statement, 1) else { continue }
-            let name = String(cString: rawName)
-            found[folder] = Item(
-                path: String(cString: rawFolder) + "/" + name,
-                name: name,
-                isDirectory: false,
-                size: sqlite3_column_int64(statement, 2),
-                modified: nil,
-                mimeType: Item.Kind(code: Int(sqlite3_column_int64(statement, 3)))?.mimeHint
-            )
+                  let rawName = sqlite3_column_text(statement, 1) {
+                let name = String(cString: rawName)
+                picks.append(Item(
+                    path: String(cString: rawFolder) + "/" + name,
+                    name: name,
+                    isDirectory: false,
+                    size: sqlite3_column_int64(statement, 2),
+                    modified: nil,
+                    mimeType: Item.Kind(code: Int(sqlite3_column_int64(statement, 3)))?.mimeHint
+                ))
+            }
+            if !picks.isEmpty { found[folder] = picks }
         }
         return found
     }

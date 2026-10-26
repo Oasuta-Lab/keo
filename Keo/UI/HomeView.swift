@@ -23,6 +23,7 @@ struct HomeView: View {
     @State private var summary: HomeSummary?
     @State private var pins: [Item] = []
     @State private var pinStats: [String: FolderStats] = [:]
+    @State private var pinCovers: [String: [Item]] = [:]
     @State private var recent: [Item] = []
     @State private var destination: BrowserSource?
     @State private var memoryPage = 0
@@ -294,8 +295,9 @@ struct HomeView: View {
                     LazyHStack(spacing: 12) {
                         ForEach(pins) { folder in
                             NavigationLink(value: BrowserSource.folder(folder)) {
-                                FolderCard(folder: folder,
-                                           stats: pinStats[folder.path], width: 150)
+                                FolderCard(folder: folder, stats: pinStats[folder.path],
+                                           covers: pinCovers[folder.path] ?? [],
+                                           client: client, width: 150)
                             }
                             .buttonStyle(.plain)
                             // Pinning happens in Parcourir by long press; unpinning had no
@@ -470,6 +472,7 @@ struct HomeView: View {
         pins = (try? await IndexStore.shared.shortcuts()) ?? []
         let paths = pins.map(\.path)
         pinStats = (try? await IndexStore.shared.stats(for: paths)) ?? [:]
+        pinCovers = (try? await IndexStore.shared.covers(for: paths, limit: 3)) ?? [:]
         recent = (try? await IndexStore.shared.recentMedia(under: FreeboxClient.rootPath,
                                                            limit: 12)) ?? []
         disk = try? await IndexStore.shared.capacity()

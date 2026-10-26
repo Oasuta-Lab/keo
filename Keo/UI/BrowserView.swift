@@ -69,6 +69,8 @@ struct BrowserView: View {
     @State private var unindexed = 0
     /// Counted during indexing, so a tile can say what is inside without asking the box.
     @State private var folderStats: [String: FolderStats] = [:]
+    /// Three photos per subfolder for the fan on its card — one query for the whole listing.
+    @State private var folderCovers: [String: [Item]] = [:]
     /// True while the grid shows what the index remembers rather than a fresh listing.
     @State private var fromCache = false
     /// Saved items whose file the index no longer finds on the NAS.
@@ -113,6 +115,8 @@ struct BrowserView: View {
                             ForEach(contents.folders) { folder in
                                 NavigationLink(value: folder) {
                                     FolderCard(folder: folder, stats: folderStats[folder.path],
+                                               covers: folderCovers[folder.path] ?? [],
+                                               client: client,
                                                noted: noted.contains(folder.path))
                                 }
                                 .buttonStyle(.plain)
@@ -755,6 +759,7 @@ struct BrowserView: View {
             await offerIndexing()
             let folders = contents.folders.map(\.path)
             folderStats = (try? await IndexStore.shared.stats(for: folders)) ?? [:]
+            folderCovers = (try? await IndexStore.shared.covers(for: folders, limit: 3)) ?? [:]
 
             let known = try await IndexStore.shared.known(contents.media, in: path)
             if !known.isEmpty {
