@@ -156,19 +156,36 @@ func checkArrivalDate() async throws {
     assert(second.first?.name == "neuf.pdf",
            "le dernier arrivé passe devant, sinon la colonne a été réécrite — \(second.map(\.name))")
 
-    // --- une ligne écrite avant la colonne n'a pas de date, et n'apparaît pas ----------
-    // Écrit à même le fichier : c'est exactement l'état d'une base antérieure à la colonne,
-    // et `exec` est privé — on n'ouvre pas une API du magasin pour le confort d'un test.
+    // --- « Tout relire depuis zéro » ne doit pas tout faire remonter ------------------
+    // C'est le cas qui a tué la première version : la reconstruction fait `DELETE FROM file`,
+    // donc une date d'arrivée rangée dans cette table-là était effacée et le re-parcours
+    // tamponnait toute la bibliothèque de l'instant de la reconstruction.
+    let order = second.map(\.name)
+    try await store.forgetEverything()
+    try await Task.sleep(for: .milliseconds(1_100))
+    generation = try await store.beginGeneration()
+    try await store.commit([(file("a.jpg"), nil)], in: folder, generation: generation,
+                           present: [file("a.jpg"), file("notes.txt"), file("clip.mov"),
+                                     file("neuf.pdf")])
+    let rebuilt = try await store.recentlyAdded(under: folder, limit: 10)
+    assert(rebuilt.map(\.name) == order,
+           "après une reconstruction, l'ordre d'arrivée est celui d'avant — "
+         + "\(rebuilt.map(\.name)) au lieu de \(order)")
+
+    // --- un fichier sans arrivée notée n'apparaît pas ---------------------------------
+    // L'état d'une base antérieure à la table : la ligne existe, l'arrivée non. Écrit à même
+    // le fichier, `exec` étant privé — on n'ouvre pas une API du magasin pour un test.
     var raw: OpaquePointer?
     let dbPath = home.appendingPathComponent("index.sqlite").path
     assert(sqlite3_open(dbPath, &raw) == SQLITE_OK, "la base de test doit s'ouvrir")
-    assert(sqlite3_exec(raw, "UPDATE file SET added = NULL WHERE name = 'clip.mov'",
-                        nil, nil, nil) == SQLITE_OK, "mise à NULL de la date d'arrivée")
+    assert(sqlite3_exec(raw, "DELETE FROM arrival WHERE name = 'clip.mov'",
+                        nil, nil, nil) == SQLITE_OK, "suppression de l'arrivée notée")
     sqlite3_close(raw)
     let third = try await store.recentlyAdded(under: folder, limit: 10)
     assert(!third.contains { $0.name == "clip.mov" },
-           "sans date d'arrivée, un fichier n'est pas un ajout récent")
+           "sans arrivée notée, un fichier n'est pas un ajout récent")
     assert(third.count == 3, "les autres restent — \(third.map(\.name))")
 
-    print("ok — date d'arrivée : posée une fois, conservée au ré-indexage, jamais inventée")
+    print("ok — date d'arrivée : posée une fois, conservée au ré-indexage et à la "
+        + "reconstruction, jamais inventée")
 }

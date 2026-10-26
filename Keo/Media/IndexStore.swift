@@ -66,11 +66,6 @@ actor IndexStore {
         // NULL on purpose, and nullable: "nobody has looked" is a third state, and the `kind`
         // migration already taught this file what a wrong default costs.
         try? exec("ALTER TABLE file ADD COLUMN cid TEXT")
-        // When Keo first saw the file. Nullable, and deliberately never backfilled: everything
-        // already in the index arrived before anyone was counting, and stamping it all with
-        // the moment of the upgrade would make "Derniers ajouts" a list of 23 000 files that
-        // all landed in the same second. NULL means "was already here".
-        try? exec("ALTER TABLE file ADD COLUMN added REAL")
         // Rows written before the column existed were all read ones.
         try? exec("UPDATE file SET read = 1 WHERE read = 0 AND gen >= 0 AND capture IS NOT NULL")
 
@@ -103,13 +98,27 @@ actor IndexStore {
       bytes       INTEGER,
       gen         INTEGER NOT NULL DEFAULT 0
     );
+    -- Quand Keo a vu ce fichier pour la premiere fois.
+    --
+    -- Une table a part, et non une colonne de `file`, parce que « Tout relire depuis zero »
+    -- fait `DELETE FROM file` : la date d'arrivee y serait effacee, et le re-parcours
+    -- tamponnerait toute la bibliotheque de l'instant de la reconstruction. C'est un fait sur
+    -- l'histoire du fichier, pas sur la generation d'index en cours.
+    --
+    -- Rien ici pour ce qui etait deja indexe avant : une absence est plus honnete qu'une date
+    -- inventee, et l'etagere se remplit au fil des arrivees.
+    CREATE TABLE IF NOT EXISTS arrival (
+      folder_id INTEGER NOT NULL REFERENCES folder(id) ON DELETE CASCADE,
+      name      TEXT    NOT NULL,
+      size      INTEGER NOT NULL,
+      added     REAL    NOT NULL,
+      PRIMARY KEY (folder_id, name, size)
+    ) WITHOUT ROWID;
     CREATE TABLE IF NOT EXISTS file (
       folder_id INTEGER NOT NULL REFERENCES folder(id) ON DELETE CASCADE,
       name      TEXT    NOT NULL,
       size      INTEGER NOT NULL,
       capture   REAL,
-      -- When Keo first saw it. NULL for everything that predates the column.
-      added     REAL,
       -- 0 = seen in a listing but never read. Distinguishes "no EXIF date" from "not read
       -- yet", which a nullable capture alone cannot express.
       read      INTEGER NOT NULL DEFAULT 0,
@@ -326,16 +335,13 @@ actor IndexStore {
                 var statement: OpaquePointer?
                 defer { sqlite3_finalize(statement) }
                 try prepare("""
-                    INSERT INTO file (folder_id, name, size, capture, read, kind, gen, cid,
-                                      added)
-                    VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?)
+                    INSERT INTO file (folder_id, name, size, capture, read, kind, gen, cid)
+                    VALUES (?, ?, ?, ?, 1, ?, ?, ?)
                     ON CONFLICT(folder_id, name, size)
                     DO UPDATE SET capture = excluded.capture, read = 1,
                                   kind = excluded.kind, gen = excluded.gen,
                                   -- An unread pass must not erase what a read one learned.
                                   cid = coalesce(excluded.cid, file.cid)
-                                  -- `added` is absent on purpose: a second pass over a file
-                                  -- that was already here must not move the day it arrived.
                     """, into: &statement)
 
                 for (item, capture) in results {
@@ -355,7 +361,6 @@ actor IndexStore {
                     } else {
                         sqlite3_bind_null(statement, 7)
                     }
-                    sqlite3_bind_double(statement, 8, now)
                     guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
                 }
             }
@@ -366,8 +371,8 @@ actor IndexStore {
                 // Insert rather than update: the database then mirrors the whole listing, which
                 // is what lets a folder be painted before the box has answered.
                 try prepare("""
-                    INSERT INTO file (folder_id, name, size, capture, read, kind, gen, added)
-                    VALUES (?, ?, ?, NULL, 0, ?, ?, ?)
+                    INSERT INTO file (folder_id, name, size, capture, read, kind, gen)
+                    VALUES (?, ?, ?, NULL, 0, ?, ?)
                     ON CONFLICT(folder_id, name, size) DO UPDATE SET gen = excluded.gen
                     """, into: &mark)
                 for item in present {
@@ -377,10 +382,30 @@ actor IndexStore {
                     sqlite3_bind_int64(mark, 3, item.size)
                     sqlite3_bind_int64(mark, 4, Int64(item.kind.code))
                     sqlite3_bind_int64(mark, 5, generation)
-                    sqlite3_bind_double(mark, 6, now)
                     guard sqlite3_step(mark) == SQLITE_DONE else { throw Failure.write(message) }
                 }
             }
+            // `OR IGNORE` est toute la regle : une arrivee deja notee ne se renote pas. C'est
+            // ce qui fait qu'un second passage — ou une reconstruction complete, qui vide
+            // `file` mais pas cette table — ne deplace pas la date.
+            let arriving = results.map(\.item) + present
+            if !arriving.isEmpty {
+                var note: OpaquePointer?
+                defer { sqlite3_finalize(note) }
+                try prepare("""
+                    INSERT OR IGNORE INTO arrival (folder_id, name, size, added)
+                    VALUES (?, ?, ?, ?)
+                    """, into: &note)
+                for item in arriving {
+                    sqlite3_reset(note)
+                    sqlite3_bind_int64(note, 1, id)
+                    bind(note, 2, item.name)
+                    sqlite3_bind_int64(note, 3, item.size)
+                    sqlite3_bind_double(note, 4, now)
+                    guard sqlite3_step(note) == SQLITE_DONE else { throw Failure.write(message) }
+                }
+            }
+
             if sweep {
                 try exec("DELETE FROM file WHERE folder_id = \(id) AND gen < \(generation)")
             }
@@ -2440,8 +2465,8 @@ actor IndexStore {
     /// n'est pas le leur. Le widget, lui, prend les deux.
     /// Ce qui est arrivé depuis que Keo regarde, tous genres confondus — documents compris.
     ///
-    /// `added IS NOT NULL` fait le tri tout seul : les fichiers indexés avant l'existence de
-    /// la colonne n'ont pas de date d'arrivée, et il vaut mieux une étagère qui se remplit au
+    /// La jointure avec `arrival` fait le tri toute seule : ce qui a été indexé avant
+    /// l'existence de la table n'y figure pas, et il vaut mieux une étagère qui se remplit au
     /// fil des jours qu'une étagère qui ment sur ses 23 000 premiers éléments.
     func recentlyAdded(under folder: String, limit: Int = 6) throws -> [Item] {
         try open()
@@ -2450,9 +2475,14 @@ actor IndexStore {
         let scope = "d.path = ?2 OR " + Self.subtree("d.path", low: 1, high: 4)
         try prepare("""
             SELECT d.path, fi.name, fi.size, fi.capture, fi.kind
-            FROM file fi JOIN folder d ON d.id = fi.folder_id
-            WHERE (\(scope)) AND fi.live = 0 AND fi.added IS NOT NULL
-            ORDER BY fi.added DESC, d.path, fi.name
+            FROM file fi
+            JOIN folder d ON d.id = fi.folder_id
+            -- Une jointure, pas un LEFT JOIN : sans date d'arrivee notee, le fichier etait
+            -- deja la avant que Keo ne compte, et il n'a rien a faire dans « Derniers ajouts ».
+            JOIN arrival ar ON ar.folder_id = fi.folder_id
+                           AND ar.name = fi.name AND ar.size = fi.size
+            WHERE (\(scope)) AND fi.live = 0
+            ORDER BY ar.added DESC, d.path, fi.name
             LIMIT ?3
             """, into: &statement)
         bindSubtree(statement, folder, low: 1, high: 4)
