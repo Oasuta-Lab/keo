@@ -15,7 +15,14 @@ final class Store: ObservableObject {
 
     private let login = LoginTransport(session: ReadOnlyTransport.makeSession())
 
+    /// Le seul accès global du projet, et il existe pour une raison précise : une tâche
+    /// d'arrière-plan n'a pas de vue, donc pas d'environnement SwiftUI, et doit pourtant
+    /// savoir si l'app est appairée. Faible, pour ne pas prolonger la vie de ce que
+    /// `@StateObject` possède.
+    static private(set) weak var shared: Store?
+
     init() {
+        Self.shared = self
         guard let token = Keychain.get(account: host) else { return }
         guard let base = URL(string: apiBase) else { return }
         client = FreeboxClient(endpoint: FreeboxEndpoint(base: base, boxName: boxName),

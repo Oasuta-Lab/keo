@@ -129,7 +129,16 @@ struct HomeView: View {
         .task { await load() }
         .onChange(of: undoer.revision) { _, _ in Task { await load() } }
         .onChange(of: indexer.state.isRunning) { _, _ in Task { await load() } }
-        .refreshable { await load() }
+        // Tirer vers le bas, c'est « va voir ». Avant, ça ne relisait que l'index local :
+        // le geste promettait d'aller chercher du neuf et n'allait nulle part. Il lance
+        // maintenant une découverte — un parcours qui liste sans lire aucune date — et rend
+        // la main aussitôt : l'état s'affiche dans la rangée « Indexation », qui est faite
+        // pour ça, plutôt que de retenir le ressort pendant toute la marche.
+        .refreshable {
+            await load()
+            guard !indexer.state.isRunning else { return }
+            indexer.start(client: client, scope: .discover)
+        }
     }
 
     /// The date rides above the name as an eyebrow, in the same treatment « CE JOUR-LÀ » wears

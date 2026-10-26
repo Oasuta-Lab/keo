@@ -228,6 +228,14 @@ final class Indexer: ObservableObject {
         case recheck
         /// Throw away every date and read them all again.
         case rebuild
+        /// Walk and list, and read nothing at all.
+        ///
+        /// Ce que fait la découverte périodique : elle ne cherche pas à dater, seulement à
+        /// savoir que des fichiers sont apparus. Un dossier dont la date de modification et
+        /// le nombre d'enfants n'ont pas bougé est sauté sans être listé, donc un passage sur
+        /// une bibliothèque inchangée ne coûte presque rien. Lire les dates, lui, coûte un
+        /// aller-retour réseau par fichier — c'est le geste que le propriétaire déclenche.
+        case discover
     }
 
     func start(from root: String = FreeboxClient.rootPath, client: FreeboxClient,
@@ -369,6 +377,9 @@ final class Indexer: ObservableObject {
         do {
             switch scope {
             case .recheck: try await IndexStore.shared.forgetWalk()
+            // `discover` n'efface rien : il s'appuie au contraire sur les empreintes de
+            // dossier pour sauter tout ce qui n'a pas bougé.
+            case .discover: break
             case .rebuild: try await IndexStore.shared.forgetEverything()
             case nil: break
             }
@@ -472,7 +483,7 @@ final class Indexer: ObservableObject {
                 await index(contents.filed, in: folder.path,
                             unread: Set(contents.companions.values.map(\.id)),
                             generation: generation, stamp: completion,
-                            client: client, progress: &progress)
+                            client: client, reading: scope != .discover, progress: &progress)
                 try? await IndexStore.shared.markLivePairs(in: folder.path)
             }
 
@@ -527,7 +538,8 @@ final class Indexer: ObservableObject {
     /// probed below for just the identifier and date its pairing verdict hangs on.
     private func index(_ files: [Item], in folder: String, unread skip: Set<Item.ID> = [],
                        generation: Int64, stamp: FolderStamp.Completion?,
-                       client: FreeboxClient, progress: inout Progress) async {
+                       client: FreeboxClient, reading: Bool = true,
+                       progress: inout Progress) async {
         guard let store = try? await IndexStore.shared.unread(files, in: folder) else { return }
         var todo = store.filter { $0.isMedia && !skip.contains($0.id) }
         // The hidden half of a candidate pair. Its date is the still's, so it was recorded
@@ -574,6 +586,17 @@ final class Indexer: ObservableObject {
         for document in filed {
             batch.append((document, nil))
             if batch.count >= IndexStore.batchSize { await flush(stamping: false) }
+        }
+
+        // Une découverte s'arrête ici : les lignes sont écrites avec `read = 0`, donc le
+        // compteur « N fichiers à lire » de l'accueil bouge tout seul et la rangée passe à
+        // l'ambre. Ce qui reste en dessous est le coûteux — un aller-retour réseau par
+        // fichier — et c'est précisément ce qu'une tâche d'arrière-plan ne doit pas faire
+        // sans qu'on le lui ait demandé.
+        guard reading else {
+            progress.folderTotal = 0
+            await flush(stamping: true)
+            return
         }
 
 
