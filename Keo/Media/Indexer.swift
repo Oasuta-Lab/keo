@@ -239,11 +239,11 @@ final class Indexer: ObservableObject {
         case rebuild
         /// Walk and list, and read nothing at all.
         ///
-        /// Ce que fait la découverte périodique : elle ne cherche pas à dater, seulement à
-        /// savoir que des fichiers sont apparus. Un dossier dont la date de modification et
-        /// le nombre d'enfants n'ont pas bougé est sauté sans être listé, donc un passage sur
-        /// une bibliothèque inchangée ne coûte presque rien. Lire les dates, lui, coûte un
-        /// aller-retour réseau par fichier — c'est le geste que le propriétaire déclenche.
+        /// What periodic discovery does: it does not try to date anything, only to know
+        /// that files have appeared. A folder whose modification date and child count have
+        /// not moved is skipped without being listed, so a pass over an unchanged library
+        /// costs almost nothing. Reading dates, on the other hand, costs one network round
+        /// trip per file — that is the gesture the owner triggers.
         case discover
     }
 
@@ -299,15 +299,15 @@ final class Indexer: ObservableObject {
         halt()
     }
 
-    /// Le client en service. Il était capturé par l'observateur de premier plan, posé une
-    /// seule fois et pour toujours : après un réappairage, le retour au premier plan
-    /// repartait donc avec le client que la box venait de refuser, et qui refuse désormais
-    /// tout seul sans même demander.
+    /// The client in service. It used to be captured by the foreground observer, set once
+    /// and for ever: after a re-pairing, returning to the foreground therefore restarted
+    /// with the very client the box had just refused — one that now fails on its own
+    /// without even asking.
     private var current: FreeboxClient?
 
-    /// Appelé par `Store` dès qu'il construit un client neuf — réappairage, ou jeton plus
-    /// frais trouvé dans le trousseau. La file est vidée parce que ses entrées portent chacune
-    /// l'ancien client ; ce qui reste à faire est dans `resumeRoot`, et repartira avec le bon.
+    /// Called by `Store` as soon as it builds a fresh client — re-pairing, or a fresher token
+    /// found in the keychain. The queue is emptied because its entries each carry the old
+    /// client; what remains to be done is in `resumeRoot`, and will restart with the right one.
     func adopt(_ client: FreeboxClient) {
         guard current !== client else { return }
         current = client
@@ -441,8 +441,8 @@ final class Indexer: ObservableObject {
         do {
             switch scope {
             case .recheck: try await IndexStore.shared.forgetWalk()
-            // `discover` n'efface rien : il s'appuie au contraire sur les empreintes de
-            // dossier pour sauter tout ce qui n'a pas bougé.
+            // `discover` erases nothing: on the contrary, it relies on the folder stamps to
+            // skip everything that has not moved.
             case .discover: break
             case .rebuild: try await IndexStore.shared.forgetEverything()
             case nil: break
@@ -679,11 +679,11 @@ final class Indexer: ObservableObject {
             if batch.count >= IndexStore.batchSize { await flush(stamping: false) }
         }
 
-        // Une découverte s'arrête ici : les lignes sont écrites avec `read = 0`, donc le
-        // compteur « N fichiers à lire » de l'accueil bouge tout seul et la rangée passe à
-        // l'ambre. Ce qui reste en dessous est le coûteux — un aller-retour réseau par
-        // fichier — et c'est précisément ce qu'une tâche d'arrière-plan ne doit pas faire
-        // sans qu'on le lui ait demandé.
+        // A discovery stops here: the rows are written with `read = 0`, so the home
+        // screen's « N fichiers à lire » counter moves on its own and the row turns amber.
+        // What remains below is the expensive part — one network round trip per file — and
+        // that is precisely what a background task must not do without having been asked
+        // for it.
         guard reading else {
             progress.folderTotal = 0
             await flush(stamping: true)

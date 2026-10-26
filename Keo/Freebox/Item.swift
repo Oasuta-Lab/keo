@@ -118,8 +118,8 @@ struct Item: Identifiable, Hashable, Sendable {
 
     /// Vector drawings: `image/*` by mime type, documents by every other measure. They are
     /// not photographs, they carry no capture date, and no system framework here renders them.
-    /// Non privé : le magasin reclasse les lignes déjà écrites à partir de cette liste, et
-    /// deux listes finiraient par diverger.
+    /// Not private: the store reclassifies already-written rows from this list, and two
+    /// lists would end up diverging.
     static let drawingExtensions: Set<String> = ["svg", "svgz", "ai", "eps"]
 
     private static let imageExtensions: Set<String> =

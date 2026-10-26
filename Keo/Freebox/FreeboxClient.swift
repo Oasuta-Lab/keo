@@ -112,14 +112,14 @@ actor FreeboxClient {
     /// launch opens fifty sessions against the box.
     private var opening: Task<String, Error>?
 
-    /// Prévenue une fois quand la box refuse l'application elle-même. Posée par `Store`, qui
-    /// est le seul à savoir quoi en faire ; `Freebox` ne connaît pas SwiftUI et n'a pas à
-    /// savoir qu'il existe un écran.
+    /// Notified once when the box refuses the application itself. Set by `Store`, which is
+    /// the only one that knows what to do with it; `Freebox` knows nothing of SwiftUI and
+    /// has no business knowing a screen exists.
     private let onAuthorizationLost: (@Sendable () -> Void)?
 
-    /// Vrai une fois la box ayant refusé l'application. Tant qu'il l'est, plus aucune session
-    /// n'est rouverte : cinquante vignettes qui redemandent chacune un jeton mort fabriquent
-    /// le `ratelimited` de la Freebox, qui gênerait ensuite le réappairage lui-même.
+    /// True once the box has refused the application. While it is, no session is ever
+    /// reopened: fifty thumbnails each re-asking for a dead token manufacture the Freebox's
+    /// `ratelimited`, which would then get in the way of the re-pairing itself.
     private var refused = false
 
     init(endpoint: FreeboxEndpoint, appToken: String,
@@ -297,25 +297,25 @@ actor FreeboxClient {
             do {
                 return try await work(try await currentSession())
             } catch let error as FreeboxError where error.isSessionProblem || error.isForbidden {
-                // Rien à tracer ici : `trace` vit dans l'indexeur, qui dépend de SwiftUI et ne
-                // peut pas entrer dans la liste vérifiée dont ce fichier fait partie. Et il n'y
-                // en a plus besoin — l'erreur qui remonte porte désormais le mot de la box, que
-                // l'appelant journalise déjà (« list FAILED … »).
+                // Nothing to trace here: `trace` lives in the indexer, which depends on
+                // SwiftUI and cannot enter the checked list this file belongs to. And it is
+                // no longer needed — the error that bubbles up now carries the box's word,
+                // which the caller already logs (« list FAILED … »).
                 sessionToken = nil
                 return try await work(try await openSession())
             }
         } catch let lost as FreeboxError where lost.isAuthorizationLost {
-            // Le refus est examiné **aux deux tentatives**, pas seulement à la seconde.
-            // Enfermé dans la branche de reprise, il ne sortait que si la première erreur
-            // était un problème de session — alors que le cas courant est l'inverse : le
-            // jeton révoqué fait échouer l'ouverture elle-même, donc la première tentative,
-            // et le refus filait vers l'appelant sans que personne ne soit prévenu.
+            // The refusal is examined **on both attempts**, not only the second. Locked
+            // inside the retry branch, it only surfaced when the first error was a session
+            // problem — whereas the common case is the opposite: the revoked token makes the
+            // opening itself fail, hence the first attempt, and the refusal slipped through
+            // to the caller without anyone being told.
             noteRefusal()
             throw lost
         }
     }
 
-    /// Un refus définitif : on cesse de redemander, et on le dit une fois.
+    /// A final refusal: stop asking again, and say it once.
     private func noteRefusal() {
         guard !refused else { return }
         refused = true
@@ -356,11 +356,11 @@ actor FreeboxClient {
         do {
             token = try await task.value
         } catch let error as FreeboxError where error.refusesTheApplication {
-            // La poignée de main elle-même a été refusée. À ce stade il n'y a pas de session
-            // à rouvrir — c'est le jeton d'application qui n'est pas reconnu, et aucune
-            // insistance n'y changera quoi que ce soit. Dit ici plutôt que dans `authorized`,
-            // parce que c'est le seul endroit qui sait que l'échec vient de l'ouverture et
-            // non de la lecture qui la suit.
+            // The handshake itself was refused. At this point there is no session to reopen
+            // — it is the application token that is not recognised, and no amount of
+            // insisting will change anything. Said here rather than in `authorized`, because
+            // this is the only place that knows the failure comes from the opening and not
+            // from the read that follows it.
             noteRefusal()
             throw error
         }

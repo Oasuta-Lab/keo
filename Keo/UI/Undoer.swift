@@ -71,8 +71,8 @@ final class Undoer: ObservableObject {
     /// "1 favori retiré" / "3 favoris retirés". Written once because every call site needs
     /// it and none of them should be the place a plural rule is got wrong — note that French
     /// keeps the singular at zero, which `> 1` gets right and `!= 1` would not.
-    /// Gardé ici parce que tout l'écran l'appelle par ce nom ; la règle elle-même vit dans
-    /// `Plural`, que l'extension widget peut atteindre.
+    /// Kept here because the whole screen calls it by this name; the rule itself lives in
+    /// `Plural`, which the widget extension can reach.
     static func count(_ n: Int, _ one: String, _ many: String) -> String {
         Plural.count(n, one, many)
     }
@@ -118,9 +118,9 @@ struct UndoBanner: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 2)
             .frame(maxWidth: 420)
-            // `.ultraThinMaterial`, pas `.bar` : cette capsule flotte au-dessus du
-            // contenu comme les puces et la bulle du rail, et `.bar` est le fond d'une
-            // barre collée à un bord. Sur une photo noire, les deux ne se répondaient pas.
+            // `.ultraThinMaterial`, not `.bar`: this capsule floats over the content like
+            // the chips and the rail's bubble, and `.bar` is the background of a bar glued
+            // to an edge. Over a black photo, the two did not speak to each other.
             .background(.ultraThinMaterial, in: Capsule())
             .padding(.horizontal, 16)
             // Swipe it away rather than wait it out. The step stays on the stack — shaking

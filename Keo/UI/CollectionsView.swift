@@ -71,7 +71,7 @@ struct CollectionsView: View {
         // Favoris and Parcourir both pull to refresh; a collection arriving from another
         // device is exactly the case that wants it.
         .refreshable { await reload() }
-        // Every other personalisation — épingler, favoriser, annoter — is reversible by
+        // Every other personalisation — pinning, favouriting, annotating — is reversible by
         // shaking. This one is not: the collection and its contents go together.
         // An alert rather than a confirmation dialog: a dialog slides up from the bottom
         // edge, which read as badly placed for a question about the row under your finger.
@@ -102,10 +102,10 @@ struct CollectionsView: View {
                                     set: { if !$0 { naming = false; renaming = nil } })) {
             TextField("Nom", text: $name)
             Button("Annuler", role: .cancel) { naming = false; renaming = nil }
-            // Le verbe du bouton est celui de l'action, pas « Valider » : c'est le même mot
-            // du début à la fin du geste. Et le nom vide est refusé ici — il l'était déjà
-            // dans le sélecteur de collection, mais pas sur cet écran, où l'échec du store
-            // était avalé par un `try?` et ne disait rien.
+            // The button's verb is the action's, not « Valider »: it is the same word from
+            // the start of the gesture to its end. And the empty name is refused here — it
+            // already was in the collection picker, but not on this screen, where the
+            // store's failure was swallowed by a `try?` and said nothing.
             Button(renaming == nil ? "Créer" : "Renommer") {
                 let typed = name.trimmingCharacters(in: .whitespacesAndNewlines)
                 let target = renaming
@@ -121,8 +121,8 @@ struct CollectionsView: View {
                 }
             }
         }
-        // Muette tant que tout va bien — voir `SyncFootnote`. Une collection créée sur un
-        // autre appareil arrive ici toute seule, et c'est ce moment-là qui mérite une ligne.
+        // Silent while all is well — see `SyncFootnote`. A collection created on another
+        // device lands here on its own, and that moment is the one worth a line.
         .safeAreaInset(edge: .bottom, spacing: 0) { SyncFootnote() }
         .task { await reload() }
         // Pinning, or undoing one, can happen from another screen entirely.

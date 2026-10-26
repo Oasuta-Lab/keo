@@ -90,7 +90,7 @@ struct StatsView: View {
         }
     }
 
-    // MARK: Chronologie
+    // MARK: Chronology
 
     @ViewBuilder
     private func chronology(_ stats: LibraryStats) -> some View {
@@ -199,7 +199,7 @@ struct StatsView: View {
         return photos + " · " + videos
     }
 
-    // MARK: Poids
+    // MARK: Weight
 
     @ViewBuilder
     private func weight(_ stats: LibraryStats) -> some View {
@@ -237,8 +237,8 @@ struct StatsView: View {
             }
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
-                    // Une capsule, pas un rayon chiffré : la barre fait 6 pt de haut, donc
-                    // « moitié de la hauteur » est exactement ce qu'on veut dire.
+                    // A capsule, not a numbered radius: the bar is 6 pt tall, so "half the
+                    // height" is exactly what we mean.
                     Capsule().fill(.quaternary)
                     Capsule().fill(.tint)
                         .frame(width: geometry.size.width * subtree.fraction(of: heaviest))
@@ -254,7 +254,7 @@ struct StatsView: View {
         .padding(.vertical, 2)
     }
 
-    // MARK: Doublons probables
+    // MARK: Probable duplicates
 
     @ViewBuilder
     private func duplicates(_ stats: LibraryStats) -> some View {
@@ -282,7 +282,7 @@ struct StatsView: View {
         }
     }
 
-    // MARK: Plus gros fichiers
+    // MARK: Biggest files
 
     @ViewBuilder
     private func biggest(_ stats: LibraryStats) -> some View {
@@ -306,7 +306,7 @@ struct StatsView: View {
         }
     }
 
-    // MARK: Jours les plus photographiés
+    // MARK: Most photographed days
 
     @ViewBuilder
     private func busiest(_ stats: LibraryStats) -> some View {
@@ -327,7 +327,7 @@ struct StatsView: View {
         day.formatted(.dateTime.day().month(.wide).year())
     }
 
-    // MARK: Ce jour-là
+    // MARK: On this day
 
     @ViewBuilder
     private func onThisDay(_ stats: LibraryStats) -> some View {

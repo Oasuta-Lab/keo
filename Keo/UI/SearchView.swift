@@ -233,8 +233,8 @@ private struct Chip: View {
             .padding(.vertical, 7)
             .background(on ? AnyShapeStyle(.tint) : AnyShapeStyle(.quaternary),
                         in: Capsule())
-            // La capsule fait environ 33 pt de haut ; la cible doit atteindre 44 sans que la
-            // puce grossisse et fasse déborder la rangée. Même remède que `GridChip`.
+            // The capsule is about 33 pt tall; the target has to reach 44 without the chip
+            // growing and overflowing the row. Same remedy as `GridChip`.
             .contentShape(Capsule().inset(by: -6))
             .foregroundStyle(on ? AnyShapeStyle(Color("OnAccent")) : AnyShapeStyle(.primary))
             // The active state was carried by colour alone: VoiceOver announced a button with

@@ -9,12 +9,12 @@ final class Store: ObservableObject {
     @Published private(set) var client: FreeboxClient?
     @Published private(set) var phase: Phase = .idle
 
-    /// La box refuse l'application, et relire le trousseau n'a rien donné de plus frais.
+    /// The box refuses the application, and rereading the keychain gave nothing fresher.
     ///
-    /// Séparé de `phase` et surtout de `client`, qu'il ne faut **pas** mettre à nil : la
-    /// racine bascule sur l'écran d'appairage dès que le client disparaît, ce qui démonterait
-    /// la navigation et couperait l'accès à l'index local — alors que tout ce qui est déjà
-    /// indexé reste parfaitement consultable sans la box.
+    /// Separate from `phase` and above all from `client`, which must **not** be set to nil:
+    /// the root switches to the pairing screen the moment the client disappears, which would
+    /// tear down the navigation and cut off the local index — even though everything already
+    /// indexed stays perfectly browsable without the box.
     @Published private(set) var authorizationLost = false
 
     @AppStorage("host") var host = "mafreebox.freebox.fr"
@@ -23,10 +23,9 @@ final class Store: ObservableObject {
 
     private let login = LoginTransport(session: ReadOnlyTransport.makeSession())
 
-    /// Le seul accès global du projet, et il existe pour une raison précise : une tâche
-    /// d'arrière-plan n'a pas de vue, donc pas d'environnement SwiftUI, et doit pourtant
-    /// savoir si l'app est appairée. Faible, pour ne pas prolonger la vie de ce que
-    /// `@StateObject` possède.
+    /// The project's only global access, and it exists for a precise reason: a background
+    /// task has no view, hence no SwiftUI environment, and still has to know whether the app
+    /// is paired. Weak, so it never extends the life of what `@StateObject` owns.
     static private(set) weak var shared: Store?
 
     init() {
@@ -36,29 +35,29 @@ final class Store: ObservableObject {
         client = build(FreeboxEndpoint(base: base, boxName: boxName), token: token)
     }
 
-    /// Le jeton que porte le client en service. Sert à savoir si le trousseau en a un autre.
+    /// The token the client in service carries. Tells whether the keychain holds another one.
     private var tokenInUse: String?
 
-    /// Construit un client branché sur la reprise, et retient son jeton.
+    /// Builds a client wired into the recovery path, and remembers its token.
     private func build(_ endpoint: FreeboxEndpoint, token: String) -> FreeboxClient {
         tokenInUse = token
         let made = FreeboxClient(endpoint: endpoint, appToken: token) { [weak self] in
             Task { @MainActor in await self?.authorizationRefused() }
         }
-        // Sinon l'indexeur reprendrait avec celui que la box vient de refuser : il est retenu
-        // dans sa file et dans son observateur de premier plan, et réappairer ne l'en sort pas.
+        // Otherwise the indexer would resume with the one the box just refused: it is held
+        // in its queue and in its foreground observer, and re-pairing does not pull it out.
         Indexer.shared.adopt(made)
         return made
     }
 
-    /// Appelé quand la box a refusé l'application et que rouvrir une session n'y a rien fait.
+    /// Called when the box has refused the application and reopening a session fixed nothing.
     ///
-    /// Avant de dire quoi que ce soit : **relire le trousseau**. C'est là que se trouve la
-    /// réparation dans le cas le plus fréquent — un autre appareil du foyer vient de
-    /// s'associer, la Freebox ne reconnaît qu'un jeton par application, et le jeton tout neuf
-    /// arrive par iCloud quelques minutes plus tard. Sans cette relecture, l'app envoie
-    /// appuyer sur ✓ pour un problème qui se serait réglé seul — et ce ✓ révoquerait à son
-    /// tour l'autre appareil, en boucle.
+    /// Before saying anything: **reread the keychain**. That is where the repair lives in the
+    /// most frequent case — another device in the household just paired, the Freebox only
+    /// recognises one token per application, and the brand-new token arrives through iCloud a
+    /// few minutes later. Without this reread, the app sends someone to press ✓ for a problem
+    /// that would have fixed itself — and that ✓ would in turn revoke the other device, in a
+    /// loop.
     private func authorizationRefused() async {
         if let fresh = Keychain.get(account: host), fresh != tokenInUse,
            let base = URL(string: apiBase) {
@@ -69,8 +68,8 @@ final class Store: ObservableObject {
         authorizationLost = true
     }
 
-    /// À appeler au retour au premier plan tant que l'autorisation est perdue : le jeton peut
-    /// être arrivé entre-temps, et le trousseau iCloud met parfois des minutes.
+    /// To call on return to the foreground while authorization is lost: the token may have
+    /// arrived in the meantime, and the iCloud Keychain sometimes takes minutes.
     func retryWithFreshToken() async {
         guard authorizationLost else { return }
         await authorizationRefused()
@@ -105,15 +104,15 @@ final class Store: ObservableObject {
             authorizationLost = false
             phase = .idle
         } catch let error as FreeboxError where error.isAuthorizationLost {
-            // Seul un refus *nommé* par la box justifie de jeter la clé. L'ancienne version
-            // la supprimait sur n'importe quelle erreur, y compris un simple échec réseau :
-            // un premier lancement dans le métro effaçait donc du trousseau iCloud le jeton
-            // de tout le foyer.
+            // Only a refusal *named* by the box justifies throwing the key away. The old
+            // version deleted it on any error, including a plain network failure: a first
+            // launch on the métro therefore wiped the whole household's token from the
+            // iCloud Keychain.
             Keychain.delete(account: host)
             phase = .idle
         } catch {
-            // La box est hors de portée — l'état normal de cette app quand on n'est pas chez
-            // soi. On garde la clé et on se tait.
+            // The box is out of reach — this app's normal state away from home. Keep the
+            // key and say nothing.
             phase = .idle
         }
     }
@@ -137,8 +136,8 @@ final class Store: ObservableObject {
             let client = build(endpoint, token: request.app_token)
             _ = try await client.list(FreeboxClient.rootPath)   // surfaces a missing permission now
             self.client = client
-            // Un appairage réussi est la seule chose qui efface vraiment l'état : le jeton
-            // vient d'être accordé par un geste physique sur la box.
+            // A successful pairing is the only thing that truly clears the state: the token
+            // was just granted by a physical gesture on the box.
             authorizationLost = false
             phase = .idle
         } catch {

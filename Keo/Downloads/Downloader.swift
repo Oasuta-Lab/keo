@@ -123,8 +123,8 @@ struct DownloadBar: View {
             .padding(.vertical, 10)
             // A card in the same floating family as the action bar, not a slab glued
             // underneath it.
-            // Même famille que la bannière d'annulation et les puces : flottant, donc
-            // `.ultraThinMaterial` et non le fond d'une barre de bord.
+            // Same family as the undo banner and the chips: floating, hence
+            // `.ultraThinMaterial` and not an edge bar's background.
             .background(.ultraThinMaterial,
                         in: RoundedRectangle(cornerRadius: Theme.Radius.card,
                                              style: .continuous))

@@ -612,12 +612,12 @@ private struct VideoPage: View {
     }
 }
 
-/// AVKit, sans ses commandes.
+/// AVKit, without its controls.
 ///
-/// Deux barres qui se disputent le bas de l'écran ne se règlent ni en les empilant — ça
-/// amputait la vidéo en paysage — ni en effaçant la nôtre, puisque AVKit dessine les siennes
-/// au-dessus de tout et masquait alors le bandeau du haut. Alors le lecteur se tait, et Keo
-/// garde une seule barre de commandes, la sienne, posée par-dessus l'image.
+/// Two bars fighting over the bottom of the screen are settled neither by stacking them —
+/// that amputated the video in landscape — nor by erasing ours, since AVKit draws its own
+/// above everything and then masked the top banner. So the player keeps quiet, and Keo
+/// keeps a single control bar, its own, laid over the image.
 private struct PlayerSurface: UIViewControllerRepresentable {
     let player: AVPlayer
 
@@ -635,16 +635,16 @@ private struct PlayerSurface: UIViewControllerRepresentable {
     }
 }
 
-/// Lecture, position, durée. Le strict nécessaire, et sans fond à lui : c'est une rangée de
-/// la capsule des actions, pas une capsule de plus — deux pastilles empilées au même endroit
-/// se disputaient le pouce et le bas de l'écran.
+/// Play, position, duration. The bare minimum, and with no background of its own: it is a
+/// row of the actions capsule, not one more capsule — two pills stacked in the same spot
+/// fought over the thumb and the bottom of the screen.
 private struct Transport: View {
     let player: AVPlayer
 
     @State private var elapsed: Double = 0
     @State private var total: Double = 0
     @State private var playing = true
-    /// Pendant qu'un doigt tient la tête de lecture, l'horloge n'a pas son mot à dire.
+    /// While a finger holds the playhead, the clock has no say.
     @State private var scrubbing = false
     /// The play glyph swaps for a pause glyph of a different width; the fixed slot stops the
     /// clock beside it from jumping. It has to grow with the type, or the glyph overflows it.

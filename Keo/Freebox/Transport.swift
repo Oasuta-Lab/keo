@@ -24,21 +24,21 @@ enum FreeboxError: LocalizedError, Sendable {
     /// The session token expired or was never opened — worth exactly one retry.
     var isSessionProblem: Bool {
         if case .api(let code, _) = self {
-            // `invalid_session` n'est documenté nulle part chez Free ; gardé par prudence.
+            // `invalid_session` is documented nowhere at Free; kept out of caution.
             return code == "auth_required" || code == "invalid_session"
         }
         return false
     }
 
-    /// La box refuse l'**application**, pas la session : rouvrir n'y changera rien.
+    /// The box refuses the **application**, not the session: reopening will change nothing.
     ///
-    /// `invalid_token` est le jeton révoqué — celui qu'un réappairage ailleurs produit, car la
-    /// Freebox ne reconnaît qu'un jeton par `app_id`. `pending_token` est un jeton délivré
-    /// dont le ✓ n'a jamais été pressé. Les deux demandent un geste physique sur la box, ou
-    /// un jeton plus frais venu du trousseau.
+    /// `invalid_token` is the revoked token — the one a re-pairing elsewhere produces, since
+    /// the Freebox only recognises one token per `app_id`. `pending_token` is a token that
+    /// was issued but whose ✓ was never pressed. Both require a physical gesture on the box,
+    /// or a fresher token from the keychain.
     ///
-    /// `insufficient_rights` n'est délibérément pas ici : le jeton y est bon, c'est la
-    /// permission « Accès aux fichiers » qui manque, et réappairer n'y changerait rien.
+    /// `insufficient_rights` is deliberately not here: the token is fine there, it is the
+    /// « Accès aux fichiers » permission that is missing, and re-pairing would change nothing.
     var isAuthorizationLost: Bool {
         if case .api(let code, _) = self {
             return code == "invalid_token" || code == "pending_token"
@@ -47,28 +47,28 @@ enum FreeboxError: LocalizedError, Sendable {
         return false
     }
 
-    /// Le mot exact de la box, pour la trace. Le message affiché ne dit pas lequel des
-    /// refus on a — « Erreur d'authentification de l'application » peut sortir de plus d'un
-    /// code, et c'est le code qui décide si la bannière doit paraître.
+    /// The box's exact word, for the trace. The displayed message does not say which of the
+    /// refusals this is — « Erreur d'authentification de l'application » can come out of more
+    /// than one code, and the code is what decides whether the banner must appear.
     var apiCode: String? {
         if case .api(let code, _) = self { return code }
         return nil
     }
 
-    /// Le même refus, vu depuis la poignée de main — et là, la liste ci-dessus est trop
-    /// courte pour servir de garde.
+    /// The same refusal, seen from the handshake — and there, the list above is too short
+    /// to serve as a guard.
     ///
-    /// Ouvrir une session ne demande qu'une chose : que la box reconnaisse le jeton
-    /// d'application. Si elle refuse en le nommant, **quel que soit le mot**, c'est que ce
-    /// jeton ne vaut plus rien ; il n'y a pas de session à rouvrir derrière et insister ne
-    /// peut rien donner. Une liste blanche de codes y serait un pari sur le vocabulaire de
-    /// Free, alors que la question est déjà tranchée par l'endroit où l'erreur est née.
+    /// Opening a session asks for exactly one thing: that the box recognise the application
+    /// token. If it refuses by naming it, **whatever the word**, that token is worth nothing
+    /// any more; there is no session to reopen behind it and insisting can achieve nothing.
+    /// A whitelist of codes here would be a bet on Free's vocabulary, when the question is
+    /// already settled by where the error was born.
     ///
-    /// `ratelimited` est la seule exception, et c'est important : il est temporaire, se lève
-    /// tout seul, et le prendre pour une révocation enverrait appuyer sur ✓ — ce qui
-    /// révoquerait les autres appareils du foyer pour une minute d'attente.
+    /// `ratelimited` is the one exception, and it matters: it is temporary, lifts on its
+    /// own, and mistaking it for a revocation would send someone to press ✓ — which would
+    /// revoke the household's other devices over a minute of waiting.
     ///
-    /// `noFileAccess` n'est pas concerné : ce n'est pas un `.api`, et le jeton y est bon.
+    /// `noFileAccess` is not concerned: it is not an `.api`, and the token is fine there.
     var refusesTheApplication: Bool {
         if case .api(let code, _) = self { return code != "ratelimited" }
         return false
@@ -143,11 +143,11 @@ struct ReadOnlyTransport: Sendable {
     /// Without this, a 504 hands its HTML error page to `JSONDecoder` and the user is told
     /// "the data couldn't be read because it isn't in the correct format".
     ///
-    /// `body` est passé quand on l'a : la box explique son refus dans la réponse —
-    /// `auth_required`, `insufficient_rights`, `invalid_token` — et sans lui, un 403 devenait
-    /// « Erreur réseau (403) », ce qui est faux deux fois : ce n'est pas le réseau, et ça ne
-    /// dit pas laquelle des trois pannes on a. Les requêtes d'octets lisaient déjà ce corps ;
-    /// les requêtes JSON, non.
+    /// `body` is passed when we have it: the box explains its refusal in the response —
+    /// `auth_required`, `insufficient_rights`, `invalid_token` — and without it, a 403 became
+    /// « Erreur réseau (403) », which is wrong twice over: it is not the network, and it does
+    /// not say which of the three failures this is. The byte requests already read this body;
+    /// the JSON requests did not.
     static func checkStatus(_ response: URLResponse, body: Data = Data()) throws {
         guard let http = response as? HTTPURLResponse else { throw FreeboxError.http(0) }
         guard (200..<300).contains(http.statusCode) else {
@@ -244,7 +244,7 @@ struct LoginTransport: Sendable {
         call.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let (data, response) = try await session.data(for: call)
-        // C'est ici que l'ouverture de session échoue, et c'est là que la box nomme la cause.
+        // This is where opening a session fails, and where the box names the cause.
         try ReadOnlyTransport.checkStatus(response, body: data)
         return try Envelope.unwrap(data, as: type)
     }

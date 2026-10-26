@@ -24,20 +24,20 @@ struct KeoApp: App {
                     ConnectView()
                 }
             }
-            // Une seule bannière, à la racine, pour une panne qui peut surgir de partout :
-            // une grille, la visionneuse, une marche d'indexation, un réveil en arrière-plan.
-            // Les vues n'en savent rien et continuent de montrer l'index local.
+            // One banner, at the root, for a failure that can surface from anywhere: a
+            // grid, the viewer, an indexing walk, a background wake. The views know nothing
+            // about it and keep showing the local index.
             //
-            // **Avant** les `environmentObject`, et ce n'est pas un détail de mise en forme :
-            // le contenu d'un `safeAreaInset` posé après eux n'est pas dans le sous-arbre
-            // qu'ils peuplent. La bannière s'affichait, puis `@EnvironmentObject` piégeait au
-            // premier appui — « Réessayer » fermait l'app.
+            // **Before** the `environmentObject`s, and that is not a layout detail: the
+            // content of a `safeAreaInset` placed after them is not in the subtree they
+            // populate. The banner showed, then `@EnvironmentObject` trapped on the first
+            // tap — « Réessayer » closed the app.
             .safeAreaInset(edge: .top, spacing: 0) {
                 if store.authorizationLost { AuthorizationBanner() }
             }
-            // Flottants plutôt qu'insérés : une marche dure des minutes et traverse tous les
-            // écrans, et un bandeau qui pousse le contenu de trois points le fait sauter deux
-            // fois par passage. L'un et l'autre se posent au-dessus, et ne déplacent rien.
+            // Floating rather than inset: a walk lasts minutes and crosses every screen,
+            // and a strip that pushes the content down three points makes it jump twice per
+            // pass. Both sit on top, and displace nothing.
             .overlay(alignment: .top) {
                 Group {
                     if let report = indexer.lastSummary {
@@ -51,8 +51,8 @@ struct KeoApp: App {
             .environmentObject(indexer)
             .environmentObject(sync)
             .environmentObject(undoer)
-            // Le jeton peut arriver par iCloud pendant que l'app est en arrière-plan, et le
-            // trousseau met parfois des minutes. Au retour, on retente en silence.
+            // The token can arrive through iCloud while the app is in the background, and
+            // the keychain sometimes takes minutes. On return, retry silently.
             .task(id: scenePhase) {
                 guard scenePhase == .active else { return }
                 await store.retryWithFreshToken()
@@ -60,13 +60,13 @@ struct KeoApp: App {
             // Independent of the Freebox pairing: favourites can come back from iCloud
             // before the box has ever answered.
             .task { await sync.start() }
-            // Une demande en attente, toujours : `submit` remplace celle de même identifiant,
-            // donc relancer l'app n'en empile pas deux. C'est ce qui permet à Keo d'apprendre
-            // qu'un fichier est arrivé sans qu'on ait eu à y penser. Le *handler*, lui, est
-            // enregistré dans `init` — voir `PeriodicDiscovery.register`.
+            // One pending request, always: `submit` replaces the one with the same
+            // identifier, so relaunching the app never stacks two. This is what lets Keo
+            // learn that a file has arrived without anyone having to think about it. The
+            // *handler* is registered in `init` — see `PeriodicDiscovery.register`.
             .task { PeriodicDiscovery.schedule() }
-            // Le bilan du dernier passage vit dans l'index, pas en mémoire : sans ça, l'écran
-            // Indexation et la rangée de l'accueil repartent muets à chaque lancement.
+            // The last pass's report lives in the index, not in memory: without this, the
+            // Indexation screen and the home row start out mute on every launch.
             .task { await indexer.restoreLastPass() }
             .onOpenURL { link = DeepLink($0) }
             // Zero-sized, and the only place a shake is heard. It gives up first responder
@@ -78,17 +78,16 @@ struct KeoApp: App {
 }
 
 
-/// Dit la seule panne que le propriétaire doit traiter lui-même, et ce qu'elle veut dire.
+/// Tells the one failure the owner must handle themselves, and what it means.
 ///
-/// Elle ne couvre pas « la box est hors de portée » : être ailleurs que chez soi est l'état
-/// normal de cette app, et tout ce qui est indexé reste consultable. Elle ne paraît que sur un
-/// refus **nommé** par la Freebox, qui a survécu à une réouverture de session et à une
-/// relecture du trousseau.
+/// It does not cover "the box is out of reach": being away from home is this app's normal
+/// state, and everything indexed stays browsable. It only appears on a refusal **named** by
+/// the Freebox, one that survived reopening the session and rereading the keychain.
 ///
-/// Le premier mot va à l'explication la plus probable, et c'est celle qui a mordu : un autre
-/// appareil vient de s'associer, la box ne reconnaît qu'un jeton par application, et le jeton
-/// neuf arrive par iCloud quelques minutes plus tard. Appuyer sur ✓ marche aussi, mais
-/// révoque à son tour l'autre appareil — autant le dire avant de l'envoyer le faire.
+/// The first word goes to the most likely explanation, and it is the one that has bitten:
+/// another device just paired, the box only recognises one token per application, and the
+/// fresh token arrives through iCloud a few minutes later. Pressing ✓ works too, but revokes
+/// the other device in turn — better to say so before sending someone to do it.
 private struct AuthorizationBanner: View {
     @EnvironmentObject private var store: Store
     @State private var repairing = false
@@ -120,17 +119,17 @@ private struct AuthorizationBanner: View {
     }
 }
 
-/// Ce qu'une marche terminée a changé, dit une fois puis oublié.
+/// What a finished walk changed, said once and then forgotten.
 ///
-/// Il ne paraît qu'après une passe **complète**. Une passe interrompue sait ce qu'elle a vu,
-/// pas ce qu'elle a manqué, et « Rien de neuf » venant d'une marche qui a atteint quatre
-/// dossiers sur huit mille est le genre de réconfort qui ne coûte qu'une fois.
+/// It only appears after a **complete** pass. An interrupted pass knows what it saw, not
+/// what it missed, and « Rien de neuf » coming from a walk that reached four folders out of
+/// eight thousand is the kind of reassurance that only costs you once.
 private struct WalkReportCard: View {
     let summary: WalkSummary
     let dismiss: () -> Void
 
-    /// Assez pour lire quatre lignes sans se presser, assez peu pour ne pas rester dans le
-    /// chemin de quelqu'un qui fait autre chose.
+    /// Long enough to read four lines without hurrying, short enough not to stay in the
+    /// way of someone doing something else.
     private static let linger: Duration = .seconds(8)
 
     var body: some View {
@@ -161,8 +160,8 @@ private struct WalkReportCard: View {
         .padding(.top, 6)
         .contentShape(Rectangle())
         .onTapGesture(perform: dismiss)
-        // Vers le haut : le geste va dans la direction d'où la carte est venue, et il ne peut
-        // pas être confondu avec le défilement de ce qu'elle recouvre.
+        // Upwards: the gesture goes in the direction the card came from, and it cannot be
+        // mistaken for scrolling whatever it covers.
         .gesture(DragGesture(minimumDistance: 12).onEnded { move in
             if move.translation.height < 0 { dismiss() }
         })
@@ -178,9 +177,9 @@ private struct WalkReportCard: View {
     }
 }
 
-/// Réutilise `pair()` tel quel : il sait déjà découvrir la box, attendre le ✓, ranger le jeton
-/// dans le trousseau et valider par une lecture. Rien à réécrire, et une seule façon
-/// d'associer dans tout le projet.
+/// Reuses `pair()` as is: it already knows how to discover the box, wait for the ✓, store
+/// the token in the keychain and validate with a read. Nothing to rewrite, and a single way
+/// to pair in the whole project.
 private struct ReassociateSheet: View {
     @EnvironmentObject private var store: Store
     @Environment(\.dismiss) private var dismiss
@@ -225,7 +224,7 @@ private struct ReassociateSheet: View {
                 }
             }
         }
-        // Elle se ferme d'elle-même dès que l'autorisation est revenue, par ✓ ou par iCloud.
+        // Closes on its own as soon as authorization is back, whether by ✓ or by iCloud.
         .onChange(of: store.authorizationLost) { _, lost in if !lost { dismiss() } }
     }
 }
@@ -326,8 +325,8 @@ private struct Shelf: View {
             }
         }
         .modifier(ModernTabBar())
-        // Zéro par zéro, et seulement là pour trouver la barre d'onglets depuis SwiftUI, qui
-        // n'en donne aucune prise. Ce qui est dessiné l'est dans la barre elle-même.
+        // Zero by zero, and only there to find the tab bar from SwiftUI, which offers no
+        // handle on it. Whatever is drawn is drawn in the bar itself.
         .background {
             TabBarGlow(running: indexer.state.isRunning).frame(width: 0, height: 0)
         }

@@ -58,7 +58,12 @@ xcodebuild -project Keo.xcodeproj -scheme Keo -configuration Debug \
 Trois fichiers existent en double, à l'octet près, parce que les deux cibles ne partagent
 aucun fichier : `WidgetManifest.swift`, `Theme.swift` et `Plural.swift`, dans `Keo/` et dans
 `KeoWidget/`. Éditer l'un sans l'autre fait échouer la vérification, et c'est voulu — c'est
-le seul garde-fou. Les copier, ne pas les faire diverger.
+le seul garde-fou. Les copier (`cp`), ne pas les faire diverger.
+
+Une quatrième duplication ne peut pas être byte-identique : `Photo.downsample`
+(`KeoWidget/KeoWidget.swift`) et `ImageDecoding.downsample` (`Keo/Media/`) rendent deux types
+différents. `checkTheDownsampleLogicMatches` compare leurs options ImageIO. Toucher à l'une
+veut dire toucher à l'autre.
 
 Un fichier de `Tests/` ne doit pas porter le nom d'un fichier de `Keo/` à la casse près :
 le système de fichiers est insensible à la casse, les deux produisent le même fichier objet,

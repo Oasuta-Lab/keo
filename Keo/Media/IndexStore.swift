@@ -69,23 +69,23 @@ actor IndexStore {
         // Rows written before the column existed were all read ones.
         try? exec("UPDATE file SET read = 1 WHERE read = 0 AND capture IS NOT NULL")
 
-        // La première version des arrivées notait tout le contenu d'un dossier dès son
-        // premier passage, faute de demander si Keo le connaissait déjà. Les lignes qu'elle a
-        // écrites ne veulent rien dire : des fichiers posés là depuis des années datés de
-        // l'instant où l'index les a rencontrés. On les jette une fois — l'étagère repart
-        // vide, ce qui est exactement ce qu'elle doit dire tant que rien n'est arrivé.
+        // The first version of arrivals recorded a folder's entire contents on its first
+        // pass, for want of asking whether Keo already knew it. The rows it wrote mean
+        // nothing: files sitting there for years, dated to the instant the index met them.
+        // They are thrown away once — the shelf starts over empty, which is exactly what it
+        // should say as long as nothing has arrived.
         if (try? scalar("PRAGMA user_version")) ?? 0 == 0 {
             try? exec("DELETE FROM arrival")
             try? exec("PRAGMA user_version = 1")
         }
 
-        // Les dessins vectoriels étaient rangés parmi les photos, parce que la box les annonce
-        // en `image/svg+xml`. Sans ce rattrapage, les lignes déjà écrites garderaient leur
-        // ancien genre jusqu'à une réindexation complète — c'est-à-dire des photos qui ne
-        // s'affichent jamais, en tête de la timeline et de « Dernières photos ».
+        // Vector drawings were filed among the photos, because the box announces them as
+        // `image/svg+xml`. Without this catch-up, the rows already written would keep their
+        // old kind until a full reindex — that is, photos that never display, at the top of
+        // the timeline and of « Dernières photos ».
         //
-        // Un `UPDATE` ciblé, pas une valeur par défaut sur la colonne : c'est une colonne
-        // `kind` et un `DEFAULT` qui avaient transformé toute la bibliothèque en dossiers.
+        // A targeted `UPDATE`, not a default value on the column: a `kind` column and a
+        // `DEFAULT` are what once turned the whole library into folders.
         if (try? scalar("PRAGMA user_version")) ?? 0 == 1 {
             let drawings = Item.drawingExtensions.sorted()
                 .map { "lower(name) LIKE '%.\($0)'" }.joined(separator: " OR ")
@@ -384,18 +384,18 @@ actor IndexStore {
             let id = try folderID(folder, create: true)!
             try exec("UPDATE folder SET gen = \(generation) WHERE id = \(id)")
 
-            // Noté avant que les lignes de `file` ne soient écrites, parce que les deux
-            // conditions se lisent sur l'état d'avant.
+            // Recorded before the `file` rows are written, because both conditions read off
+            // the state as it was before.
             //
-            // « Déjà listé » (`mtime IS NOT NULL`) est la condition que la première version
-            // avait oubliée, et c'est elle qui comptait : la table d'arrivées était vide à la
-            // livraison, donc le premier passage sur un dossier tamponnait tout son contenu
-            // comme arrivé à l'instant — des fichiers posés là depuis des années. Un fichier
-            // n'est une arrivée que s'il apparaît dans un dossier que Keo connaissait déjà.
+            // "Already listed" (`mtime IS NOT NULL`) is the condition the first version had
+            // forgotten, and it was the one that mattered: the arrivals table was empty at
+            // delivery, so the first pass over a folder stamped its entire contents as
+            // arrived just now — files sitting there for years. A file is only an arrival if
+            // it appears in a folder Keo already knew.
             //
-            // « Pas déjà dans `file` » écarte ce qui était là au passage précédent, et
-            // `OR IGNORE` empêche de redater ce qui a déjà sa date — y compris après une
-            // reconstruction, qui vide `file` mais pas cette table.
+            // "Not already in `file`" sets aside what was there on the previous pass, and
+            // `OR IGNORE` keeps what already has its date from being re-dated — including
+            // after a rebuild, which empties `file` but not this table.
             let arriving = results.map(\.item) + present
             if !arriving.isEmpty {
                 var note: OpaquePointer?
@@ -2483,9 +2483,9 @@ actor IndexStore {
         guard sqlite3_step(statement) == SQLITE_DONE else { throw Failure.write(message) }
     }
 
-    /// Les dates passent par ici plutôt que par `value`/`setValue` : un horodatage rangé en
-    /// entier est tronqué à la seconde inférieure, et une arrivée survenue dans la même
-    /// seconde que le repère restait alors « non vue » pour toujours.
+    /// Dates come through here rather than through `value`/`setValue`: a timestamp stored as
+    /// an integer is truncated to the second below, and an arrival that happened within the
+    /// same second as the marker then stayed "unseen" for ever.
     private func doubleValue(forKey key: String) throws -> Double? {
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
@@ -2557,27 +2557,15 @@ actor IndexStore {
 
     // MARK: Widget
 
-    /// The photos the widget shows for a pinned folder, taken from its whole subtree.
+    /// How many arrivals the owner has not seen yet.
     ///
-    /// Ordered by kind first so photos come before videos: a video costs an
-    /// `AVAssetImageGenerator` pass to produce one frame. Undated files sort last on their
-    /// own — SQLite ranks NULL below everything, so `capture DESC` leaves them as filler for
-    /// a folder the date reader has not reached yet, rather than as the headline.
-    /// Named apart from `covers(for:)`, which answers "one tile image per folder" — same
-    /// ordering, a different question, and two overloads of one name would read as the same.
-    /// `kinds` restreint ce qui remonte. L'étagère de l'accueil s'appelle « Dernières
-    /// photos » : elle ne doit donc montrer que des photos, pas des vidéos sous un titre qui
-    /// n'est pas le leur. Le widget, lui, prend les deux.
-    /// Combien d'arrivées le propriétaire n'a pas encore vues.
+    /// A counter of **arrivals**, not a counter of reads. The app already has « N fichiers à
+    /// lire », which means "there are dates left to go fetch" — a document has none, it is
+    /// complete as soon as it is listed, and counting it there would promise work that does
+    /// not exist, on a light that would never go out. Two different questions, two numbers.
     ///
-    /// Un compteur d'**arrivées**, et pas un compteur de lectures. L'app a déjà « N fichiers à
-    /// lire », qui veut dire « il reste des dates à aller chercher » — un document n'en a
-    /// aucune, il est complet dès qu'il est listé, et l'y compter ferait promettre un travail
-    /// qui n'existe pas à un voyant qui ne s'éteindrait jamais. Deux questions différentes,
-    /// deux chiffres.
-    ///
-    /// Le repère est la date de la dernière fois que l'étagère a été à l'écran. Absent, tout
-    /// compte : à la première ouverture après une arrivée, elle se signale.
+    /// The marker is the date the shelf was last on screen. Absent, everything counts: on
+    /// the first opening after an arrival, it makes itself known.
     func unseenArrivals() throws -> Int {
         try open()
         let since = try doubleValue(forKey: Self.arrivalsSeenKey) ?? 0
@@ -2589,9 +2577,9 @@ actor IndexStore {
         return Int(sqlite3_column_int64(statement, 0))
     }
 
-    /// Avance le repère à maintenant. Appelé quand l'étagère paraît : « vu » veut dire que
-    /// l'app l'a montré, pas que quelqu'un a cliqué quelque part — un compteur qu'on ne peut
-    /// éteindre que par un geste précis finit allumé pour toujours.
+    /// Moves the marker to now. Called when the shelf appears: "seen" means the app showed
+    /// it, not that somebody clicked somewhere — a counter that can only be turned off by a
+    /// precise gesture ends up lit for ever.
     func markArrivalsSeen() throws {
         try open()
         try setDoubleValue(Date().timeIntervalSince1970, forKey: Self.arrivalsSeenKey)
@@ -2599,11 +2587,11 @@ actor IndexStore {
 
     private static let arrivalsSeenKey = "arrivalsSeenAt"
 
-    /// Ce qui est arrivé depuis que Keo regarde, tous genres confondus — documents compris.
+    /// What has arrived since Keo has been watching, all kinds together — documents included.
     ///
-    /// La jointure avec `arrival` fait le tri toute seule : ce qui a été indexé avant
-    /// l'existence de la table n'y figure pas, et il vaut mieux une étagère qui se remplit au
-    /// fil des jours qu'une étagère qui ment sur ses 23 000 premiers éléments.
+    /// The join with `arrival` does the sorting on its own: whatever was indexed before the
+    /// table existed does not appear in it, and a shelf that fills up as the days go by beats
+    /// a shelf that lies about its first 23 000 elements.
     func recentlyAdded(under folder: String, limit: Int = 6) throws -> [Item] {
         try open()
         var statement: OpaquePointer?
@@ -2645,6 +2633,17 @@ actor IndexStore {
         return found
     }
 
+    /// The photos the widget shows for a pinned folder, taken from its whole subtree.
+    ///
+    /// Ordered by kind first so photos come before videos: a video costs an
+    /// `AVAssetImageGenerator` pass to produce one frame. Undated files sort last on their
+    /// own — SQLite ranks NULL below everything, so `capture DESC` leaves them as filler for
+    /// a folder the date reader has not reached yet, rather than as the headline.
+    /// Named apart from `covers(for:)`, which answers "one tile image per folder" — same
+    /// ordering, a different question, and two overloads of one name would read as the same.
+    /// `kinds` narrows what comes back. The home-screen shelf is called « Dernières
+    /// photos »: it must therefore show only photos, not videos under a title that is not
+    /// theirs. The widget, for its part, takes both.
     func recentMedia(under folder: String, limit: Int = 12,
                      kinds: [Item.Kind] = [.image, .video]) throws -> [Item] {
         try open()

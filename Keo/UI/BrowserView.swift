@@ -295,15 +295,15 @@ struct BrowserView: View {
             VStack(spacing: 0) {
                 DownloadBar(downloader: downloader)
                 if selecting { selectionBar }
-                // `SyncFootnote` se décrit comme « au pied des onglets de personnalisation ».
-                // Collections et l'accueil l'avaient, Favoris non — alors que c'est le même
-                // contenu, venu du même iCloud, et que cet écran gère déjà l'état de
-                // récupération. Pas sur un dossier du NAS, qui ne se synchronise pas.
+                // `SyncFootnote` describes itself as sitting "at the foot of the
+                // personalisation tabs". Collections and the home screen had it, Favoris did
+                // not — even though it is the same content, from the same iCloud, and this
+                // screen already handles the recovery state. Not on a NAS folder, which does
+                // not sync.
                 //
-                // Muette tant que tout va bien : ici elle ne sert qu'à expliquer une liste
-                // qui bouge toute seule ou qui n'est pas encore complète. `SyncRecoveryView`
-                // ne couvre que la liste vide ; une liste non vide en pleine récupération
-                // n'avait que cette ligne pour le dire.
+                // Silent while all is well: here it only serves to explain a list that moves
+                // on its own or is not complete yet. `SyncRecoveryView` only covers the empty
+                // list; a non-empty list mid-recovery had only this line to say so.
                 if case .favourites = source, !selecting { SyncFootnote() }
             }
         }
@@ -600,10 +600,10 @@ struct BrowserView: View {
         if !loaded {
             ProgressView()
         } else if let error {
-            // Deux pannes très différentes passaient par le même message. Un dossier du NAS
-            // qui ne répond pas, c'est la box ; une liste de favoris ou une collection qui
-            // échoue, c'est SQLite en local, et accuser la Freebox envoie chercher la panne
-            // à l'autre bout de la maison.
+            // Two very different failures went through the same message. A NAS folder that
+            // does not answer is the box; a favourites list or a collection that fails is
+            // local SQLite, and blaming the Freebox sends you hunting for the fault at the
+            // other end of the house.
             ContentUnavailableView(source.isOnNAS ? "Connexion impossible" : "Lecture impossible",
                                    systemImage: source.isOnNAS
                                        ? "externaldrive.badge.xmark" : "exclamationmark.triangle",

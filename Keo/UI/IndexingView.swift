@@ -83,7 +83,7 @@ struct IndexingView: View {
         }
     }
 
-    // MARK: Maintenant
+    // MARK: Now
 
     /// What is true right now, and nothing else.
     ///
@@ -189,7 +189,7 @@ struct IndexingView: View {
         }
     }
 
-    // MARK: À surveiller
+    // MARK: To watch
 
     /// Failures and refusals, at rest as well as in flight.
     ///
@@ -281,7 +281,7 @@ struct IndexingView: View {
         }
     }
 
-    // MARK: Comment ça marche
+    // MARK: How it works
 
     /// Folded away, and four paragraphs rather than six plus a footer. What went: the
     /// paragraph comparing « Revérifier » and « Tout relire », which already lives in
@@ -403,8 +403,8 @@ struct IndexingChip: View {
 
 /// The detail behind a failure count.
 private struct ProblemList: View {
-    /// Ce que dit une liste d'échecs. Une liste d'exclusions dit autre chose, et prétendre
-    /// que des dossiers volontairement ignorés « seront réessayés » serait un mensonge.
+    /// What a list of failures says. A list of exclusions says something else, and claiming
+    /// that deliberately ignored folders « seront réessayés » would be a lie.
     static let retryFooter = "Ces entrées ne sont pas perdues : elles restent à lire et "
                            + "seront réessayées au prochain passage."
 

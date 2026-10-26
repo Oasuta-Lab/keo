@@ -2,12 +2,12 @@ import Foundation
 
 /// « 1 élément », « 2 éléments », « 0 élément ».
 ///
-/// Zéro est singulier en français, contrairement à l'anglais — c'est la seule subtilité, et
-/// c'est précisément celle que les deux règles de l'app avaient fini par écrire différemment :
-/// `n > 1` côté app, `n == 1 ? "" : "s"` côté widget, qui affichait « 0 photos ».
+/// Zero is singular in French, unlike English — that is the only subtlety, and it is
+/// precisely the one the app's two rules had ended up writing differently: `n > 1` on the
+/// app side, `n == 1 ? "" : "s"` on the widget side, which displayed « 0 photos ».
 ///
-/// Le nombre passe par `formatted()` plutôt que par une interpolation nue, pour que les
-/// milliers prennent l'espace insécable attendu : « 8 380 éléments ».
+/// The number goes through `formatted()` rather than a bare interpolation, so that
+/// thousands get their expected non-breaking space: « 8 380 éléments ».
 enum Plural {
     static func count(_ n: Int, _ one: String, _ many: String) -> String {
         "\(n.formatted()) \(n > 1 ? many : one)"

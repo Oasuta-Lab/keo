@@ -1,40 +1,39 @@
 import BackgroundTasks
 import SwiftUI
 
-/// Va voir, de temps en temps, si le NAS a reçu quelque chose.
+/// Goes to check, every now and then, whether the NAS has received anything.
 ///
-/// Sans elle, Keo ne découvrait un fichier que si on ouvrait le dossier qui le contient ou si
-/// on lançait une indexation à la main. Tant qu'on n'avait pas fait l'un des deux, rien ne
-/// signalait qu'il y avait du neuf : ni compteur, ni ambre sur la rangée « Indexation », ni
-/// puce dans le dossier. On ne pouvait l'apprendre qu'en y pensant.
+/// Without it, Keo only discovered a file when someone opened the folder holding it or
+/// started an indexing pass by hand. Until one of the two happened, nothing said there was
+/// anything new: no counter, no amber on the « Indexation » row, no badge on the folder. The
+/// only way to find out was to think of it.
 ///
-/// Elle **liste** seulement. Elle ne lit aucune date, parce que lire coûte un aller-retour
-/// réseau par fichier et que ce geste-là reste celui du propriétaire. Ce qu'elle fait tenir,
-/// c'est la connaissance de ce qui existe — après quoi l'accueil dit « N fichiers à lire » de
-/// lui-même et la rangée passe à l'ambre.
+/// It only **lists**. It reads no dates, because reading costs one network round trip per
+/// file and that gesture remains the owner's. What it keeps alive is the knowledge of what
+/// exists — after which the home screen says « N fichiers à lire » on its own and the row
+/// turns amber.
 ///
-/// Trois raisons pour lesquelles un passage coûte peu sur une bibliothèque qui n'a pas bougé :
-/// un dossier dont la date de modification et le nombre d'enfants sont inchangés est sauté
-/// sans être listé ; les sous-arbres techniques ne sont jamais parcourus ; et rien n'est
-/// téléchargé. Sur une bibliothèque qui a bougé, seules les branches qui ont bougé sont
-/// listées.
+/// Three reasons a pass costs little on a library that has not moved: a folder whose
+/// modification date and child count are unchanged is skipped without being listed; the
+/// technical subtrees are never walked; and nothing is downloaded. On a library that has
+/// moved, only the branches that moved are listed.
 ///
-/// `BGAppRefresh` et non `BGProcessing` : c'est la tâche courte et fréquente, celle qu'iOS
-/// accorde volontiers et dont il choisit le moment selon l'usage, la batterie et le réseau.
-/// On demande une heure au plus tôt ; le système décide du reste, et ne nous doit rien.
+/// `BGAppRefresh` and not `BGProcessing`: this is the short, frequent task, the one iOS
+/// grants willingly and schedules by what it knows of usage, battery and network. We ask for
+/// an hour at the earliest; the system decides the rest, and owes us nothing.
 @MainActor
 enum PeriodicDiscovery {
     static let identifier = "com.oasutalab.keo.discovery"
 
-    /// Au plus tôt dans une heure. Ce n'est pas une promesse : iOS avance ou retarde selon ce
-    /// qu'il sait de l'appareil, et c'est très bien ainsi — personne n'attend ce passage.
+    /// An hour from now at the earliest. Not a promise: iOS moves it up or back from what it
+    /// knows about the device, and that is just as well — nobody is waiting for this pass.
     private static let earliest: TimeInterval = 3_600
 
     private nonisolated(unsafe) static var registered = false
 
-    /// Appelée au lancement et à chaque fin de passage, pour qu'il y ait toujours exactement
-    /// une demande en attente. `submit` remplace une demande de même identifiant, donc en
-    /// appeler deux fois ne crée pas deux passages.
+    /// Called at launch and at the end of every pass, so that there is always exactly one
+    /// request pending. `submit` replaces a request with the same identifier, so calling it
+    /// twice does not create two passes.
     static func schedule() {
         register()
         let request = BGAppRefreshTaskRequest(identifier: identifier)
@@ -43,8 +42,8 @@ enum PeriodicDiscovery {
             try BGTaskScheduler.shared.submit(request)
             trace("discovery scheduled")
         } catch {
-            // Sans conséquence visible : la découverte manuelle marche toujours, et l'app
-            // n'a rien à dire sur un service que le système a le droit de refuser.
+            // No visible consequence: manual discovery still works, and the app has nothing
+            // to say about a service the system is entitled to refuse.
             trace("discovery schedule failed: \(error.localizedDescription)")
         }
     }
@@ -64,8 +63,8 @@ enum PeriodicDiscovery {
 
     private static func run(_ task: BGAppRefreshTask?) {
         guard let task else { return }
-        // La suivante est demandée tout de suite : si l'on attendait la fin, un passage
-        // interrompu par l'expiration emporterait la chaîne avec lui.
+        // The next one is requested right away: if it waited for the end, a pass cut short
+        // by expiration would take the whole chain down with it.
         schedule()
 
         guard let store = Store.shared, let client = store.client else {
@@ -73,9 +72,9 @@ enum PeriodicDiscovery {
             task.setTaskCompleted(success: false)
             return
         }
-        // Rien à tenter tant que la box refuse l'application : la marche échouerait au premier
-        // dossier, et il n'y a personne devant l'écran pour y répondre. L'état est dit à la
-        // prochaine ouverture, par la bannière.
+        // Nothing to attempt while the box refuses the application: the walk would fail at
+        // the first folder, and there is nobody at the screen to answer. The state is told at
+        // the next opening, by the banner.
         guard !store.authorizationLost else {
             trace("discovery skipped: autorisation perdue")
             task.setTaskCompleted(success: false)
@@ -83,8 +82,8 @@ enum PeriodicDiscovery {
         }
 
         let indexer = Indexer.shared
-        // Un passage déjà en cours fait mieux que celui-ci, et deux marches en parallèle sur
-        // le même index ne s'additionnent pas, elles se gênent.
+        // A pass already underway does better than this one would, and two walks in parallel
+        // over the same index do not add up, they get in each other's way.
         guard !indexer.state.isRunning else {
             trace("discovery skipped: indexation déjà en cours")
             task.setTaskCompleted(success: true)
@@ -105,9 +104,9 @@ enum PeriodicDiscovery {
             while indexer.state.isRunning {
                 try? await Task.sleep(for: .seconds(2))
             }
-            // Personne n'a rien demandé : un réveil qui ne trouve rien ne doit pas accueillir
-            // le propriétaire, deux heures plus tard, par une carte qui dit « rien de neuf ».
-            // Un réveil qui trouve quelque chose, si — c'est tout l'intérêt du passage.
+            // Nobody asked for anything: a wake-up that finds nothing must not greet the
+            // owner, two hours later, with a card saying « rien de neuf ». A wake-up that
+            // finds something, yes — that is the whole point of the pass.
             if indexer.lastSummary?.changedNothing == true { indexer.lastSummary = nil }
             trace("discovery end")
             task.setTaskCompleted(success: true)

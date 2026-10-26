@@ -64,11 +64,18 @@ local, une association par appareil.
 - **La migration des jetons déjà posés** se fait à la lecture, le seul endroit par lequel tout
   le monde passe déjà. Si l'item trouvé n'est pas synchronisable, il est réécrit. C'est
   idempotent : un jeton déjà migré est lu et laissé tranquille.
-- **L'ordre d'écriture est la garantie de non-perte.** On ajoute le synchronisé, et on ne
-  supprime le local **qu'après** un `SecItemAdd` réussi. iOS ne dit pas si le trousseau iCloud
-  est actif ; un échec, un appareil hors ligne ou un compte Apple absent ne coûtent donc rien,
-  le jeton reste lisible et la tentative se répète au lancement suivant. Perdre le jeton
-  coûterait un aller à la box — c'est précisément le bug déjà vécu une fois.
+- **L'ordre d'écriture est la garantie de non-perte.** On met à jour le synchronisé en place
+  (`SecItemUpdate`), on ne l'ajoute que s'il n'existe pas, et on ne supprime le local
+  **qu'après** un succès. iOS ne dit pas si le trousseau iCloud est actif ; un échec, un
+  appareil hors ligne ou un compte Apple absent ne coûtent donc rien, le jeton reste lisible
+  et la tentative se répète au lancement suivant. Perdre le jeton coûterait un aller à la box
+  — c'est précisément le bug déjà vécu une fois.
+
+  Ce paragraphe a longtemps décrit une intention plutôt que le code : `set` commençait par un
+  `SecItemDelete` du prédécesseur synchronisable, *avant* l'ajout. Un `SecItemAdd` refusé
+  détruisait donc la seule copie qui voyage par iCloud — exactement la perte que le paragraphe
+  promettait d'éviter. Le scan de sources de `Tests/sync.swift` interdit maintenant la
+  régression : il exige `SecItemUpdate`, et qu'aucun `SecItemDelete` ne précède l'écriture.
 - **`kSecAttrAccessibleAfterFirstUnlock` est conservé.** Les classes en `…ThisDeviceOnly` sont
   refusées pour un item synchronisable, et refusées **en silence**. `AfterFirstUnlock` est la
   classe la plus stricte qui se synchronise encore, et c'est celle qu'il faut pour qu'un
@@ -330,7 +337,13 @@ que soit le nombre d'octets fournis.
   mesuré, voir « Banc d'essai des lectures » — et 24 Ko chacun. Un dossier de 10 000 photos
   coûte donc environ 240 Mo de lectures, **une seule fois**.
 - Le pipeline de vignettes enregistre la date au passage : il télécharge déjà 256 Ko par image,
-  la lecture est gratuite.
+  la lecture est gratuite. Mais il n'a pas le droit d'en **effacer** une : son `note()` passe
+  `preservingCapture`, qui bascule le `DO UPDATE` sur `coalesce(excluded.capture, …)`. Sans
+  ça, un décodage qui ne trouvait pas de date remplaçait par NULL celle que l'indexation avait
+  lue, et marquait la ligne `read = 1` — plus personne ne la relisait. Le `coalesce` ne peut
+  pas être global : l'indexeur, lui, doit garder le droit d'écrire NULL, parce que
+  « lu, sans date EXIF » est un verdict et non une ignorance. C'est la même distinction que
+  partout ailleurs dans ce fichier, à un étage de plus.
 - `IndexStore` persiste tout dans Application Support, y compris les fichiers **sans**
   date — sinon chaque visite les réanalyserait indéfiniment.
 - Le réordonnancement n'a lieu **qu'à la fin du scan**, pas pendant : la grille ne se réorganise
@@ -419,6 +432,33 @@ moins, refuser d'ouvrir l'écran pour ça serait pire.
 Ce qu'il débloque, et qui est le vrai sujet : l'écran Indexation a enfin quelque chose à dire
 quand rien ne tourne, et la rangée de l'accueil peut parler d'échecs et de fraîcheur au lieu
 d'un rapport de dossiers.
+
+#### Mais il se souvenait trop bien
+
+Garder le bilan a révélé l'inverse du bug d'origine. Quatre compteurs — `datesRead`,
+`dateless`, `adopted`, `unreadable` — n'étaient pas remis à zéro entre deux passes d'une même
+session. Le cumul est **juste** pour une reprise : une passe interrompue qui repart saute les
+dossiers déjà finis au lieu de les relire, donc ses compteurs doivent continuer. Il est
+**faux** pour une passe neuve lancée après une passe `finished` : « N dates lues » annonçait
+alors la somme de deux marches, et `LastPass.hasTrouble` — qui ne regarde que
+`unreadable > 0` — restait vrai jusqu'à la fin des temps après un seul fichier illisible, bien
+après que la cause ait disparu. Un voyant qui ne s'éteint jamais est un voyant qu'on
+n'allume plus. Le progrès de départ se choisit donc sur l'état : `.paused`/`.running` continue,
+`.idle`/`.finished` repart de zéro.
+
+Deux autres mensonges du même écran sont partis avec :
+
+- **« Interrompue » sur un index sain.** Ouvrir un dossier non indexé lance un scan ciblé sans
+  marche ; la fin d'un tel passage n'avait pas de `walkCompleted`, donc elle posait `.paused`,
+  donc l'accueil affichait « Interrompue · reste N » en ambre alors que rien n'avait été
+  interrompu. La distinction juste est `resumeWanted`, que seule une vraie passe pose ; sans
+  lui, la fin d'un scan ciblé retombe sur `.idle` et la rangée dit « N fichiers à lire », en
+  noir, ce qui est exactement ce qui s'est passé.
+- **Un worker supplanté décidait.** La garde `token == runToken` de `finishRun` était sous la
+  publication du bilan et sous l'effacement de `summary`/`record` : un worker périmé pouvait
+  vider le rapport qu'un worker frais était en train de construire. Elle est remontée en tête.
+  `walkCompleted = true` n'existe toujours qu'à un seul endroit du projet — c'est le critère de
+  relecture de ce fichier, et il se vérifie d'un `grep`.
 
 ### « X dossiers sur Y » ne disait rien
 
@@ -776,6 +816,35 @@ même dossier est candidate. Côté photo, l'identifiant arrive dans le préfixe
 **Un `.MOV` isolé reste une vidéo visible.** C'est tout ce qui n'a pas été pris à l'iPhone, et
 le masquer le perdrait.
 
+#### « Pas lu » n'est pas « pas d'identifiant », et ça s'était perdu deux fois
+
+Toute la doctrine ci-dessus repose sur un verdict à trois valeurs : *trouvé*, *absent*,
+*il me faut d'autres octets*. Un audit a trouvé deux endroits où la troisième valeur se
+faisait écraser par la deuxième — c'est-à-dire où une ignorance se présentait comme une
+certitude.
+
+`metaChildrenStart` rend un `.bail` qui porte tantôt « ce `meta` est trop petit pour contenir
+quoi que ce soit » (absence sûre), tantôt « les quatre octets de sonde ne sont pas encore
+récupérés » (il faut redemander). Le chemin date propageait le verdict intérieur ; **le chemin
+identifiant aplatissait les deux en `.absent`**. Des octets jamais lus devenaient donc
+« pas d'identifiant de photo live », et le pilote enregistrait ce `nil` comme « vidéo
+ordinaire » — une vraie paire dé-appariée, définitivement, sans rien pour la rattraper.
+Atteignable dès qu'un `moov` dépasse les 512 Ko du slurp avec une géométrie de tranches
+défavorable, c'est-à-dire sur les gros clips. `Tests/videodatechecks.swift` construit cette
+géométrie exacte et montre les deux scanneurs en désaccord.
+
+Le même aplatissement existait un étage plus haut, côté indexeur. Le groupe qui sonde la face
+*vidéo* d'une paire commitait `read = 1` même quand le scan avait jeté — `Undecided`, coupure
+réseau — sans incrémenter `failures`, donc le dossier était tamponné complet et la vidéo plus
+jamais relue. Or c'est précisément sa date qui départage les 227 paires à une face. Le groupe
+rend maintenant un `Result`, comme celui des photos : un verdict légitime se commite, un jet
+se compte, se signale et se retente à la passe suivante. C'est exactement la population que la
+migration `identityVersion = 2` avait dû rattraper une fois.
+
+La leçon tient en une phrase, et elle vaut au-delà des photos live : **une connexion coupée se
+retente, elle ne s'enregistre jamais.** Un `catch` qui rend la même chose qu'un succès vide est
+un bug qui ne se voit pas.
+
 La règle vit dans `LivePhotos`, hors SwiftUI, parce qu'elle doit tenir à trois endroits — un
 listing frais venu de la box, un listing rejoué depuis l'index, et le `UPDATE` qui marque la
 base — et qu'une règle qui dérive entre eux montre la vidéo d'un côté et la cache de l'autre.
@@ -978,7 +1047,16 @@ Rien n'est purgé dans le dos de l'utilisateur. La règle est de distinguer **«
 - Plusieurs correspondances : on ne devine pas, même doctrine que l'adoption des dates.
 
 Les introuvables s'affichent dans un bandeau qui annonce leur nombre, et leur retrait reste
-**un geste délibéré**. Les raccourcis suivent la même règle, marqués d'un signe orange.
+**un geste délibéré**.
+
+Les raccourcis suivent la même règle — mais ne la suivaient pas vraiment. `resolveFolders`,
+le pendant de `resolve` pour un dossier épinglé, existait, était vérifié dans
+`Tests/favourites.swift`, et n'était appelé par aucun code de production : un raccourci vers
+un dossier disparu du NAS ne disait rien, il menait simplement à une grille vide. C'était du
+câblage inachevé, pas du code mort — la différence compte, parce que supprimer aurait eu l'air
+d'un nettoyage. L'étagère « Épinglés » de l'accueil affiche maintenant
+« N dossiers épinglés introuvables sur le NAS » avec un bouton **Retirer**, et reste visible
+même quand tous les raccourcis manquent : une étagère qui disparaît n'explique rien.
 
 ### Elles survivent à l'index, pas l'inverse
 
@@ -1047,6 +1125,8 @@ Trois idées portent tout le reste :
 | Renommage contre renommage d'une collection | Chacun étant suppression + création, il reste les deux collections, avec les mêmes membres : visible et réparable en un geste, plutôt qu'un des deux renommages perdu en silence |
 | Suppression contre ajout de membre | L'ajout gagne : un membre reçu pour une collection disparue la recrée |
 | Boucle de suppression | Impossible : l'application d'un changement distant ne journalise rien, donc rien ne repart |
+| **SQLite refuse un changement reçu** | Le moteur compte les enregistrements consommés dès que la poignée rend la main, donc un `try?` les perdait définitivement. L'échec **gèle le fichier d'état** : le jeton d'avant le fetch reste sur disque et le prochain lancement redemande exactement ce qui a été refusé. Perdre l'état coûte un refetch, perdre la donnée coûte des favoris — et la ligne de synchro le dit en français au lieu de se taire |
+| **`userRecordID()` échoue hors ligne alors que le compte est disponible** | Le journal n'est plus donné au moteur tant que l'identité n'est pas liée. Sans ça, `adopt` n'était pas appelé mais l'envoi partait : sur un appareil qui a changé de compte depuis la dernière fois, les données de l'ancien propriétaire pouvaient remonter avant le nettoyage promis. La fenêtre était étroite — `nextRecordZoneChangeBatch` relit le journal au moment de l'envoi — mais rien ne garantit que `.switchAccounts` précède le premier lot |
 
 ### Configuration — ce que le propriétaire doit faire à la main
 
@@ -1498,6 +1578,14 @@ points de suspension au milieu cachent exactement la partie qui dit où l'on est
 déjà défilé jusqu'au bout : le dossier où l'on se trouve compte plus que la racine d'où l'on
 vient. Le dernier élément n'est pas un bouton — on y est déjà.
 
+**L'arithmétique vit hors SwiftUI.** Appuyer sur un élément du fil veut dire soit dépiler N
+niveaux, soit pousser une destination quand on arrive de côté — depuis une recherche, un
+favori, un lien de widget — et la pile ne contient pas ce qu'on croit. C'est précisément d'ici
+que venait le bug « le fil d'Ariane bouclait », et c'était le dernier calcul de navigation sans
+vérification. `Breadcrumb.move(toStep:of:stacked:)` (`Keo/UI/Climb.swift`) décide, `BrowserView`
+exécute sur `\.stackPath`, et `Tests/breadcrumb.swift` épingle les trois cas — descente depuis
+la racine, arrivée de côté, et la frontière où la pile est exactement assez profonde.
+
 ## Timeline
 
 Quand le tri est par date, la grille se regroupe et un rail apparaît à droite.
@@ -1675,6 +1763,15 @@ donc jamais par un chemin de complétion — aucun balayage ne peut venir d'un r
 Le *handler* est enregistré dans `KeoApp.init`, pas dans un `.task` : `BGTaskScheduler` exige
 l'enregistrement avant la fin du lancement et **termine l'app** s'il la réveille pour un
 identifiant que personne n'a réclamé, or un `.task` ne tourne qu'après le premier rendu.
+
+**Une découverte interrompue reprend en découverte.** Le scope ne survivait pas à l'intention
+de reprise : une expiration posait `resumeWanted`, et les deux chemins de reprise — le
+lancement suivant et le retour au premier plan — rappelaient `start` sans scope, c'est-à-dire
+en lecture. Une tâche de fond qui s'était contentée de lister se transformait donc en lecture
+de dates que personne n'avait demandée, ce qui est exactement ce que ce type refuse de faire.
+Seul `.discover` est persisté : `recheck` et `rebuild` ne le sont délibérément pas, leur purge
+ayant déjà eu lieu au départ de la passe — la rejouer à la reprise effacerait ce que la passe
+interrompue venait de reconstruire.
 
 **Ce qui reste à mesurer sur l'appareil.** `Store.shared` est une référence faible posée à la
 construction du `Store`, et `@StateObject` ne construit rien tant que le `body` n'a pas été
@@ -1969,7 +2066,7 @@ La galerie est supposée très grande. Ce qui a été fait pour ça :
 | Concurrence | Deux portes : 4 fetchs visibles, 2 préchargements — un prefetch ne bloque jamais une cellule à l'écran |
 | Doublons | Une tâche par clé, partagée par tous les appelants |
 | Préchargement | Fenêtre de 24 éléments en avance sur le défilement |
-| Cache disque | 512 Mo, éviction LRU au lancement |
+| Cache disque | 512 Mo, éviction LRU au lancement — vraiment LRU, voir ci-dessous |
 | Grandes images | Téléchargées sur disque puis décodées depuis le fichier — jamais de `Data` plein format en mémoire |
 | Découpage du dossier | `FolderContents` calculé une fois au chargement, pas à chaque rendu |
 | Visionneuse | `ScrollView` paginé + `LazyHStack`, pas un `TabView` qui garde l'identité de tous les éléments |
@@ -1977,6 +2074,23 @@ La galerie est supposée très grande. Ce qui a été fait pour ça :
 Les idées viennent de [Nuke](https://github.com/kean/Nuke) ; le fetch est maison parce qu'une
 vignette Keo est une requête Range de 256 Ko plus un décodage d'aperçu embarqué, pas un
 téléchargement d'URL.
+
+### Le LRU du cache disque : un soupçon, et sa mesure
+
+`trim()` classe par `contentAccessDate ?? contentModificationDate`, mais `touch()` ne repose
+que la date de **modification**. Le soupçon était net : si l'atime ne bougeait pas tout seul,
+l'éviction suivrait l'ordre d'écriture et jetterait précisément ce qu'on est en train de
+regarder — un LRU dégénéré en FIFO, invisible à la lecture du code.
+
+`stat(2)` dit le contraire : une lecture par `Data(contentsOf:, .mappedIfSafe)` **avance
+l'atime toute seule**, et `touch()` avance les deux. Rien à corriger.
+
+Ce qui vaut la peine d'être retenu est le piège rencontré en chemin : une première mesure
+disait l'inverse, parce qu'elle relisait les dates **par la même `URL`** — or `URL` met ses
+`resourceValues` en cache, et rend donc éternellement la première réponse. Mesurer avec
+l'outil qui ment est pire que ne pas mesurer : on repart avec une certitude fausse. La mesure
+et son piège sont consignés dans le commentaire de `touch()`, pour qu'un prochain audit ne
+resoulève pas la question.
 
 ## Couverture des tuiles de dossier
 
@@ -2118,8 +2232,15 @@ brancher la console d'abord.**
 ## Toucher, haptique et VoiceOver
 
 Les cibles tactiles tiennent les 44 pt sans grossir à l'écran : la barre de sélection, les
-pastilles d'indexation et le bouton « Retirer » du bandeau élargissent leur zone de contact,
-pas leur dessin.
+pastilles d'indexation, le bouton « Retirer » du bandeau et les éléments du fil d'Ariane
+élargissent leur zone de contact, pas leur dessin. Le remède est le même partout —
+`frame(minHeight: 44)` + `contentShape(Rectangle())`, et un padding vertical négatif qui rend
+au layout la hauteur qu'on vient de prendre, pour que la barre reste à 34 pt.
+
+Les puces de recherche — Période, Favoris, Notes — annoncent leur état à VoiceOver
+(`.isSelected`). Elles ne le portaient qu'en couleur : à l'œil c'est évident, au clavier
+d'annonce c'était un bouton comme un autre, et un filtre actif qu'on ne peut pas entendre est
+un filtre qu'on ne peut pas désactiver.
 
 Trois retours haptiques, et seulement trois — le système possède déjà ceux du défilement et du
 feuilletage, en ajouter par-dessus donnerait un appareil qui vibre en continu :
@@ -2178,6 +2299,22 @@ se teste qu'à la main, voir plus haut.
 `Tests/exclusions.swift` épingle la règle d'exclusion dans les deux sens — ce qui doit sortir de
 l'index, ce qui ne doit surtout pas en sortir, la casse — puis rejoue le nettoyage contre le vrai
 SQLite et vérifie que favoris, notes, raccourcis et collections en sortent intacts.
+
+`Tests/videodatechecks.swift` couvre les deux scanneurs d'atomes QuickTime : la date, et
+l'identifiant de photo live que personne ne vérifiait. Clé `mdta` en deuxième position, absence
+sûre, `moov` en fin de fichier en tailles 32 et 64 bits, troncature, corruption, et le pilote
+en deux requêtes. `Tests/breadcrumb.swift` épingle l'arithmétique du fil d'Ariane et
+`Tests/videorange.swift` le parsing de `Content-Range` — la taille d'un fichier vient de
+l'en-tête, jamais de la fenêtre qu'on vient de recevoir.
+
+**Quatre fichiers existent en double** parce que les deux cibles ne partagent aucun fichier :
+`WidgetManifest`, `Theme` et `Plural` sont byte-identiques entre `Keo/` et `KeoWidget/`, et
+trois contrôles de `Tests/main.swift` échouent dès qu'une copie diverge. La quatrième n'était
+tenue par rien : `Photo.downsample` du widget recopie `ImageDecoding.downsample` sans pouvoir
+lui être identique — un `UIImage` d'un côté, un `CGImage` de l'autre. Elles **avaient déjà
+divergé**, chacune ayant un garde que l'autre n'avait pas. Le contrôle compare donc ce qui
+compte : les options passées à ImageIO, réduites à `clé=valeur` et comparées ensemble. Une
+duplication assumée sans contrôle n'est pas une duplication assumée, c'est une duplication.
 
 `Tests/widget.swift` couvre le manifeste du widget et, contre le vrai SQLite, la sélection des
 douze couvertures d'un dossier épinglé : tout le sous-arbre, les plus récentes d'abord, les

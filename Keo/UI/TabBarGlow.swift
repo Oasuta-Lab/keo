@@ -1,22 +1,22 @@
 import SwiftUI
 import UIKit
 
-/// Pendant l'indexation, le contour de la barre d'onglets se parcourt.
+/// While indexing runs, the tab bar's outline gets traced around.
 ///
-/// Le trait de deux points en haut de l'écran disait la même chose, mais au mauvais endroit :
-/// il occupait le bord que les barres de navigation revendiquent déjà, et il n'avait rien à
-/// voir avec ce qu'il annonçait. La barre d'onglets, elle, est le seul élément présent sur
-/// les cinq écrans, et elle flotte — son contour est libre.
+/// The two-point line at the top of the screen said the same thing, but in the wrong place:
+/// it occupied the edge that navigation bars already claim, and it had nothing to do with
+/// what it announced. The tab bar, on the other hand, is the only element present on all
+/// five screens, and it floats — its outline is free.
 ///
-/// Elle reste **indéterminée**, et ce n'est pas une facilité. L'indexeur connaît l'avancement
-/// du dossier courant et rien d'autre : le nombre total de dossiers n'est connu qu'une fois la
-/// marche finie. Un contour qui se remplirait de zéro à un repartirait en arrière à chaque
-/// dossier. Le segment qui tourne dit « ça travaille » sans prétendre dire « à tel point ».
+/// It stays **indeterminate**, and that is not a shortcut. The indexer knows the progress of
+/// the current folder and nothing else: the total number of folders is only known once the
+/// walk is over. An outline filling from zero to one would jump backwards at every folder.
+/// The travelling segment says "something is working" without pretending to say "this far".
 ///
-/// Posé **dans** la barre plutôt que par-dessus, en vue UIKit contrainte à ses bords. C'est ce
-/// qui le fait suivre gratuitement la rétractation au défilement, la rotation et le passage en
-/// accessibilité — autant de moments où un calque dessiné à des coordonnées relevées une fois
-/// se retrouverait à côté de ce qu'il entoure.
+/// Placed **inside** the bar rather than over it, as a UIKit view constrained to its edges.
+/// That is what makes it follow the scroll-away collapse, rotation and the accessibility
+/// sizes for free — all moments where a layer drawn at coordinates measured once would end
+/// up beside the thing it outlines.
 struct TabBarGlow: UIViewRepresentable {
     let running: Bool
 
@@ -28,8 +28,8 @@ struct TabBarGlow: UIViewRepresentable {
     }
 
     func updateUIView(_ anchor: UIView, context: Context) {
-        // Après le tour de boucle courant : au premier appel la vue n'est pas encore dans une
-        // fenêtre, donc la barre d'onglets est introuvable.
+        // After the current run-loop turn: on the first call the view is not in a window yet,
+        // so the tab bar cannot be found.
         DispatchQueue.main.async {
             guard let bar = Self.tabBar(from: anchor) else { return }
             if running { GlowLayerView.attach(to: bar) } else { GlowLayerView.detach(from: bar) }
@@ -40,17 +40,17 @@ struct TabBarGlow: UIViewRepresentable {
         if let bar = tabBar(from: anchor) { GlowLayerView.detach(from: bar) }
     }
 
-    /// La barre d'onglets de la fenêtre. Remontée par la chaîne des répondeurs plutôt que
-    /// cherchée dans l'arbre des vues : SwiftUI reconstruit l'arbre à chaque changement
-    /// d'onglet, pas la hiérarchie des contrôleurs.
+    /// The window's tab bar. Walked up to through the responder chain rather than searched
+    /// for in the view tree: SwiftUI rebuilds the tree on every tab change, not the
+    /// controller hierarchy.
     private static func tabBar(from view: UIView) -> UITabBar? {
         var responder: UIResponder? = view
         while let next = responder?.next {
             if let tabs = next as? UITabBarController { return tabs.tabBar }
             responder = next
         }
-        // La vue vit dans un contrôleur hôte enfant que la chaîne ne traverse pas toujours :
-        // on redescend depuis la racine, où il n'y a qu'une seule barre.
+        // The view lives in a child hosting controller the chain does not always traverse:
+        // walk back down from the root, where there is only one bar.
         return view.window?.rootViewController.flatMap(firstTabBarController)?.tabBar
     }
 
@@ -63,20 +63,20 @@ struct TabBarGlow: UIViewRepresentable {
     }
 }
 
-/// Le segment lumineux lui-même.
+/// The glowing segment itself.
 private final class GlowLayerView: UIView {
     private let trail = CAShapeLayer()
     private let shimmer = CAGradientLayer()
 
-    private static let tag = 0x6B_65_6F_01      // "keo", et de quoi ne pas se confondre
+    private static let tag = 0x6B_65_6F_01      // "keo", plus enough to not be mistaken
 
-    // MARK: Pose et dépose
+    // MARK: Attach and detach
 
     static func attach(to bar: UITabBar) {
         guard let host = capsule(of: bar) else { return }
         if host.viewWithTag(tag) != nil { return }
-        // Gardée : le jour où iOS change la composition de sa barre, c'est cette ligne qui
-        // dira que le contour s'est reposé ailleurs, au lieu d'un cadre de travers à expliquer.
+        // Kept: the day iOS changes how its bar is composed, this line is what will say the
+        // outline has settled somewhere else, instead of a crooked frame to explain.
         trace("glow host=\(host.frame) dans barre=\(bar.bounds)")
 
         let glow = GlowLayerView(frame: host.bounds)
@@ -94,28 +94,28 @@ private final class GlowLayerView: UIView {
         }
     }
 
-    /// Ce qu'il faut entourer : la pilule de verre, pas la barre.
+    /// What to outline: the glass pill, not the bar.
     ///
-    /// Depuis iOS 26 la barre d'onglets est un conteneur pleine largeur dans lequel flottent
-    /// deux choses — la pilule des onglets, et le bouton de recherche détaché. Mesuré sur
-    /// l'appareil : la barre fait 420 × 83, la pilule 308 × 62 à x = 21, le bouton 62 × 62 à
-    /// x = 337. Entourer la barre traçait donc un cadre qui partait du bon bord et filait
-    /// bien au-delà, par-dessus le vide et le bouton de recherche.
+    /// Since iOS 26 the tab bar is a full-width container inside which two things float —
+    /// the tab pill, and the detached search button. Measured on the device: the bar is
+    /// 420 × 83, the pill 308 × 62 at x = 21, the button 62 × 62 at x = 337. Outlining the
+    /// bar therefore drew a frame that started at the right edge and ran well past it, over
+    /// the gap and the search button.
     ///
-    /// Le critère est la **largeur**, et rien d'autre. La première version cherchait un rayon
-    /// d'angle, en supposant qu'une capsule en déclare un : aucune de ces vues n'en porte, le
-    /// verre est dessiné autrement. Le nom de classe trancherait, mais il est privé et change
-    /// sans prévenir ; la largeur, elle, distingue la pilule de ses deux voisines par un
-    /// facteur cinq et ne dépend d'aucune version.
+    /// The criterion is the **width**, and nothing else. The first version looked for a
+    /// corner radius, assuming a capsule declares one: none of these views carries any, the
+    /// glass is drawn some other way. The class name would settle it, but it is private and
+    /// changes without notice; the width distinguishes the pill from its two neighbours by
+    /// a factor of five and depends on no version.
     private static func capsule(of bar: UITabBar) -> UIView? {
-        // Sous la moitié de la barre, c'est le bouton détaché ou la pastille de l'onglet
-        // choisi — pas la pilule. Dans ce cas on préfère ne rien dessiner à dessiner à côté.
+        // Under half the bar's width, it is the detached button or the selected tab's blob —
+        // not the pill. In that case, drawing nothing beats drawing in the wrong place.
         let widest = bar.subviews.max { $0.bounds.width < $1.bounds.width }
         guard let widest, widest.bounds.width > bar.bounds.width * 0.5 else { return nil }
         return widest
     }
 
-    // MARK: Dessin
+    // MARK: Drawing
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -126,9 +126,9 @@ private final class GlowLayerView: UIView {
         trail.lineWidth = 2.5
         trail.lineCap = .round
 
-        // Le dégradé donne le scintillement ; le tracé lui sert de masque, donc seule la
-        // portion de contour parcourue s'allume. L'inverse — un trait coloré uni — ne
-        // scintille pas, il glisse.
+        // The gradient provides the shimmer; the path serves as its mask, so only the
+        // stretch of outline being traced lights up. The other way round — a solid coloured
+        // stroke — does not shimmer, it slides.
         shimmer.colors = [UIColor.clear.cgColor,
                           UIColor(named: "AccentColor")?.cgColor ?? UIColor.systemOrange.cgColor,
                           UIColor.white.withAlphaComponent(0.9).cgColor,
@@ -150,8 +150,8 @@ private final class GlowLayerView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         shimmer.frame = bounds
-        // Le trait est centré sur le bord : la moitié de son épaisseur déborderait sinon, et
-        // la capsule de verre coupe ce qui dépasse.
+        // The stroke is centred on the edge: half its thickness would spill over otherwise,
+        // and the glass capsule clips whatever sticks out.
         let inset = trail.lineWidth / 2
         let rounded = bounds.insetBy(dx: inset, dy: inset)
         trail.frame = bounds
@@ -159,11 +159,11 @@ private final class GlowLayerView: UIView {
                                   cornerRadius: rounded.height / 2).cgPath
     }
 
-    // MARK: Mouvement
+    // MARK: Motion
 
-    /// Deux animations sur le même tracé, décalées : la fin part devant, le début la rattrape.
-    /// Un segment naît, s'étire, parcourt le contour et se referme — plutôt qu'un trait plein
-    /// qui tournerait, lequel finit par ressembler à une bordure permanente.
+    /// Two animations on the same path, offset: the end sets off ahead, the start catches it
+    /// up. A segment is born, stretches, travels the outline and closes — rather than a
+    /// solid stroke going round, which ends up looking like a permanent border.
     private func start() {
         let turn: CFTimeInterval = 2.4
 
@@ -184,12 +184,12 @@ private final class GlowLayerView: UIView {
         group.animations = [head, tail]
         group.duration = turn * 1.35
         group.repeatCount = .infinity
-        // Sans cela le tracé réapparaît entier entre deux tours, et le contour clignote.
+        // Without this the path reappears whole between two laps, and the outline blinks.
         group.fillMode = .backwards
         trail.add(group, forKey: "parcours")
 
-        // Le dégradé glisse sous le masque : c'est lui qui fait scintiller le segment plutôt
-        // que de le laisser d'une seule teinte.
+        // The gradient slides under the mask: that is what makes the segment shimmer rather
+        // than leaving it a single tint.
         let slide = CABasicAnimation(keyPath: "locations")
         slide.fromValue = [-0.6, -0.35, -0.1, 0.15, 0.4]
         slide.toValue = [0.6, 0.85, 1.1, 1.35, 1.6]
@@ -201,8 +201,8 @@ private final class GlowLayerView: UIView {
         UIView.animate(withDuration: 0.3) { self.alpha = 1 }
     }
 
-    /// iOS vide les animations d'un calque sorti de l'écran — au retour, le contour serait
-    /// figé sur sa dernière image.
+    /// iOS drops the animations of a layer that leaves the screen — on return, the outline
+    /// would be frozen on its last frame.
     override func didMoveToWindow() {
         super.didMoveToWindow()
         if window != nil, trail.animation(forKey: "parcours") == nil { start() }

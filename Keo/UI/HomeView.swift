@@ -29,11 +29,11 @@ struct HomeView: View {
     @State private var pinStats: [String: FolderStats] = [:]
     @State private var pinCovers: [String: [Item]] = [:]
     @State private var recent: [Item] = []
-    /// Ce qui est arrivé depuis que Keo regarde. Vide tant que rien n'est arrivé, et alors
-    /// l'étagère ne s'affiche pas — une section vide sur un accueil est une promesse non tenue.
+    /// What has arrived since Keo started watching. Empty while nothing has, and then the
+    /// shelf does not show — an empty section on a home screen is a broken promise.
     @State private var arrivals: [Item] = []
-    /// Combien d'entre elles n'avaient pas encore été montrées. Lu avant que l'étagère ne
-    /// paraisse, donc le chiffre survit à la visite qui l'efface.
+    /// How many of them had not been shown yet. Read before the shelf appears, so the figure
+    /// survives the very visit that clears it.
     @State private var unseenArrivals = 0
     /// The *year* on screen, not a page index. Identity and selection used to disagree: the
     /// pages were identified by year but selected by position, so a year set rebuilt under
@@ -48,8 +48,8 @@ struct HomeView: View {
     /// rather than animated: an animation that a swipe interrupts has to be unwound before it
     /// can restart, and that unwinding is exactly what read as the bar being slow to resume.
     @State private var turnStarted = Date()
-    /// La trappe du logo. Rien de secret dedans — juste rien qui mérite une ligne permanente
-    /// sur la seule page que le propriétaire regarde tous les jours.
+    /// The logo's trapdoor. Nothing secret inside — just nothing that deserves a permanent
+    /// line on the one page the owner looks at every day.
     @State private var knocks = 0
     @State private var lastKnock = Date.distantPast
     @State private var showingStamp = false
@@ -119,8 +119,8 @@ struct HomeView: View {
                     arrived
                 }
                 library
-                // Le seul écran qui demande à être rassuré : c'est la pièce où l'on vient
-                // voir si tout est à sa place.
+                // The one screen that asks to be reassured: this is the room you come to to
+                // see that everything is in its place.
                 SyncFootnote(reassures: true)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 4)
@@ -147,11 +147,11 @@ struct HomeView: View {
         .task { await load() }
         .onChange(of: undoer.revision) { _, _ in Task { await load() } }
         .onChange(of: indexer.state.isRunning) { _, _ in Task { await load() } }
-        // Tirer vers le bas, c'est « va voir ». Avant, ça ne relisait que l'index local :
-        // le geste promettait d'aller chercher du neuf et n'allait nulle part. Il lance
-        // maintenant une découverte — un parcours qui liste sans lire aucune date — et rend
-        // la main aussitôt : l'état s'affiche dans la rangée « Indexation », qui est faite
-        // pour ça, plutôt que de retenir le ressort pendant toute la marche.
+        // Pulling down means "go and look". It used to only re-read the local index: the
+        // gesture promised to fetch something new and went nowhere. It now starts a
+        // discovery — a walk that lists without reading any date — and hands back control
+        // right away: the state shows in the « Indexation » row, which is built for that,
+        // rather than holding the spring for the whole walk.
         .refreshable {
             await load()
             guard !indexer.state.isRunning else { return }
@@ -209,8 +209,8 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(alignment: .trailing) { capacity }
         .padding(.top, 4)
-        // Se referme toute seule : la trappe est pour le jour où on cherche quelle version
-        // est dans la main, pas une case à décocher.
+        // Closes on its own: the trapdoor is for the day you wonder which build is in your
+        // hand, not a box to untick.
         .task(id: showingStamp) {
             guard showingStamp else { return }
             try? await Task.sleep(for: .seconds(8))
@@ -218,9 +218,9 @@ struct HomeView: View {
         }
     }
 
-    /// Dix tapes sur le logo. Le compte repart de zéro dès qu'une tape se fait attendre :
-    /// sans ça, dix appuis distraits étalés sur une semaine finiraient par ouvrir la trappe,
-    /// et une trappe qui s'ouvre toute seule est un bug.
+    /// Ten taps on the logo. The count resets to zero as soon as a tap keeps it waiting:
+    /// without that, ten absent-minded presses spread over a week would eventually open the
+    /// trapdoor, and a trapdoor that opens by itself is a bug.
     private func knock() {
         let now = Date()
         knocks = now.timeIntervalSince(lastKnock) < 1.5 ? knocks + 1 : 1
@@ -230,20 +230,20 @@ struct HomeView: View {
         withAnimation(.snappy) { showingStamp = true }
     }
 
-    /// Ce qu'il reste sur le NAS, en anneau, à hauteur du mot.
+    /// What is left on the NAS, as a ring, level with the word.
     ///
-    /// Remonté du bloc « Bibliothèque », où il était la dernière chose de la page : c'est un
-    /// état permanent et pas une destination, et un état se lit d'un coup d'oeil en arrivant.
-    /// Un anneau plutôt qu'une barre parce qu'il occupe la hauteur d'un logotype au lieu de la
-    /// largeur de l'écran, et parce qu'une barre horizontale à côté d'un mot se lirait comme
-    /// un chargement en cours.
+    /// Moved up from the « Bibliothèque » block, where it was the last thing on the page: it
+    /// is a permanent state and not a destination, and a state is read at a glance on
+    /// arrival. A ring rather than a bar because it takes the height of a logotype instead
+    /// of the width of the screen, and because a horizontal bar next to a word would read as
+    /// something loading.
     @ViewBuilder
     private var capacity: some View {
         if let disk, disk.total > 0 {
             let used = Double(disk.total - disk.free) / Double(disk.total)
-            // L'anneau a cote du texte et non au-dessus : trois lignes empilees sous un
-            // anneau auraient fait un en-tete plus haut que le logotype, et c'est le mot qui
-            // doit mener la page.
+            // The ring sits beside the text, not above it: three lines stacked under a ring
+            // would have made a header taller than the logotype, and the word is what must
+            // lead the page.
             HStack(spacing: 8) {
                 Gauge(value: used) {
                     EmptyView()
@@ -268,8 +268,8 @@ struct HomeView: View {
                 }
                 .lineLimit(1)
             }
-            // La couleur seule ne dit rien ici : l'etiquette porte la phrase entiere, et le
-            // chiffre sous l'anneau porte ce qui compte vraiment — ce qu'il reste.
+            // Colour alone says nothing here: the label carries the whole sentence, and the
+            // figure under the ring carries what really matters — what is left.
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Stockage")
             .accessibilityValue(
@@ -302,7 +302,7 @@ struct HomeView: View {
         return text.prefix(1).uppercased() + text.dropFirst()
     }
 
-    // MARK: Ce jour-là
+    // MARK: On this day
 
     @ViewBuilder
     private var memories: some View {
@@ -401,9 +401,9 @@ struct HomeView: View {
             // carousel keeps its own swipe.
             .contentShape(Rectangle())
             .onTapGesture { openShownYear() }
-            // Un `onTapGesture` n'est pas un bouton : VoiceOver annonçait une image et
-            // n'offrait aucune action, alors que « Derniers éléments » juste en dessous sont
-            // de vrais boutons. Les rangées de photos voisines se comportent déjà ainsi.
+            // An `onTapGesture` is not a button: VoiceOver announced an image and offered
+            // no action, while « Derniers éléments » just below are real buttons. The
+            // neighbouring photo rows already behave this way.
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(shown.map { "Ce jour-là en \($0.year)" } ?? "Ce jour-là")
@@ -427,7 +427,7 @@ struct HomeView: View {
         }
     }
 
-    // MARK: Épinglés
+    // MARK: Pinned
 
     @ViewBuilder
     private var pinned: some View {
@@ -438,11 +438,11 @@ struct HomeView: View {
                 Text("Épinglés").font(.title3.bold())
                 if !pins.isEmpty {
                     ScrollView(.horizontal) {
-                        // `HStack` et non `LazyHStack` : une pile paresseuse ne mesure que ce
-                        // qu'elle a matérialisé, donc la rangée prenait la hauteur de la première
-                        // carte visible — la plus courte — et tronquait le bas des suivantes, qui
-                        // ont une ligne de plus dès que l'index connaît leur poids et leur
-                        // période. Il y a une poignée d'épingles : la paresse ne rapportait rien.
+                        // `HStack`, not `LazyHStack`: a lazy stack only measures what it has
+                        // materialised, so the row took the height of the first visible card —
+                        // the shortest — and cropped the bottom of the next ones, which carry
+                        // one more line as soon as the index knows their weight and their
+                        // period. There are a handful of pins: laziness bought nothing.
                         HStack(alignment: .top, spacing: 12) {
                             ForEach(pins) { folder in
                                 NavigationLink(value: BrowserSource.folder(folder)) {
@@ -454,10 +454,10 @@ struct HomeView: View {
                                 // Pinning happens in Parcourir by long press; unpinning had no
                                 // gesture at all from the shelf the pins actually live on.
                                 .contextMenu {
-                                    // Sans rôle destructif : désépingler s'annule en secouant,
-                                    // et le même geste dans Parcourir n'en porte pas. Deux rouges
-                                    // différents pour le même verbe, c'était l'écran qui décidait
-                                    // de la gravité au lieu de l'action.
+                                    // No destructive role: unpinning undoes with a shake, and
+                                    // the same gesture in Parcourir carries none. Two different
+                                    // reds for the same verb was the screen deciding the gravity
+                                    // instead of the action.
                                     Button("Désépingler", systemImage: "pin.slash") {
                                         unpin(folder)
                                     }
@@ -502,7 +502,7 @@ struct HomeView: View {
         }
     }
 
-    // MARK: Dernières photos
+    // MARK: Latest photos
 
     @ViewBuilder
     private var latest: some View {
@@ -530,22 +530,22 @@ struct HomeView: View {
         }
     }
 
-    // MARK: Derniers ajouts
+    // MARK: Recent arrivals
 
-    /// Ce que le NAS a reçu depuis la dernière fois, tous genres confondus.
+    /// What the NAS has received since last time, all kinds together.
     ///
-    /// Une liste et non une bande de vignettes : c'est le seul endroit de l'accueil où un
-    /// document peut apparaître, et un document n'a pas d'image à montrer. La ligne mène au
-    /// dossier d'accueil du fichier, qui est la question qu'on se pose en voyant arriver
-    /// quelque chose — « c'est tombé où ? ».
+    /// A list, not a strip of thumbnails: this is the only place on the home screen where a
+    /// document can appear, and a document has no image to show. The row leads to the file's
+    /// home folder, which is the question you ask on seeing something arrive — "where did
+    /// that land?".
     @ViewBuilder
     private var arrived: some View {
         if !arrivals.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Text("Derniers ajouts").font(.title3.bold())
-                    // Le seul endroit de l'app qui annonce l'arrivée d'un document : « N
-                    // fichiers à lire » ne parle que des dates, et un document n'en a pas.
+                    // The one place in the app that announces a document's arrival: « N
+                    // fichiers à lire » only speaks of dates, and a document has none.
                     if unseenArrivals > 0 {
                         Text(unseenArrivals.formatted())
                             .font(.caption2.weight(.semibold))
@@ -573,8 +573,8 @@ struct HomeView: View {
                             Divider().padding(.leading, 56)
                         }
                     }
-                    // Seulement s'il y a vraiment une suite : un « Voir tout » qui ouvre les
-                    // cinq mêmes lignes est une porte qui ne mène nulle part.
+                    // Only when there really is more: a « Voir tout » that opens the same
+                    // five lines is a door that leads nowhere.
                     if arrivals.count > Self.shownArrivals {
                         Button {
                             Task { await openAllArrivals() }
@@ -588,20 +588,20 @@ struct HomeView: View {
                             in: RoundedRectangle(cornerRadius: Theme.Radius.panel,
                                                  style: .continuous))
             }
-            // Le repère avance quand l'étagère a été montrée. Le chiffre affiché, lui, vient
-            // d'une lecture faite avant : la pastille reste donc visible pendant cette
-            // visite-ci et ne revient qu'au prochain ajout.
+            // The marker advances once the shelf has been shown. The figure displayed,
+            // though, comes from a read made earlier: the badge thus stays visible through
+            // this visit and only comes back on the next arrival.
             .task(id: arrivals.first?.id) { try? await IndexStore.shared.markArrivalsSeen() }
         }
     }
 
-    /// Cinq lignes : assez pour voir ce qui vient d'arriver, assez peu pour que la section
-    /// reste une nouvelle et pas une liste.
+    /// Five rows: enough to see what has just arrived, few enough that the section stays a
+    /// piece of news and not a list.
     private static let shownArrivals = 5
 
-    /// La liste complète, récupérée au moment du geste plutôt que gardée en mémoire : on ne
-    /// charge pas deux cents lignes à chaque ouverture de l'accueil pour un bouton que
-    /// personne ne touche la plupart du temps.
+    /// The full list, fetched at the moment of the gesture rather than kept in memory: no
+    /// loading two hundred rows on every opening of the home screen for a button nobody
+    /// touches most of the time.
     private func openAllArrivals() async {
         let all = (try? await IndexStore.shared.recentlyAdded(under: FreeboxClient.rootPath,
                                                               limit: 200)) ?? arrivals
@@ -618,7 +618,7 @@ struct HomeView: View {
         }
     }
 
-    // MARK: Bibliothèque
+    // MARK: Library
 
     private var library: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -713,12 +713,12 @@ struct HomeView: View {
         let paths = pins.map(\.path)
         pinStats = (try? await IndexStore.shared.stats(for: paths)) ?? [:]
         pinCovers = (try? await IndexStore.shared.covers(for: paths, limit: 3)) ?? [:]
-        // Des photos, pas des médias : l'étagère s'appelle « Dernières photos », et une vidéo
-        // sous ce titre est un contenu qui ne correspond pas à ce qui l'annonce.
+        // Photos, not media: the shelf is called « Dernières photos », and a video under
+        // that title is content that does not match its billing.
         recent = (try? await IndexStore.shared.recentMedia(under: FreeboxClient.rootPath,
                                                            limit: 12, kinds: [.image])) ?? []
-        // Un de plus que les cinq montrés : c'est ce qui dit s'il y a une suite, sans poser
-        // une seconde requête juste pour compter.
+        // One more than the five shown: that is what says whether there is more, without a
+        // second query just to count.
         arrivals = (try? await IndexStore.shared.recentlyAdded(under: FreeboxClient.rootPath,
                                                                limit: Self.shownArrivals + 1)) ?? []
         unseenArrivals = (try? await IndexStore.shared.unseenArrivals()) ?? 0
