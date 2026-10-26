@@ -40,7 +40,7 @@ actor ThumbnailPipeline {
         await trimOnce()
         guard item.isMedia else { return nil }
 
-        let key = DiskCache.key(for: item.path, size: item.size, maxPixel: Int(maxPixel))
+        let key = key(for: item, maxPixel: maxPixel)
         if let cached = memory[key] { return cached }
 
         return await load(item, client: client, key: key, maxPixel: maxPixel,
@@ -59,10 +59,19 @@ actor ThumbnailPipeline {
         }
     }
 
+    /// A file whose probe cannot be trusted is rendered by a different route, so it gets a
+    /// different key — which is what retires the blank thumbnails already sitting on disk.
+    private func key(for item: Item, maxPixel: CGFloat) -> String {
+        let trusted = PreviewPolicy.trustsProbe(path: item.path, size: item.size,
+                                                probeBytes: probeBytes)
+        return DiskCache.key(for: item.path, size: item.size, maxPixel: Int(maxPixel),
+                             variant: trusted ? "" : "full")
+    }
+
     private func drain(client: FreeboxClient) async {
         while let item = window.next() {
             let maxPixel = windowSize
-            let key = DiskCache.key(for: item.path, size: item.size, maxPixel: Int(maxPixel))
+            let key = key(for: item, maxPixel: maxPixel)
             guard memory[key] == nil else { continue }
             _ = await load(item, client: client, key: key, maxPixel: maxPixel,
                            gate: nil, priority: .utility)
@@ -120,7 +129,11 @@ actor ThumbnailPipeline {
             // making every cell queue behind whatever the indexing pass is writing to SQLite
             // is a second serialisation on a path that already has one.
             Task { try? await IndexStore.shared.note(taken, for: item, in: folder) }
-            if let image = ImageDecoding.embeddedPreview(probe, maxPixel: maxPixel) {
+            // Only where the probe can hold a real preview. On a truncated PNG ImageIO
+            // returns a blank image that looks plausible, and taking it would skip the
+            // fallback below — see `PreviewPolicy.trustsProbe`.
+            if PreviewPolicy.trustsProbe(path: item.path, size: item.size, probeBytes: probeBytes),
+               let image = ImageDecoding.embeddedPreview(probe, maxPixel: maxPixel) {
                 return image
             }
         }

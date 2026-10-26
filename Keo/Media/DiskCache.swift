@@ -75,8 +75,14 @@ struct DiskCache: Sendable {
         return victims
     }
 
-    static func key(for path: String, size: Int64, maxPixel: Int) -> String {
-        let seed = "\(path)|\(size)|\(maxPixel)"
+    /// `variant` separates thumbnails of the same file that were produced by different
+    /// routes. It earned its place: thumbnails rendered from a truncated probe were blank,
+    /// and fixing the renderer did not fix the library — the blanks were already on disk, and
+    /// this directory outlives a reinstall. Changing the route changes the key, so the files
+    /// that were wrong are re-rendered and the ones that were right are left alone.
+    static func key(for path: String, size: Int64, maxPixel: Int,
+                    variant: String = "") -> String {
+        let seed = "\(path)|\(size)|\(maxPixel)" + (variant.isEmpty ? "" : "|\(variant)")
         return SHA256.hash(data: Data(seed.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }

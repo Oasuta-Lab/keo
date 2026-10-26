@@ -41,7 +41,7 @@ swiftc -swift-version 6 -D DEBUG \
   Tests/main.swift Tests/store.swift Tests/favourites.swift Tests/videodatechecks.swift \
   Tests/sync.swift Tests/search.swift Tests/covers.swift Tests/notes.swift \
   Tests/stats.swift Tests/widget.swift Tests/links.swift Tests/live.swift Tests/dates.swift \
-  Tests/exclusions.swift Tests/prefetch.swift \
+  Tests/exclusions.swift Tests/prefetch.swift Tests/previews.swift \
   -o /tmp/keocheck && /tmp/keocheck
 ```
 

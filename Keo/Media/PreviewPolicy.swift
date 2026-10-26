@@ -1,4 +1,7 @@
 import CoreGraphics
+// For `pathExtension`: the same one `Item.classify` uses, so the two agree on what a
+// file's extension is.
+import Foundation
 
 /// Decides whether a file's *embedded* preview is good enough to put in a grid cell.
 ///
@@ -14,6 +17,31 @@ enum PreviewPolicy {
     /// Aspect ratios rarely match to the pixel; 2% absorbs rounding without letting a
     /// genuinely different crop through.
     static let maximumAspectDrift: CGFloat = 0.02
+
+    /// Whether the 256 KB probe can be believed at all for this file.
+    ///
+    /// ImageIO builds a thumbnail out of a *truncated* file without being asked to, and
+    /// without saying so. Measured on a 762 KB PNG cut at 256 KB: it returns an image of the
+    /// right pixel size and the right aspect ratio, **100 % transparent**. `accepts` only
+    /// judges size and ratio, so it took it — the cell cached a blank and the full-download
+    /// fallback, which would have worked, never ran. That is the bug behind "some PNGs have
+    /// no preview".
+    ///
+    /// Two cases are safe. A format that carries a real preview ahead of its pixel data: JPEG
+    /// and HEIC write an EXIF thumbnail, and every raw format embeds a full JPEG. And a file
+    /// small enough that the probe is the whole file, where there is nothing to truncate.
+    ///
+    /// PNG, GIF, BMP and WebP carry nothing of the sort, so for them the probe is only worth
+    /// the capture date it reads on the way past.
+    static func trustsProbe(path: String, size: Int64, probeBytes: Int) -> Bool {
+        if size <= Int64(probeBytes) { return true }
+        return previewBearing.contains((path as NSString).pathExtension.lowercased())
+    }
+
+    /// Formats that put a decodable preview before the image data.
+    private static let previewBearing: Set<String> =
+        ["jpg", "jpeg", "heic", "heif", "tif", "tiff",
+         "dng", "cr2", "cr3", "nef", "arw", "raf", "orf", "rw2"]
 
     static func accepts(preview: CGSize, fullImage: CGSize?, requested: CGFloat) -> Bool {
         guard preview.width > 0, preview.height > 0 else { return false }

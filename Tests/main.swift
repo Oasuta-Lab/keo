@@ -126,6 +126,8 @@ func checkTheThemeCopiesMatch() {
 
 checkTheThemeCopiesMatch()
 
+checkPreviewProbeTrust()
+
 // MARK: - Envelope
 
 struct Entry: Decodable {
