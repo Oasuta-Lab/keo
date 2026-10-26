@@ -46,7 +46,7 @@ struct SyncRecoveryView: View {
         ContentUnavailableView {
             Label("Récupération en cours", systemImage: "icloud.and.arrow.down")
         } description: {
-            Text("Tes favoris, épingles et collections reviennent d’iCloud. "
+            Text("Tes favoris, épingles et collections reviennent d'iCloud. "
                + "Rien n'est perdu.")
         }
     }

@@ -242,7 +242,10 @@ struct BrowserView: View {
         .modifier(PushTargets(client: client, declare: root))
         .fullScreenCover(item: $viewing) { item in
             ViewerView(client: client,
-                       items: contents.media.isEmpty ? [item] : contents.media,
+                       // Ask about the tapped item, not about the folder: a document is
+                       // never in `media`, so in a folder that also held photos the
+                       // viewer could not find it and opened the first photo instead.
+                       items: item.kind == .other ? [item] : contents.media,
                        companions: contents.companions,
                        start: item, anchor: $anchor)
                 .navigationTransition(.zoom(sourceID: anchor ?? item.id, in: zoom))
@@ -650,6 +653,7 @@ struct BrowserView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
+                        .accessibilityLabel("Trier et regrouper")
                 }
             }
         }
@@ -961,13 +965,15 @@ struct Thumb: View {
     /// nil when not selecting.
     let selected: Bool?
     let lookahead: ArraySlice<Item>
+    /// Square in a grid; the memory carousel hands it a 4:3 frame to fill instead.
+    var aspect: CGFloat = 1
 
     @State private var image: UIImage?
 
     var body: some View {
         Rectangle()
             .fill(.quaternary)
-            .aspectRatio(1, contentMode: .fit)
+            .aspectRatio(aspect, contentMode: .fit)
             .overlay {
                 if let image {
                     Image(uiImage: image)

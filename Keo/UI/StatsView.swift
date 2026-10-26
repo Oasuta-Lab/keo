@@ -220,7 +220,7 @@ struct StatsView: View {
                 Text(subtree.name).font(.subheadline.weight(.medium)).lineLimit(1)
                 Spacer()
                 if subtree.media > 0 {
-                    Text("\(subtree.media.formatted()) éléments")
+                    Text(Undoer.count(subtree.media, "élément", "éléments"))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
