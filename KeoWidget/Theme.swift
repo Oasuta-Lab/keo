@@ -64,6 +64,11 @@ extension Font {
 /// The bays are holes, not lighter shapes, so the mark stays a single colour.
 struct CageMark: Shape {
 
+    /// Dropped for the small-size cut. Below roughly 30 pt the bays close up on their own,
+    /// and set beside real letters a hollow stem stops reading as the stem of a K at all —
+    /// it reads as a separate little ladder standing in front of the word.
+    var bays = true
+
     /// The mark alone, without the tile the app icon sits on.
     fileprivate static let design = CGRect(x: 56, y: 58, width: 143, height: 136)
 
@@ -86,11 +91,38 @@ struct CageMark: Shape {
         path.addRoundedRect(in: box(56, 58, 54, 136),
                             cornerSize: CGSize(width: 14 * scale, height: 14 * scale))
         // Drawn in the same direction as the cage, so the even-odd fill cuts them out of it.
-        for y in stride(from: CGFloat(66), through: 162, by: 32) {
-            path.addRoundedRect(in: box(64, y, 38, 24),
-                                cornerSize: CGSize(width: 5 * scale, height: 5 * scale))
+        if bays {
+            for y in stride(from: CGFloat(66), through: 162, by: 32) {
+                path.addRoundedRect(in: box(64, y, 38, 24),
+                                    cornerSize: CGSize(width: 5 * scale, height: 5 * scale))
+            }
         }
 
+        return path
+    }
+}
+
+
+/// The four bays on their own, so they can be filled as light keys instead of knocked through.
+///
+/// The icon builds the mark in two tones — a solid cage with light bays laid on it — and that
+/// is what gives it its mass. Cut as holes the cage became a thin frame, which is why the mark
+/// read as a ladder rather than as the logo.
+struct CageMarkBays: Shape {
+    func path(in rect: CGRect) -> Path {
+        let design = CageMark.design
+        let scale = min(rect.width / design.width, rect.height / design.height)
+        let size = CGSize(width: design.width * scale, height: design.height * scale)
+        let origin = CGPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2)
+
+        var path = Path()
+        for y in stride(from: CGFloat(66), through: 162, by: 32) {
+            let box = CGRect(x: origin.x + (64 - design.minX) * scale,
+                             y: origin.y + (y - design.minY) * scale,
+                             width: 38 * scale, height: 24 * scale)
+            path.addRoundedRect(in: box,
+                                cornerSize: CGSize(width: 5 * scale, height: 5 * scale))
+        }
         return path
     }
 }
@@ -130,15 +162,37 @@ extension CageMark {
     struct Filled: View {
         var height: CGFloat = 96
         var opacity: Double = 1
+        var bays = true
+
+        private var lineWidth: CGFloat { 26 * height / CageMark.design.height }
+
+        /// Shadow spread, in step with the mark: a fixed radius is a canyon at 24 pt and
+        /// invisible at 110.
+        private var relief: CGFloat { max(0.5, height * 0.022) }
+
+        /// Cage and arm: the ink of the mark.
+        private var solid: some View {
+            ZStack {
+                CageMark(bays: false).fill(style: FillStyle(eoFill: true))
+                CageMarkArm().stroke(style: StrokeStyle(
+                    lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
+            }
+        }
 
         var body: some View {
-            // Two shapes rather than one: the cage needs an even-odd fill to keep its bays
-            // hollow, and the arm needs an ordinary stroke. Sharing a path made them fight.
             ZStack {
-                CageMark().fill(style: FillStyle(eoFill: true))
-                CageMarkArm().stroke(style: StrokeStyle(
-                    lineWidth: 26 * height / CageMark.design.height,
-                    lineCap: .round, lineJoin: .round))
+                solid
+
+                // Light keys laid on the plate, as the icon does it — not holes cut through
+                // it. Each is sunk with an inner shadow: that is what turns four painted
+                // rectangles into four bays with walls around them, and it is the thing the
+                // flat drawing was missing.
+                if bays {
+                    CageMarkBays().fill(
+                        Color(.systemBackground).shadow(
+                            .inner(color: .black.opacity(0.45),
+                                   radius: relief, y: relief * 0.6)))
+                }
             }
             .aspectRatio(CageMark.aspect, contentMode: .fit)
             .frame(height: height)
