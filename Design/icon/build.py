@@ -43,6 +43,60 @@ def svg(bg, cage, mark):
             'width="1024" height="1024">\n  <title>Keo</title>\n' + body + "</svg>\n")
 
 
+def rounded_rect(x, y, w, h, r):
+    """One rounded rectangle as path data, so several can share a single <path>."""
+    return (f"M {x + r} {y} h {w - 2 * r} a {r} {r} 0 0 1 {r} {r} v {h - 2 * r} "
+            f"a {r} {r} 0 0 1 {-r} {r} h {-(w - 2 * r)} a {r} {r} 0 0 1 {-r} {-r} "
+            f"v {-(h - 2 * r)} a {r} {r} 0 0 1 {r} {-r} z")
+
+
+def glyph_svg():
+    """The mark itself, monochrome on transparency — for the tab bar.
+
+    The icon's own geometry, not a redrawing: filled cage, four hollow bays.
+
+    Cage and bays must share ONE path. `fill-rule` applies per path, not across a group, so
+    four bays drawn as their own elements are four black rectangles sitting on a black cage —
+    invisible at every size, which is exactly how it shipped the first time.
+
+    The arm stays separate: it is a stroke, and the outline of a round-capped stroke overlaps
+    itself, which even-odd would hollow out at the corner.
+    """
+    subpaths = " ".join(
+        [rounded_rect(56, 58, 54, 136, 14)]
+        + [rounded_rect(64, y, 38, 24, 5) for y in BAYS])
+    return ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="56 58 143 136">\n'
+            '  <title>Keo</title>\n'
+            f'  <path fill="#000000" fill-rule="evenodd" d="{subpaths}"/>\n'
+            '  <path d="M 186 78 L 138 126 L 186 174" fill="none" stroke="#000000"\n'
+            '        stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>\n'
+            '</svg>\n')
+
+
+def build_glyph():
+    """A tab bar icon is ~25 pt tall; the asset carries it at 2x and 3x, as a template."""
+    out = ICONSET.parent / "MarkGlyph.imageset"
+    out.mkdir(parents=True, exist_ok=True)
+    src = HERE / "keo-glyph.svg"
+    src.write_text(glyph_svg())
+    for factor in (2, 3):
+        height = 25 * factor
+        subprocess.run(
+            ["rsvg-convert", "-h", str(height),
+             "-o", str(out / f"glyph@{factor}x.png"), str(src)], check=True)
+    (out / "Contents.json").write_text("""{
+  "images" : [
+    { "idiom" : "universal", "scale" : "1x" },
+    { "filename" : "glyph@2x.png", "idiom" : "universal", "scale" : "2x" },
+    { "filename" : "glyph@3x.png", "idiom" : "universal", "scale" : "3x" }
+  ],
+  "info" : { "author" : "xcode", "version" : 1 },
+  "properties" : { "template-rendering-intent" : "template" }
+}
+""")
+    print("glyph   -> keo-glyph.svg, MarkGlyph.imageset")
+
+
 def main():
     ICONSET.mkdir(parents=True, exist_ok=True)
     for name, palette in VARIANTS.items():
@@ -85,6 +139,8 @@ def main():
 }
 """)
     print("Contents.json -> Any / Dark / Tinted")
+
+    build_glyph()
 
 
 if __name__ == "__main__":

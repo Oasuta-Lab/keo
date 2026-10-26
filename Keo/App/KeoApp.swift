@@ -73,7 +73,14 @@ private struct Shelf: View {
                 }
                 .environment(\.stackPath, $homePath)
             } label: {
-                Label("Accueil", systemImage: "house").environment(\.symbolVariants, .none)
+                // The mark replaces the house, in a cut drawn for this size — see
+                // `glyph_svg` in Design/icon/build.py.
+                //
+                // Labels are hidden by the owner's choice: the app has five destinations
+                // and one user who knows them. `Label` keeps the title regardless, so
+                // VoiceOver still announces « Accueil » — hiding text from sight must
+                // never hide it from assistive technology.
+                Label("Accueil", image: "MarkGlyph").labelStyle(.iconOnly)
             }
 
             Tab(value: Place.browse) {
@@ -85,7 +92,9 @@ private struct Shelf: View {
                 .environment(\.stackPath, $browsePath)
             } label: {
                 // A tab bar fills its symbols by default; outline reads lighter.
-                Label("Parcourir", systemImage: "folder").environment(\.symbolVariants, .none)
+                Label("Parcourir", systemImage: "folder")
+                    .environment(\.symbolVariants, .none)
+                    .labelStyle(.iconOnly)
             }
 
             Tab(value: Place.favourites) {
@@ -95,7 +104,9 @@ private struct Shelf: View {
                 .environment(\.stackPath, $favouritesPath)
             } label: {
                 // A tab bar fills its symbols by default; outline reads lighter.
-                Label("Favoris", systemImage: "heart").environment(\.symbolVariants, .none)
+                Label("Favoris", systemImage: "heart")
+                    .environment(\.symbolVariants, .none)
+                    .labelStyle(.iconOnly)
             }
 
             Tab(value: Place.collections) {
@@ -105,7 +116,9 @@ private struct Shelf: View {
                 .environment(\.stackPath, $collectionsPath)
             } label: {
                 // A tab bar fills its symbols by default; outline reads lighter.
-                Label("Collections", systemImage: "square.stack").environment(\.symbolVariants, .none)
+                Label("Collections", systemImage: "square.stack")
+                    .environment(\.symbolVariants, .none)
+                    .labelStyle(.iconOnly)
             }
 
             Tab(value: Place.search, role: .search) {
@@ -113,9 +126,15 @@ private struct Shelf: View {
                     SearchView(client: client, seed: $searchSeed)
                 }
                 .environment(\.stackPath, $searchPath)
+            } label: {
+                // Measured on an iPhone running iOS 27: the search role does NOT get a
+                // control of its own here — leaving it the default label only brought its
+                // title back inside the same pill. So it is spelled out like the others,
+                // which at least lets it be icon-only. The title still reaches VoiceOver.
+                Label("Recherche", systemImage: "magnifyingglass").labelStyle(.iconOnly)
             }
         }
-        .modifier(MinimisingTabBar())
+        .modifier(ModernTabBar())
         .overlay(alignment: .bottom) {
             UndoBanner().padding(.bottom, 8)
         }
@@ -170,10 +189,25 @@ private struct Shelf: View {
 }
 
 /// On iOS 26 the bar shrinks out of the way as you scroll down, so it costs the grid nothing.
-private struct MinimisingTabBar: ViewModifier {
+/// The two things the tab bar asks for on iOS 26 and later.
+///
+/// `tabViewSearchActivation(.searchTabSelection)` is what sets the search tab apart from the
+/// others, in a control of its own at the trailing edge — the way Photos does it. It reads
+/// like an unrelated setting, and the reason is buried in UIKit: on iOS 27 the detached
+/// treatment is given to the *prominent* tab, and `UITabBarController.prominentTabIdentifier`
+/// says a search tab only earns it by default when it activates search automatically. On
+/// iOS 26 `role: .search` was detached unconditionally; recompiling against the iOS 27 SDK
+/// is what put it back in the pill. This is the SwiftUI spelling of that opt-in.
+///
+/// The bargain that comes with it: the search tab now raises its field the moment it is
+/// touched, and cancelling returns to the tab you came from. That is the system behaviour,
+/// not an accident.
+private struct ModernTabBar: ViewModifier {
     func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.tabBarMinimizeBehavior(.onScrollDown)
+            content
+                .tabBarMinimizeBehavior(.onScrollDown)
+                .tabViewSearchActivation(.searchTabSelection)
         } else {
             content
         }
