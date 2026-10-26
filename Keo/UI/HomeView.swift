@@ -294,8 +294,8 @@ struct HomeView: View {
                     LazyHStack(spacing: 12) {
                         ForEach(pins) { folder in
                             NavigationLink(value: BrowserSource.folder(folder)) {
-                                PinnedFolderCard(folder: folder,
-                                                 stats: pinStats[folder.path])
+                                FolderCard(folder: folder,
+                                           stats: pinStats[folder.path], width: 150)
                             }
                             .buttonStyle(.plain)
                             // Pinning happens in Parcourir by long press; unpinning had no
@@ -518,62 +518,6 @@ private struct LibraryRow: View {
     }
 }
 
-/// A pinned folder on the home shelf.
-///
-/// Not `FolderCard`. That one leads with a photograph from inside the folder, which is right
-/// in the browser — you are among folders there and the cover is the only thing telling two
-/// apart. On the home shelf, between a carousel of photographs and a row of photographs, a
-/// cover made a pinned folder look like one more picture. So the card says what it is instead
-/// of what is in it: a folder glyph, the name, and the counts, with nothing to decode.
-private struct PinnedFolderCard: View {
-    let folder: Item
-    /// Absent until the folder has been indexed; the card simply says less.
-    let stats: FolderStats?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Image(systemName: "folder.fill")
-                .font(.title3)
-                .foregroundStyle(.tint)
-
-            Spacer(minLength: 10)
-
-            Text(folder.name)
-                .font(.subheadline.weight(.medium))
-                .lineLimit(2, reservesSpace: true)
-                .multilineTextAlignment(.leading)
-
-            if let count = stats?.mediaCount ?? folder.childCount, count > 0 {
-                Text(Undoer.count(count, "élément", "éléments"))
-                    .font(.caption2)
-                    .fontDesign(.rounded)
-                    .foregroundStyle(.secondary)
-            }
-            if let detail {
-                Text(detail)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
-            }
-        }
-        .frame(width: 150, alignment: .topLeading)
-        .padding(12)
-        .background(.tint.opacity(0.14),
-                    in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
-        .contentShape(Rectangle())
-    }
-
-    /// "136,69 Go · 2016 – 2023", trimmed to whatever is actually known.
-    private var detail: String? {
-        guard let stats else { return nil }
-        let parts = [
-            stats.bytes.map { Int64($0).formatted(.byteCount(style: .file)) },
-            stats.span,
-        ].compactMap { $0 }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-}
-
 /// The first launch, when the app has nothing of the owner's to show. One of the three places
 /// the mark is allowed — never on a screen that has photos on it, where the photos win.
 private struct WelcomeCard: View {
@@ -594,7 +538,7 @@ private struct WelcomeCard: View {
             if reachable {
                 Button("Lancer la première lecture", action: start)
                     // The label colour SwiftUI picks for a prominent button assumes a
-                    // dark fill. Keo's accent is a pale peach in dark mode, where white
+                    // dark fill. Keo's accent is a pale peach in both appearances, where white
                     // on it falls to 2.1:1 — `OnAccent` flips with the appearance.
                     .buttonStyle(.borderedProminent)
                     .foregroundStyle(Color("OnAccent"))

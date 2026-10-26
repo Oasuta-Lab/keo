@@ -69,8 +69,6 @@ struct BrowserView: View {
     @State private var unindexed = 0
     /// Counted during indexing, so a tile can say what is inside without asking the box.
     @State private var folderStats: [String: FolderStats] = [:]
-    /// One photo per subfolder, chosen by the index — no extra listing to find it.
-    @State private var folderCovers: [String: Item] = [:]
     /// True while the grid shows what the index remembers rather than a fresh listing.
     @State private var fromCache = false
     /// Saved items whose file the index no longer finds on the NAS.
@@ -115,7 +113,6 @@ struct BrowserView: View {
                             ForEach(contents.folders) { folder in
                                 NavigationLink(value: folder) {
                                     FolderCard(folder: folder, stats: folderStats[folder.path],
-                                               cover: folderCovers[folder.path], client: client,
                                                noted: noted.contains(folder.path))
                                 }
                                 .buttonStyle(.plain)
@@ -758,7 +755,6 @@ struct BrowserView: View {
             await offerIndexing()
             let folders = contents.folders.map(\.path)
             folderStats = (try? await IndexStore.shared.stats(for: folders)) ?? [:]
-            folderCovers = (try? await IndexStore.shared.covers(for: folders)) ?? [:]
 
             let known = try await IndexStore.shared.known(contents.media, in: path)
             if !known.isEmpty {
@@ -1004,7 +1000,7 @@ struct Thumb: View {
                     Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                         .font(.title3)
                         .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white,
+                        .foregroundStyle(Color("OnAccent"),
                                          selected ? AnyShapeStyle(.tint)
                                                   : AnyShapeStyle(.black.opacity(Theme.Scrim.chip)))
                         .shadow(radius: 2)
