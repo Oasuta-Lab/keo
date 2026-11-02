@@ -1,0 +1,3 @@
+// The Apple team is personal, not part of the project: it lives in Local.xcconfig, which git
+// ignores. The optional include keeps a fresh clone building for the simulator without it.
+#include? "Local.xcconfig"

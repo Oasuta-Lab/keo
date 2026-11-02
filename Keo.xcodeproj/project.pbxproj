@@ -35,6 +35,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		1A00000000000000000000E0 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		1A00000000000000000000A1 /* Keo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Keo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A000000000000000000D0 /* KeoWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = KeoWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -89,6 +90,7 @@
 				1A00000000000000000000A2 /* Keo */,
 				1A000000000000000000D1 /* KeoWidget */,
 				1A00000000000000000000A5 /* Products */,
+				1A00000000000000000000E0 /* Signing.xcconfig */,
 			);
 			sourceTree = "<group>";
 		};
@@ -272,6 +274,7 @@
 /* Begin XCBuildConfiguration section */
 		1A00000000000000000000B2 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 1A00000000000000000000E0 /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_OBJC_WEAK = YES;
@@ -298,6 +301,7 @@
 		};
 		1A00000000000000000000B3 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 1A00000000000000000000E0 /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_OBJC_WEAK = YES;

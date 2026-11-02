@@ -93,6 +93,9 @@ français, sur le vrai SQLite quand c'est du stockage. Pas de framework, pas de 
 Le projet a **deux cibles** depuis le widget. Construire avec
 `-allowProvisioningUpdates` : le groupe d'app doit être enregistré contre l'App ID, et sans
 ce drapeau la signature échoue pour l'app *et* pour l'extension.
+L'équipe Apple n'est pas dans le projet : elle se lit dans `Local.xcconfig`, ignoré par git,
+que `Signing.xcconfig` inclut s'il existe. Une ligne, `DEVELOPMENT_TEAM = <id>`. Sans lui, le
+simulateur compile et l'appareil refuse de signer.
 
 ```sh
 xcodebuild -project Keo.xcodeproj -scheme Keo -configuration Debug \

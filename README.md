@@ -1,5 +1,7 @@
 # Keo
 
+<img src="Design/banner.png" alt="Keo banner" width="100%"/>
+
 Galerie photos/vidéos iOS native pour Freebox, via l'API Freebox OS.
 SwiftUI, Swift 6 en concurrence stricte, aucune dépendance externe.
 
@@ -1134,7 +1136,7 @@ Le dépôt contient déjà `Keo/Keo.entitlements` (CloudKit, conteneur
 `iCloud.com.oasutalab.keo`, `aps-environment`, groupe d'app) et les modes background
 `remote-notification`, `processing` et `fetch` — les deux derniers pour
 `ContinuedIndexing` et `PeriodicDiscovery`. Le build **simulateur** passe tel quel. Pour un appareil, une fois,
-dans Xcode avec le compte de l'équipe ton équipe Apple :
+dans Xcode, avec ton équipe Apple déclarée dans `Local.xcconfig` (voir `Signing.xcconfig`) :
 
 1. Cible Keo → *Signing & Capabilities* → vérifier que les capacités **iCloud → CloudKit**
    (conteneur `iCloud.com.oasutalab.keo`) et **Push Notifications** apparaissent ; la
