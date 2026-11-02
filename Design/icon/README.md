@@ -1,75 +1,77 @@
-# Icône de Keo
+# Keo's icon
 
-Un K dont le fût est une cage de NAS : quatre baies dans un boîtier, et un bras qui en sort.
+A K whose stem is a NAS cage: four bays in an enclosure, and an arm coming out of it.
 
-## La règle de construction
+## The construction rule
 
-Le bras n'est pas posé à côté de la cage, il en **dérive**. Deux rapports à ne pas casser :
+The arm is not placed next to the cage, it **derives** from it. Two ratios not to break:
 
-- son épaisseur vaut une hauteur de baie (26 contre 24) ;
-- ses deux extrémités tombent sur l'axe de la première et de la dernière baie (y = 78 et 174).
+- its thickness is one bay height (26 against 24);
+- its two ends land on the axis of the first and the last bay (y = 78 and 174).
 
-Changer la cage sans recalculer le bras défait la marque : elle redevient deux objets côte à côte.
+Changing the cage without recomputing the arm undoes the mark: it becomes two objects side by
+side again.
 
 ## Palette
 
-| | Fond | Cage | Baies + bras |
+| | Background | Cage | Bays + arm |
 |---|---|---|---|
 | Any | `#e9a178` | `#cf8154` | `#ffffff` |
 | Dark | *(transparent)* | `#7a4a30` | `#e9a178` |
 | Tinted | *(transparent)* | `#6e6e6e` | `#ffffff` |
 
-La cage est **toujours plus sombre que son environnement**, dans les trois variantes. C'est ce
-rapport de luminance qui la fait exister ; en teinté iOS ne garde que la luminance, et une cage
-trop proche du fond disparaît purement et simplement.
+The cage is **always darker than its surroundings**, in all three variants. That luminance
+ratio is what makes it exist; in tinted mode iOS keeps only the luminance, and a cage too close
+to the background simply vanishes.
 
-## Les trois variantes
+## The three variants
 
-Ce que demande iOS 18, vérifié sur la documentation Apple, pas supposé :
+What iOS 18 asks for, verified against Apple's documentation, not assumed:
 
-- **Any** : carré **plein et opaque**, sans coins arrondis. C'est le système qui masque.
-  Arrondir soi-même produit un liseré sur le masque système.
-- **Dark** : la marque sur **fond transparent**. Le système pose son propre fond sombre.
-- **Tinted** : la marque en **niveaux de gris**, sur fond transparent. Le système applique la
-  teinte de l'utilisateur d'après la luminance.
+- **Any**: a **solid, opaque** square, with no rounded corners. The system does the masking.
+  Rounding it yourself produces a fringe along the system mask.
+- **Dark**: the mark on a **transparent background**. The system lays down its own dark
+  background.
+- **Tinted**: the mark in **greyscale**, on a transparent background. The system applies the
+  user's tint from the luminance.
 
-Sans ces deux dernières, iOS les fabrique tout seul — et il le fait mal sur une marque à deux tons.
+Without the last two, iOS makes them up on its own, and it does so badly on a two-tone mark.
 
-## Reconstruire
+## Rebuilding
 
 ```sh
 python3 Design/icon/build.py
 ```
 
-Écrit les trois SVG maîtres ici et les trois PNG 1024² dans
-`Keo/Assets.xcassets/AppIcon.appiconset/`, avec le `Contents.json` qui déclare les apparences.
-La géométrie ne vit qu'à un endroit, dans ce script : ne pas retoucher les SVG à la main, ils
-sont regénérés.
+Writes the three master SVGs here and the three 1024² PNGs into
+`Keo/Assets.xcassets/AppIcon.appiconset/`, with the `Contents.json` that declares the
+appearances. The geometry lives in one place only, this script: do not retouch the SVGs by
+hand, they get regenerated.
 
-Les maîtres ne contiennent **aucun trait** : le bras est un contour plein (deux demi-cercles de
-rayon 13, une jonction ronde, une pointe intérieure en onglet). Un trait se déforme à la mise à
-l'échelle non uniforme et ne se découpe pas proprement.
+The masters contain **no stroke**: the arm is a filled outline (two half-circles of radius 13,
+a round joint, a mitred inner tip). A stroke distorts under non-uniform scaling and does not
+cut cleanly.
 
-## Vérifier que les variantes sont bien passées
+## Checking the variants made it through
 
-Une apparence absente du catalogue compilé ne produit aucune erreur de build :
+An appearance missing from the compiled catalogue produces no build error:
 
 ```sh
 xcrun assetutil --info ~/Library/Developer/Xcode/DerivedData/Keo-*/Build/Products/Debug-iphoneos/Keo.app/Assets.car \
   | grep -A1 AppIcon
 ```
 
-Doit montrer `(any)`, `UIAppearanceDark` et `ISAppearanceTintable`.
+Must show `(any)`, `UIAppearanceDark` and `ISAppearanceTintable`.
 
-## Ce qui a été essayé et écarté
+## What was tried and discarded
 
-- **Le chevron doublé** (profondeur du stockage) : se lit « retour rapide », le K disparaît.
-- **Une baie assombrie** (le disque en cours de lecture) : se lit « disque manquant ».
-- **La couture des baies prolongée à travers le bras** : même réduite à 5 unités, elle sectionne
-  la pointe du K, qui en est la charnière.
-- **Loquets, LED, grille de ventilation** : moins de 2 px à 60 px. Se bouchent et salissent.
+- **The doubled chevron** (storage depth): reads as "fast rewind", the K disappears.
+- **One darkened bay** (the disk being read): reads as "missing disk".
+- **The bay seam extended through the arm**: even reduced to 5 units, it severs the tip of
+  the K, which is its hinge.
+- **Latches, LEDs, ventilation grille**: under 2 px at 60 px. They clog up and look dirty.
 
-## Aller plus loin côté matière
+## Going further on material
 
-Pour une icône Liquid Glass (Xcode 26), importer les calques des SVG dans **Icon Composer** et
-le laisser poser profondeur, matière et reflets. Ne pas tenter de les simuler dans le SVG.
+For a Liquid Glass icon (Xcode 26), import the SVG layers into **Icon Composer** and let it
+lay down depth, material and reflections. Do not try to simulate them in the SVG.

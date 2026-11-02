@@ -1,33 +1,33 @@
-# Keo — à respecter
+# Keo — what applies
 
-README.md explique **pourquoi** le code est comme ça. Ce fichier dit **ce qui s'applique**.
-En cas de doute sur une intention de conception, lire la section correspondante du README.
+README.md explains **why** the code is the way it is. This file says **what applies**.
+When in doubt about a design intent, read the matching section of the README.
 
-## 1. Règle non négociable
+## 1. Non-negotiable rule
 
-**Keo ne touche jamais aux données du NAS.** Pas de déplacement, pas de modification, pas de
-suppression, pas de création. Jamais, sous aucun prétexte, même demandé en passant.
+**Keo never touches the data on the NAS.** No moving, no modifying, no deleting, no creating.
+Never, under any pretext, even when asked in passing.
 
-C'est structurel, pas déclaratif :
+This is structural, not declarative:
 
-- `ReadOnlyTransport` (`Keo/Freebox/Transport.swift`) est la seule porte vers le NAS et
-  n'expose ni méthode HTTP ni corps de requête. Écrire demanderait d'ajouter une méthode à ce
-  type — ne pas le faire.
-- Le seul `httpMethod = "POST"` de l'app est la poignée de main de login, dans
+- `ReadOnlyTransport` (`Keo/Freebox/Transport.swift`) is the only door to the NAS and
+  exposes neither an HTTP method nor a request body. Writing would require adding a method to
+  that type. Do not do it.
+- The only `httpMethod = "POST"` in the app is the login handshake, in
   `LoginTransport`.
-- `checkNothingWritesToTheNAS()` dans `Tests/main.swift` relit les sources et échoue si un
-  `PUT`/`DELETE`/`PATCH`/`MOVE` ou une route `fs/mv`, `fs/rm`, `fs/mkdir`… apparaît ailleurs
-  que dans un commentaire.
+- `checkNothingWritesToTheNAS()` in `Tests/main.swift` re-reads the sources and fails if a
+  `PUT`/`DELETE`/`PATCH`/`MOVE` or an `fs/mv`, `fs/rm`, `fs/mkdir`… route appears anywhere
+  other than in a comment.
 
-Ne jamais affaiblir, contourner ni « temporairement » désactiver l'un des trois.
+Never weaken, bypass or "temporarily" disable any of the three.
 
-## 2. Avant de dire que c'est fait
+## 2. Before saying it is done
 
-Lancer la vérification. Elle doit être verte, et c'est **la** commande — si un fichier est
-ajouté à la liste, le faire ici et nulle part ailleurs.
+Run the check. It must be green, and this is **the** command: if a file is added to the
+list, do it here and nowhere else.
 
 ```sh
-rm -f /tmp/keocheck   # sinon un échec de compilation relance l'ancien binaire et ment
+rm -f /tmp/keocheck   # otherwise a failed compile re-runs the old binary and lies
 swiftc -swift-version 6 -D DEBUG \
   Keo/Freebox/Item.swift Keo/Freebox/MediaSection.swift Keo/Freebox/Transport.swift \
   Keo/Freebox/FreeboxClient.swift Keo/Freebox/VideoAsset.swift \
@@ -48,54 +48,52 @@ swiftc -swift-version 6 -D DEBUG \
   -o /tmp/keocheck && /tmp/keocheck
 ```
 
-Puis compiler pour l'appareil — la vérification ci-dessus ne compile aucun fichier SwiftUI :
+Then build for the device, since the check above compiles no SwiftUI file:
 
 ```sh
 xcodebuild -project Keo.xcodeproj -scheme Keo -configuration Debug \
   -destination 'generic/platform=iOS' build 2>&1 | grep -E "error:|\*\* BUILD"
 ```
 
-Trois fichiers existent en double, à l'octet près, parce que les deux cibles ne partagent
-aucun fichier : `WidgetManifest.swift`, `Theme.swift` et `Plural.swift`, dans `Keo/` et dans
-`KeoWidget/`. Éditer l'un sans l'autre fait échouer la vérification, et c'est voulu — c'est
-le seul garde-fou. Les copier (`cp`), ne pas les faire diverger.
+Three files exist twice, byte for byte, because the two targets share no file:
+`WidgetManifest.swift`, `Theme.swift` and `Plural.swift`, in `Keo/` and in
+`KeoWidget/`. Editing one without the other makes the check fail, and that is intended: it is
+the only safeguard. Copy them (`cp`), do not let them diverge.
 
-Une quatrième duplication ne peut pas être byte-identique : `Photo.downsample`
-(`KeoWidget/KeoWidget.swift`) et `ImageDecoding.downsample` (`Keo/Media/`) rendent deux types
-différents. `checkTheDownsampleLogicMatches` compare leurs options ImageIO. Toucher à l'une
-veut dire toucher à l'autre.
+A fourth duplication cannot be byte-identical: `Photo.downsample`
+(`KeoWidget/KeoWidget.swift`) and `ImageDecoding.downsample` (`Keo/Media/`) return two
+different types. `checkTheDownsampleLogicMatches` compares their ImageIO options. Touching one
+means touching the other.
 
-Un fichier de `Tests/` ne doit pas porter le nom d'un fichier de `Keo/` à la casse près :
-le système de fichiers est insensible à la casse, les deux produisent le même fichier objet,
-et l'édition de liens échoue sur des symboles introuvables sans jamais nommer la cause.
-`DeepLink.swift` et `HumanDate.swift` ont chacun coûté cette erreur.
+A file in `Tests/` must not bear the name of a file in `Keo/`, case aside: the file system is
+case-insensitive, both produce the same object file, and linking fails on missing symbols
+without ever naming the cause. `DeepLink.swift` and `HumanDate.swift` each cost that error.
 
-Toute logique non triviale ajoutée laisse une vérification derrière elle, dans `Tests/`, en
-français, sur le vrai SQLite quand c'est du stockage. Pas de framework, pas de fixtures.
+Any non-trivial logic added leaves a check behind it, in `Tests/`, in French, on the real
+SQLite when it is storage. No framework, no fixtures.
 
 ## 3. Conventions
 
-- Swift 6 en concurrence stricte, cible iOS 18, **aucune dépendance externe** — frameworks
-  système uniquement. Ne pas en ajouter.
-- Commentaires en **anglais**. Chaînes affichées à l'utilisateur et vérifications en
-  **français**.
-- Un commentaire explique **pourquoi**, jamais quoi. Un commentaire qui paraphrase la ligne
-  en dessous est à supprimer.
-- Pas d'abstraction spéculative : pas de protocole à une implémentation, pas de réglage pour
-  une valeur qui ne change jamais.
-- Les dépendances vont vers l'intérieur : `UI` → `Media`/`Downloads` → `Freebox`. Rien dans
-  `Freebox` ne connaît SwiftUI.
-- La logique qu'on veut pouvoir vérifier vit hors SwiftUI (`RailLayout`, `WalkOutcome`,
-  `SearchQuery`, `BrowserSource.parent(of:)`). Continuer comme ça.
+- Swift 6 with strict concurrency, targeting iOS 18, **no external dependency**: system
+  frameworks only. Do not add any.
+- Comments in **English**. User-facing strings and checks in **French**.
+- A comment explains **why**, never what. A comment that paraphrases the line below it is to
+  be deleted.
+- No speculative abstraction: no protocol with one implementation, no setting for a value
+  that never changes.
+- Dependencies point inwards: `UI` → `Media`/`Downloads` → `Freebox`. Nothing in `Freebox`
+  knows about SwiftUI.
+- Logic we want to be able to check lives outside SwiftUI (`RailLayout`, `WalkOutcome`,
+  `SearchQuery`, `BrowserSource.parent(of:)`). Keep it that way.
 
-## 4. Appareil
+## 4. Device
 
-Le projet a **deux cibles** depuis le widget. Construire avec
-`-allowProvisioningUpdates` : le groupe d'app doit être enregistré contre l'App ID, et sans
-ce drapeau la signature échoue pour l'app *et* pour l'extension.
-L'équipe Apple n'est pas dans le projet : elle se lit dans `Local.xcconfig`, ignoré par git,
-que `Signing.xcconfig` inclut s'il existe. Une ligne, `DEVELOPMENT_TEAM = <id>`. Sans lui, le
-simulateur compile et l'appareil refuse de signer.
+The project has had **two targets** since the widget. Build with
+`-allowProvisioningUpdates`: the app group must be registered against the App ID, and without
+that flag signing fails for the app *and* for the extension.
+The Apple team is not in the project: it is read from `Local.xcconfig`, ignored by git, which
+`Signing.xcconfig` includes if it exists. One line, `DEVELOPMENT_TEAM = <id>`. Without it, the
+simulator builds and the device refuses to sign.
 
 ```sh
 xcodebuild -project Keo.xcodeproj -scheme Keo -configuration Debug \
@@ -103,19 +101,19 @@ xcodebuild -project Keo.xcodeproj -scheme Keo -configuration Debug \
 ls ~/Library/Developer/Xcode/DerivedData/Keo-*/Build/Products/Debug-iphoneos/Keo.app/PlugIns/
 ```
 
-La seconde ligne n'est pas décorative : une édition du `project.pbxproj` qui perd la phase
-d'embarquement produit une app qui compile et s'installe **sans son extension**, sans erreur.
+The second line is not decorative: an edit to `project.pbxproj` that loses the embed phase
+produces an app that builds and installs **without its extension**, with no error.
 
 ```sh
-xcrun devicectl list devices                     # UDID des appareils branchés
+xcrun devicectl list devices                     # UDID of the connected devices
 xcrun devicectl device install app --device <UDID> \
   ~/Library/Developer/Xcode/DerivedData/Keo-*/Build/Products/Debug-iphoneos/Keo.app
 xcrun devicectl device process launch --device <UDID> --console com.oasutalab.keo \
   2>&1 | grep -a --line-buffered "\[keo\]"
 ```
 
-Les traces `[keo]` sont aussi écrites dans le conteneur de l'app, parce que la session
-`--console` meurt dès que l'app est relancée depuis l'écran d'accueil. Les récupérer :
+The `[keo]` traces are also written to the app container, because the `--console` session
+dies as soon as the app is relaunched from the home screen. To retrieve them:
 
 ```sh
 xcrun devicectl device copy from --device <UDID> \
@@ -123,57 +121,54 @@ xcrun devicectl device copy from --device <UDID> \
   --source "Library/Application Support/Keo/trace.log" --destination /tmp/
 ```
 
-Le même mécanisme sort `index.sqlite` quand il faut savoir ce que l'appareil a vraiment en
-base plutôt que le demander.
+The same mechanism pulls out `index.sqlite` when you need to know what the device really has
+in its database rather than ask it.
 
-- Le `CFBundleVersion` est le nombre de commits, tamponné au build. Ne pas le saisir à la main.
-- **Ne jamais réinstaller pendant qu'une mesure ou un test tourne sur l'appareil** :
-  l'installation tue le processus et la session console avec. Ça a déjà fait perdre une mesure.
-- Si `codesign` rend `errSecInternalComponent`, le trousseau de session est verrouillé : c'est
-  au propriétaire de le déverrouiller depuis Terminal.app, pas quelque chose à contourner.
+- `CFBundleVersion` is the commit count, stamped at build time. Do not type it by hand.
+- **Never reinstall while a measurement or a test is running on the device**: the install
+  kills the process, and the console session with it. That has already lost a measurement.
+- If `codesign` returns `errSecInternalComponent`, the session Keychain is locked: it is for
+  the owner to unlock it from Terminal.app, not something to work around.
 
-## 5. Pièges qui ont déjà coûté cher
+## 5. Traps that have already cost dearly
 
-- **Les rapports de plantage sont sur l'appareil**, et ils donnent la réponse en une minute
-  là où le raisonnement donne une hypothèse :
+- **Crash reports are on the device**, and they give the answer in a minute where reasoning
+  gives a hypothesis:
   ```sh
   xcrun devicectl device info files --device <UDID> --domain-type systemCrashLogs | grep -i keo
   xcrun devicectl device copy from --device <UDID> --domain-type systemCrashLogs \
     --source "Keo-….ips" --destination /tmp/
   ```
-  Le fichier `.ips` est deux objets JSON collés : métadonnées sur la première ligne, rapport
-  sur le reste.
-- **Cycle de vie de l'indexation** : trois correctifs plausibles et faux avant celui qui a
-  marché. Ne rien y changer sur la foi d'un raisonnement — brancher la console de l'appareil
-  d'abord et partir de ce qu'elle raconte. Voir README, « Lire les traces de l'appareil ».
-- **`Pairing.appID` est ce que la box a autorisé**, pas l'identifiant de bundle — ils
-  coïncident aujourd'hui, c'est tout. Le changer invalide l'autorisation : jeton refusé,
-  `Store.reconnectIfPossible` le jette, et il faut réappuyer sur ✓ sur la face avant de la
-  Freebox. Ne pas y toucher sans le dire.
-- **`navigationDestination` dans une vue qui se pousse elle-même.** `BrowserView` est
-  récursive : chaque instance redéclarait la destination des mêmes types, donc une pile de
-  trois niveaux en avait trois concurrentes. SwiftUI ne promet rien dans ce cas et reconstruit
-  la destination — l'état de la vue est détruit, la grille se recharge toutes les quelques
-  secondes et la position de lecture est perdue. Les destinations se déclarent **une fois, à
-  la racine de la pile** (`PushTargets`), les vues poussées en héritent. **La variante
-  `navigationDestination(item:)` compte aussi** : le piège a été refermé pour `for:` et laissé
-  ouvert pour `item:`, et il est revenu intact — le fil d'Ariane bouclait. **Il est revenu une
-  troisième fois** : `HomeView` déclarait un `item:` *en plus* du `PushTargets` de la même
-  racine, et `StatsView`, qui est poussée dans cette pile, en déclarait un troisième. La règle
-  est donc sans exception : **aucune vue ne déclare de destination sauf la racine de sa
-  propre pile**. Pour pousser ou dépiler, une vue lit `\.stackPath`, le chemin que la pile
-  publie dans l'environnement. Une vue qui peut être *soit* poussée *soit* présentée en
-  feuille (`StatsView`) ouvre sa propre pile avec son propre chemin et republie
-  `\.stackPath` dessus — sinon elle hérite du chemin de la pile qui l'a présentée et pousse
-  derrière la feuille.
-- **La date de modification n'est pas une date de prise de vue.** Sur un NAS c'est la date de
-  copie. Ne jamais la laisser alimenter le tri, les sections ou la timeline — elle y fait
-  remonter en tête des photos que personne n'a prises ce jour-là. Elle se dit sous la photo,
-  et nulle part ailleurs.
-- **Migration de schéma SQLite** : une colonne `NOT NULL DEFAULT 0` sur `kind` a transformé
-  toutes les photos déjà indexées en dossiers. Vérifier ce que vaut la valeur par défaut dans
-  l'énumération, pas seulement dans le SQL.
-- **Mesurer, pas supposer** : un banc d'essai qui rejoue les mêmes fichiers mesure le cache.
-  Un seul échantillon ne remplace pas une supposition, il la déguise.
-- **Ne pas prétendre avoir testé ce qui demande l'appareil ou le vrai iCloud.** Écrire le plan
-  de test manuel dans le README à la place.
+  The `.ips` file is two JSON objects glued together: metadata on the first line, the report
+  on the rest.
+- **Indexing lifecycle**: three plausible, wrong fixes before the one that worked. Change
+  nothing there on the strength of reasoning: plug in the device console first and start from
+  what it says. See README, "Reading the device traces".
+- **`Pairing.appID` is what the box authorised**, not the bundle identifier: they coincide
+  today, that is all. Changing it invalidates the authorisation: token refused,
+  `Store.reconnectIfPossible` throws it away, and ✓ has to be pressed again on the front of
+  the Freebox. Do not touch it without saying so.
+- **`navigationDestination` in a view that pushes itself.** `BrowserView` is recursive: each
+  instance redeclared the destination for the same types, so a three-level stack had three
+  competing ones. SwiftUI promises nothing in that case and rebuilds the destination: the
+  view's state is destroyed, the grid reloads every few seconds and the playback position is
+  lost. Destinations are declared **once, at the root of the stack** (`PushTargets`); pushed
+  views inherit them. **The `navigationDestination(item:)` variant counts too**: the trap was
+  closed for `for:` and left open for `item:`, and it came back intact, with the breadcrumb
+  looping. **It came back a third time**: `HomeView` declared an `item:` *on top of* the
+  `PushTargets` of the same root, and `StatsView`, which is pushed onto that stack, declared a
+  third. So the rule has no exception: **no view declares a destination except the root of
+  its own stack**. To push or pop, a view reads `\.stackPath`, the path the stack publishes
+  in the environment. A view that can be *either* pushed *or* presented as a sheet
+  (`StatsView`) opens its own stack with its own path and republishes `\.stackPath` on it;
+  otherwise it inherits the path of the stack that presented it and pushes behind the sheet.
+- **The modification date is not a capture date.** On a NAS it is the copy date. Never let it
+  feed sorting, sections or the timeline: it pushes to the top photos nobody took that day.
+  It is stated under the photo, and nowhere else.
+- **SQLite schema migration**: a `NOT NULL DEFAULT 0` column on `kind` turned every
+  already-indexed photo into a folder. Check what the default value means in the enumeration,
+  not only in the SQL.
+- **Measure, do not assume**: a benchmark that replays the same files measures the cache. A
+  single sample does not replace an assumption, it disguises it.
+- **Do not claim to have tested what needs the device or real iCloud.** Write the manual test
+  plan in the README instead.

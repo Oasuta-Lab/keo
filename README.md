@@ -2,388 +2,382 @@
 
 <img src="Design/banner.png" alt="Keo banner" width="100%"/>
 
-Galerie photos/vidéos iOS native pour Freebox, via l'API Freebox OS.
-SwiftUI, Swift 6 en concurrence stricte, aucune dépendance externe.
+Native iOS photo/video gallery for Freebox, through the Freebox OS API.
+SwiftUI, Swift 6 with strict concurrency, no external dependencies.
 
-Ce fichier explique **pourquoi** le code est comme ça. `CLAUDE.md` dit **ce qui s'applique** :
-la règle de lecture seule, la commande de vérification, les conventions, et les pièges qui ont
-déjà coûté cher.
+This file explains **why** the code is the way it is. `CLAUDE.md` says **what applies**: the
+read-only rule, the check command, the conventions, and the traps that have already cost
+dearly.
 
-## Règle non négociable
+## Non-negotiable rule
 
-**Keo ne modifie jamais rien sur le NAS.** Pas de déplacement, pas de renommage, pas de
-suppression, pas d'écriture. Ce n'est pas une intention, c'est une contrainte structurelle :
+**Keo never modifies anything on the NAS.** No moving, no renaming, no deleting, no writing.
+This is not an intention, it is a structural constraint:
 
-- `ReadOnlyTransport` est la seule porte vers le NAS et n'expose que des lectures. Aucun
-  paramètre de méthode HTTP, aucun corps de requête. Écrire demanderait d'ajouter une méthode
-  à ce type.
-- La poignée de main de login, seul endroit qui fait un `POST`, vit dans `LoginTransport`,
-  hors de portée du chemin de données.
-- `Tests/main.swift` relit les sources et échoue si un `PUT`/`DELETE`/`PATCH`/`MOVE`/
-  `MKCOL`/`COPY` ou une route `fs/mv`, `fs/rm`, `fs/rename`, `fs/mkdir`… apparaît ailleurs
-  que dans un commentaire. L'extension widget est relue aussi.
+- `ReadOnlyTransport` is the only door to the NAS and exposes nothing but reads. No HTTP
+  method parameter, no request body. Writing would require adding a method to that type.
+- The login handshake, the only place that does a `POST`, lives in `LoginTransport`, out of
+  reach of the data path.
+- `Tests/main.swift` reads the sources back and fails if a `PUT`/`DELETE`/`PATCH`/`MOVE`/
+  `MKCOL`/`COPY` or an `fs/mv`, `fs/rm`, `fs/rename`, `fs/mkdir`… route appears anywhere
+  other than in a comment. The widget extension is read back too.
 
-## Lancer
+## Running it
 
 ```sh
 open Keo.xcodeproj     # ⌘R
 ```
 
-Au premier lancement : « Associer à la Freebox », puis **appuyer sur ✓ sur la face avant du
-Freebox Server**. Le jeton d'application va dans le trousseau iOS.
+On first launch: "Associer à la Freebox" (pair with the Freebox), then **press ✓ on the front
+of the Freebox Server**. The app token goes into the iOS Keychain.
 
-Si la navigation renvoie une erreur de droits : Freebox OS → Paramètres → Gestion des accès →
-Applications → Keo → cocher « Accès aux fichiers ».
+If browsing returns a permissions error: Freebox OS → Settings → Access management →
+Applications → Keo → tick "File access".
 
-## Une seule association pour tous tes appareils
+## One pairing for all your devices
 
-Le jeton d'application est marqué `kSecAttrSynchronizable` : le **trousseau iCloud** le porte
-d'un appareil à l'autre. Un deuxième téléphone connecté au même compte Apple installe Keo,
-l'ouvre, et se retrouve apparié sans que personne ne touche à la box.
+The app token is marked `kSecAttrSynchronizable`: the **iCloud Keychain** carries it from one
+device to the next. A second phone signed in to the same Apple account installs Keo, opens it,
+and finds itself paired without anyone touching the box.
 
-**Rien à voir avec la synchronisation de la personnalisation plus bas.** Celle-ci est un miroir
-CloudKit que l'app pilote ; le trousseau, lui, est un service système auquel l'app ne fait que
-confier un item. Deux mécanismes, deux interrupteurs dans les Réglages, aucune dépendance entre
-les deux : le trousseau coupé laisse les favoris se synchroniser, et l'inverse aussi.
+**Nothing to do with the personalisation sync further down.** That one is a CloudKit mirror
+the app drives; the Keychain is a system service the app merely hands an item to. Two
+mechanisms, two switches in Settings, no dependency between them: Keychain off still lets
+favourites sync, and the reverse holds too.
 
-Le compromis, assumé : la Freebox ne voit **qu'une seule autorisation**, partagée. Impossible
-d'en révoquer une sans révoquer les autres. L'écran d'association le dit en une ligne, parce
-qu'une autorisation partagée qu'on croit individuelle est une mauvaise surprise le jour où on
-veut retirer l'accès à un appareil perdu.
+The trade-off, accepted: the Freebox sees **only one authorisation**, shared. No way to revoke
+one without revoking the others. The pairing screen says so in one line, because a shared
+authorisation you believe is individual is a nasty surprise the day you want to pull access
+from a lost device.
 
-Rien à configurer : pas de capacité à cocher, pas d'entitlement à ajouter — le groupe de
-trousseau par défaut suffit. L'interrupteur existe déjà côté système (Réglages → compte →
-iCloud → Mots de passe), et le couper ramène exactement au comportement d'avant : un jeton
-local, une association par appareil.
+Nothing to configure: no capability to tick, no entitlement to add; the default keychain group
+is enough. The switch already exists on the system side (Settings → account → iCloud →
+Passwords), and turning it off brings back exactly the previous behaviour: a local token, one
+pairing per device.
 
-### Ce qui est délicat, et ce que fait le code
+### What is delicate, and what the code does
 
-- **`Synchronizable` fait partie de la clé primaire d'un item.** Une requête qui l'omet ne voit
-  que les items locaux ; une requête qui le fixe à `true` ne voit que les synchronisés. Et un
-  item ne se convertit pas sur place. Toutes les requêtes de `Keychain` passent donc par
-  `kSecAttrSynchronizableAny` : une seule lecture, une seule suppression, qui trouvent le jeton
-  quelle que soit sa nature — aucun appelant n'a changé.
-- **La migration des jetons déjà posés** se fait à la lecture, le seul endroit par lequel tout
-  le monde passe déjà. Si l'item trouvé n'est pas synchronisable, il est réécrit. C'est
-  idempotent : un jeton déjà migré est lu et laissé tranquille.
-- **L'ordre d'écriture est la garantie de non-perte.** On met à jour le synchronisé en place
-  (`SecItemUpdate`), on ne l'ajoute que s'il n'existe pas, et on ne supprime le local
-  **qu'après** un succès. iOS ne dit pas si le trousseau iCloud est actif ; un échec, un
-  appareil hors ligne ou un compte Apple absent ne coûtent donc rien, le jeton reste lisible
-  et la tentative se répète au lancement suivant. Perdre le jeton coûterait un aller à la box
-  — c'est précisément le bug déjà vécu une fois.
+- **`Synchronizable` is part of an item's primary key.** A query that omits it sees only
+  local items; a query that sets it to `true` sees only synchronised ones. And an item does
+  not convert in place. Every `Keychain` query therefore goes through
+  `kSecAttrSynchronizableAny`: a single read, a single delete, which find the token whatever
+  its nature. No caller changed.
+- **Migration of tokens already stored** happens on read, the one place everyone already goes
+  through. If the item found is not synchronisable, it is rewritten. It is idempotent: a
+  token already migrated is read and left alone.
+- **The write order is the no-loss guarantee.** The synchronised item is updated in place
+  (`SecItemUpdate`), added only if it does not exist, and the local one is deleted
+  **only after** a success. iOS does not say whether iCloud Keychain is active; a failure, an
+  offline device or a missing Apple account therefore cost nothing, the token stays readable
+  and the attempt repeats on the next launch. Losing the token would cost a trip to the box,
+  which is precisely the bug already lived through once.
 
-  Ce paragraphe a longtemps décrit une intention plutôt que le code : `set` commençait par un
-  `SecItemDelete` du prédécesseur synchronisable, *avant* l'ajout. Un `SecItemAdd` refusé
-  détruisait donc la seule copie qui voyage par iCloud — exactement la perte que le paragraphe
-  promettait d'éviter. Le scan de sources de `Tests/sync.swift` interdit maintenant la
-  régression : il exige `SecItemUpdate`, et qu'aucun `SecItemDelete` ne précède l'écriture.
-- **`kSecAttrAccessibleAfterFirstUnlock` est conservé.** Les classes en `…ThisDeviceOnly` sont
-  refusées pour un item synchronisable, et refusées **en silence**. `AfterFirstUnlock` est la
-  classe la plus stricte qui se synchronise encore, et c'est celle qu'il faut pour qu'un
-  téléchargement repris en arrière-plan après un redémarrage puisse lire le jeton.
-- **La déconnexion efface les deux natures**, toujours via `Any`. Sans ça, l'item local
-  survivrait à la suppression du synchronisé et le jeton ressusciterait au lancement suivant.
-- **Le jeton met parfois quelques secondes à arriver** sur un appareil qui vient de rejoindre le
-  trousseau. L'écran d'association attend donc jusqu'à quinze secondes avant de renoncer, sans
-  jamais bloquer le bouton : un tap dessus met fin à l'attente.
-- **Le jeton est la seule chose stockée dans le trousseau** — `Keychain.set/get/delete` n'est
-  jamais appelé avec un autre compte que l'hôte de la box. La question « que synchroniser
-  d'autre » ne se pose donc pas ; le jour où elle se posera, elle se posera par secret, pas en
-  bloc : le partage se justifie ici parce que l'autorisation est celle du foyer, pas celle de
-  l'appareil.
+  This paragraph long described an intention rather than the code: `set` began with a
+  `SecItemDelete` of the synchronisable predecessor, *before* the add. A refused `SecItemAdd`
+  therefore destroyed the only copy that travels through iCloud, exactly the loss the
+  paragraph promised to avoid. The source scan in `Tests/sync.swift` now forbids the
+  regression: it requires `SecItemUpdate`, and that no `SecItemDelete` precede the write.
+- **`kSecAttrAccessibleAfterFirstUnlock` is kept.** The `…ThisDeviceOnly` classes are refused
+  for a synchronisable item, and refused **silently**. `AfterFirstUnlock` is the strictest
+  class that still synchronises, and it is the one needed so that a download resumed in the
+  background after a reboot can read the token.
+- **Signing out erases both natures**, always through `Any`. Without that, the local item
+  would survive the deletion of the synchronised one and the token would come back from the
+  dead on the next launch.
+- **The token sometimes takes a few seconds to arrive** on a device that has just joined the
+  keychain. The pairing screen therefore waits up to fifteen seconds before giving up, without
+  ever blocking the button: a tap on it ends the wait.
+- **The token is the only thing stored in the Keychain**; `Keychain.set/get/delete` is never
+  called with any account other than the box's host. The question "what else to synchronise"
+  therefore does not arise; the day it does, it will arise per secret, not wholesale: sharing
+  is justified here because the authorisation belongs to the household, not to the device.
 
-### Vérifier à la main
+### Checking by hand
 
-Le scan de sources dans `Tests/main.swift` interdit les deux régressions qui échouent en
-silence (une classe `ThisDeviceOnly`, une requête sans `Synchronizable`). Le reste exige deux
-appareils et un vrai trousseau iCloud :
+The source scan in `Tests/main.swift` forbids the two regressions that fail silently (a
+`ThisDeviceOnly` class, a query without `Synchronizable`). The rest requires two devices and a
+real iCloud Keychain:
 
-- **Migration** : sur un appareil déjà apparié par l'ancienne version, installer celle-ci et
-  lancer. La galerie s'ouvre directement, sans écran d'association et **sans appui sur ✓**. Le
-  jeton a été réécrit en silence.
-- **Deuxième appareil, même compte Apple** : installer Keo, lancer. L'écran d'association
-  apparaît, puis bascule tout seul sur la galerie en quelques secondes, box jamais touchée.
-- **Trousseau iCloud coupé** (Réglages → compte → iCloud → Mots de passe) : l'appareil déjà
-  apparié reste apparié, la galerie s'ouvre comme avant. Un nouvel appareil, lui, demande
-  l'appui sur ✓ — comportement d'avant, pas une panne.
-- **Hors ligne** : mode avion, désinstaller, réinstaller, lancer. Le jeton local ayant disparu
-  avec l'app et le trousseau ne pouvant rien livrer, l'écran d'association s'affiche sans
-  tourner en rond. Réseau rétabli, relancer : la galerie s'ouvre toute seule.
-- **Deuxième compte Apple** : sur l'appareil signé avec l'autre compte, le jeton n'arrive pas.
-  Appairer normalement — et vérifier que ce deuxième appairage ne casse pas le premier (la box
-  autorise bien deux applications homonymes, elles ont des jetons distincts).
-- **Déconnexion puis relance** : « Déconnecter » sur l'appareil A, tuer l'app, relancer :
-  l'écran d'association reste, le jeton ne ressuscite pas. Puis relancer l'appareil B : lui
-  aussi redemande l'association, ce qui est le compromis, pas un bug.
-- **Révocation côté box** : Freebox OS → Gestion des accès → retirer Keo. Au lancement suivant,
-  la validation par listing échoue, le jeton est effacé des deux natures et l'association
-  normale reprend, sans boucle.
+- **Migration**: on a device already paired by the previous version, install this one and
+  launch. The gallery opens directly, with no pairing screen and **no press on ✓**. The token
+  was rewritten silently.
+- **Second device, same Apple account**: install Keo, launch. The pairing screen appears, then
+  switches to the gallery by itself within a few seconds, box never touched.
+- **iCloud Keychain off** (Settings → account → iCloud → Passwords): the device already
+  paired stays paired, the gallery opens as before. A new device, though, asks for the press
+  on ✓: the previous behaviour, not a failure.
+- **Offline**: airplane mode, uninstall, reinstall, launch. With the local token gone with the
+  app and the keychain unable to deliver anything, the pairing screen shows without spinning
+  in circles. Network back, relaunch: the gallery opens on its own.
+- **Second Apple account**: on the device signed in with the other account, the token does not
+  arrive. Pair normally, and check that this second pairing does not break the first (the box
+  does allow two apps with the same name, they have distinct tokens).
+- **Sign out then relaunch**: "Déconnecter" (sign out) on device A, kill the app, relaunch:
+  the pairing screen stays, the token does not come back. Then relaunch device B: it asks for
+  pairing again too, which is the trade-off, not a bug.
+- **Revocation on the box side**: Freebox OS → Access management → remove Keo. On the next
+  launch, validation by listing fails, the token is erased in both natures and normal pairing
+  resumes, without looping.
 
-## Numéro de build
+## Build number
 
-`Scripts/stamp-build.sh` tamponne l'`Info.plist` **construit** — jamais celui du dépôt — au
-cours d'une phase de build :
+`Scripts/stamp-build.sh` stamps the **built** `Info.plist`, never the one in the repo, during
+a build phase:
 
-- `CFBundleVersion` = nombre de commits, donc il monte à chaque commit, sans saisie manuelle
-- `KeoCommit` = hash court, suffixé d'un `+` si la build portait des modifications non commitées
+- `CFBundleVersion` = number of commits, so it goes up with every commit, no manual entry
+- `KeoCommit` = short hash, suffixed with a `+` if the build carried uncommitted changes
 
-Affiché en petit en bas de l'écran d'association, sous la forme `v0.1 (13) · a1b2c3d`.
+Shown small at the bottom of the pairing screen, in the form `v0.1 (13) · a1b2c3d`.
 
-**Plus sur l'accueil.** C'est une information de support, consultée deux fois par an, et elle
-occupait une ligne permanente sur la seule page que le propriétaire ouvre tous les jours. Elle
-est derrière **dix tapes sur le logo Keo** en haut de l'accueil, paraît sous le logotype et se
-referme seule au bout de huit secondes — une trappe, pas une case à décocher. Le compte repart
-de zéro dès qu'une tape se fait attendre plus d'une seconde et demie : sinon dix appuis
-distraits étalés sur une semaine finiraient par l'ouvrir, et une trappe qui s'ouvre toute
-seule est un bug.
+**No longer on Home.** It is support information, looked at twice a year, and it took up a
+permanent line on the one page the owner opens every day. It sits behind **ten taps on the
+Keo logo** at the top of Home, appears under the logotype and closes by itself after eight
+seconds: a hatch, not a box to untick. The count resets to zero as soon as a tap is more than
+a second and a half late: otherwise ten absent-minded presses spread over a week would end up
+opening it, and a hatch that opens on its own is a bug.
 
-Il reste visible sur l'écran d'association, parce que c'est l'écran où l'on se trouve quand
-rien ne marche encore et qu'il n'y a pas d'accueil à taper.
+It stays visible on the pairing screen, because that is the screen you are on when nothing
+works yet and there is no Home to tap.
 
-Sans git (build depuis une archive), le script sort sans rien faire et la valeur du dépôt est
-conservée.
+Without git (building from an archive), the script exits without doing anything and the
+repo's value is kept.
 
-La phase est montée **sur les deux cibles**, Keo et KeoWidgetExtension. Le script travaille
-sur `$TARGET_BUILD_DIR/$INFOPLIST_PATH`, donc il tamponne le bundle de la cible qui l'exécute,
-sans rien changer d'autre. Ne la retirer d'aucune des deux : **iOS refuse d'installer une app
-dont l'extension ne porte pas le même `CFBundleVersion` que l'hôte**, et l'app partirait en
-build 42 avec un `.appex` resté à 1. L'échec est à l'installation, pas à la compilation.
+The phase is mounted **on both targets**, Keo and KeoWidgetExtension. The script works on
+`$TARGET_BUILD_DIR/$INFOPLIST_PATH`, so it stamps the bundle of whichever target runs it,
+changing nothing else. Do not remove it from either: **iOS refuses to install an app whose
+extension does not carry the same `CFBundleVersion` as the host**, and the app would ship as
+build 42 with an `.appex` still at 1. The failure is at install time, not at compile time.
 
-## Identité
+## Identity
 
-Mascotte et logos viennent de `../keo assets`. Seul ce qui est utilisé est copié dans
-`Keo/Assets.xcassets` :
+Mascot and logos come from `../keo assets`. Only what is used is copied into
+`Keo/Assets.xcassets`:
 
-- **`AppIcon`** ← généré par `Design/icon/build.py` depuis les SVG maîtres, en trois
-  apparences (claire, sombre, teintée). Une icône iOS ne peut pas avoir de canal alpha, donc
-  la variante détourée ne convient pas ici. Le même script sort `MarkGlyph.imageset` depuis
-  `keo-glyph.svg` : la marque redessinée pour la taille d'un onglet. Voir
-  `Design/icon/README.md`, qui est la référence pour tout ce qui touche à l'icône.
-- **`AccentColor`** ← `#e9a178`, la pêche de la marque, **une seule valeur pour les deux
-  apparences**. Elle teinte toute l'app : boutons, dossiers, rail de la timeline.
+- **`AppIcon`** ← generated by `Design/icon/build.py` from the master SVGs, in three
+  appearances (light, dark, tinted). An iOS icon cannot have an alpha channel, so the cut-out
+  variant does not fit here. The same script outputs `MarkGlyph.imageset` from
+  `keo-glyph.svg`: the mark redrawn for the size of a tab. See `Design/icon/README.md`,
+  which is the reference for everything that touches the icon.
+- **`AccentColor`** ← `#e9a178`, the brand's peach, **a single value for both
+  appearances**. It tints the whole app: buttons, folders, the timeline rail.
 
-  À savoir avant d'y toucher : cette pêche donne **2,14:1 sur blanc**, sous le seuil de 3,0
-  qui vaut même pour une icône. C'est un choix de marque assumé par le propriétaire, pas un
-  oubli. Il a une conséquence qu'aucun `grep` ne montre : iOS colore en teinte **tout `Button`
-  sans style** — « Plus tard », les boutons de barre, ceux des alertes — et en apparence
-  claire ils sont donc faibles. Ce qui porte vraiment de l'information est doublé ailleurs :
-  une jauge a ses chiffres au-dessus, une icône a son libellé à côté, un avertissement a son
-  symbole.
-- **`OnAccent`** ← `#1C1C1E`, également unique. C'est l'encre posée **sur** la teinte : libellé
-  d'un bouton proéminent, puce de filtre active, coche de sélection. SwiftUI choisit sinon du
-  blanc, en supposant un remplissage foncé — sur la pêche ça tombe à 2,14:1. Ici : 7,97:1.
-- **`ChartPhotos` / `ChartVideos`** ne suivent pas la marque, et c'est voulu : ce sont des
-  couleurs catégorielles de données, qui doivent se distinguer l'une de l'autre **et** tenir
-  sur le fond. Elles sont passées par un validateur (bande de luminosité, plancher de chroma,
-  séparation daltonienne, contraste) en clair comme en sombre. Les repeindre en pêche
-  rendrait le graphique illisible.
+  Worth knowing before touching it: this peach gives **2.14:1 on white**, below the 3.0
+  threshold that applies even to an icon. It is a brand choice the owner stands behind, not
+  an oversight. It has a consequence no `grep` shows: iOS paints **every unstyled `Button`**
+  in the tint, "Plus tard" (later), bar buttons, alert buttons, and in the light appearance
+  they are therefore faint. Whatever genuinely carries information is doubled elsewhere: a
+  gauge has its figures above it, an icon has its label beside it, a warning has its symbol.
+- **`OnAccent`** ← `#1C1C1E`, also a single value. It is the ink laid **on** the tint: the
+  label of a prominent button, an active filter chip, a selection tick. SwiftUI would
+  otherwise pick white, assuming a dark fill; on the peach that drops to 2.14:1. Here: 7.97:1.
+- **`ChartPhotos` / `ChartVideos`** do not follow the brand, and that is deliberate: they are
+  categorical data colours, which must be told apart from each other **and** hold up on the
+  background. They went through a validator (lightness band, chroma floor, colour-blind
+  separation, contrast) in light and in dark. Repainting them peach would make the chart
+  unreadable.
 
-## L'app parlait anglais sans le savoir
+## The app spoke English without knowing it
 
-`CFBundleDevelopmentRegion` valait `en` et aucune localisation française n'était déclarée.
-`Locale.current` résolvait donc en anglais **quel que soit le réglage de l'iPhone** : toutes
-les dates formatées par l'app sortaient en anglais — « August 2011 » sous une interface
-entièrement française. Visible seulement là où un mois s'écrit en toutes lettres, donc resté
-invisible des mois.
+`CFBundleDevelopmentRegion` was `en` and no French localisation was declared.
+`Locale.current` therefore resolved to English **whatever the iPhone's setting**: every date
+the app formatted came out in English, "August 2011" under an entirely French interface.
+Visible only where a month is spelled out in full, so it stayed invisible for months.
 
-Le bundle déclare maintenant `fr`, dans l'app comme dans l'extension widget.
+The bundle now declares `fr`, in the app as in the widget extension.
 
-## L'accueil
+## Home
 
-Ouvrir Keo tombait dans un listing de dossiers titré d'un nom d'hôte. Ce listing est le
-meilleur navigateur de dossiers qu'une Freebox aura jamais — quinze ans de l'organisation de
-quelqu'un — mais il n'a jamais été un accueil. Il reste, un onglet plus loin.
+Opening Keo landed in a folder listing titled with a hostname. That listing is the best
+folder browser a Freebox will ever have, fifteen years of someone's organisation, but it was
+never a home. It stays, one tab over.
 
-**Le principe, et c'est celui qui tient toute la refonte : l'âme ne se met pas dans le
-chrome.** Les deux applications Apple les plus chaleureuses, Journal et Fitness, ont un chrome
-rigoureusement standard. La chaleur vient d'ailleurs — du contenu de la personne, du langage,
-et d'un seul personnage strictement rationné. Squelette système, chair personnelle.
+**The principle, and it is the one holding the whole redesign together: the soul does not go
+in the chrome.** Apple's two warmest apps, Journal and Fitness, have rigorously standard
+chrome. The warmth comes from elsewhere: from the person's content, from the language, and
+from a single character strictly rationed. System skeleton, personal flesh.
 
-L'accueil montre, dans l'ordre : **Ce jour-là** (les photos prises à cette date les années
-passées, une page par année, le texte posé sur le dégradé de la photo elle-même — la couleur
-de l'utilisateur, sans une ligne d'extraction de palette), les **dossiers épinglés**, les
-**dernières photos par date de prise de vue** (ce qu'aucune galerie NAS ne fait honnêtement :
-Plex et Jellyfin classent par date d'import, qui sur un NAS est la date de copie, précisément
-le mensonge que cet index existe pour corriger), et la carte
-**Bibliothèque**.
+Home shows, in order: **Ce jour-là** (On this day: the photos taken on this date in past
+years, one page per year, the text laid on the gradient of the photo itself, the user's own
+colour, without a line of palette extraction), the **pinned folders**, the **latest photos
+by capture date** (which no NAS gallery does honestly: Plex and Jellyfin sort by import date,
+which on a NAS is the copy date, precisely the lie this index exists to correct), and the
+**Bibliothèque** (Library) card.
 
-Tout sort de l'index local : cinq requêtes, pas la douzaine de `statistics`, parce que cet
-écran s'ouvre à chaque lancement. La box peut rester éteinte toute la journée sans que
-l'accueil cligne — ce qui est le but, puisqu'elle est sur le réseau de la maison et que le
-téléphone n'y est pas, les deux tiers du temps.
+Everything comes out of the local index: five queries, not the dozen of `statistics`, because
+this screen opens on every launch. The box can stay off all day without Home so much as
+blinking, which is the point, since it sits on the home network and the phone is not on it
+two thirds of the time.
 
-### L'onglet Épinglés disparaît
+### The Pinned tab goes away
 
-Une épingle est un **accélérateur, pas une destination**, et garer un accélérateur dans un
-emplacement de destination est exactement ce qui faisait que cet onglet sonnait faux — son
-contenu n'était d'ailleurs qu'une liste de chemins, il n'y a jamais eu l'idée d'un écran
-dedans. Les épingles deviennent l'étagère de l'accueil, *au-dessus de la ligne de flottaison*,
-donc strictement plus accessibles qu'avant.
+A pin is an **accelerator, not a destination**, and parking an accelerator in a destination
+slot is exactly what made that tab ring false; its content was only ever a list of paths,
+there was never the idea of a screen in it. Pins become Home's shelf, *above the fold*, so
+strictly more reachable than before.
 
-### La machinerie a une pièce à elle
+### The machinery has a room of its own
 
-Indexation, Statistiques et Déconnexion vivaient dans le menu de tri de chaque dossier. La
-machinerie visible partout est la maladie qui fait qu'Immich ressemble à une console
-d'administration. Elles sont dans la carte Bibliothèque, où l'état de l'indexation est
-**visible en permanence** plutôt qu'à redécouvrir. Les surfaces contextuelles restent, parce
-qu'elles sont justifiées par le contexte : les pastilles, et le bouton de la recherche.
+Indexing, Statistics and Sign out lived in the sort menu of every folder. Machinery visible
+everywhere is the disease that makes Immich look like an admin console. They are in the
+Library card, where the indexing state is **permanently visible** rather than something to
+rediscover. The contextual surfaces stay, because the context justifies them: the badges, and
+the search button.
 
-### L'apparence suit le système
+### Appearance follows the system
 
-L'app forçait le mode sombre. Défendable pour une galerie — Lightroom fait pareil — mais
-l'argument de Lightroom est un argument d'**étalonnage** : un entourage neutre pour juger des
-couleurs qu'on corrige. Regarder des photos de famille n'est pas ça, et une surface noire à
-midi dans la cuisine est une salle de cinéma, pas une maison. La marque avait d'ailleurs déjà
-voté : `AccentColor` embarque une variante claire qui n'avait jamais été rendue une seule fois.
+The app forced dark mode. Defensible for a gallery, Lightroom does the same, but Lightroom's
+argument is a **calibration** argument: a neutral surround for judging the colours you are
+correcting. Looking at family photos is not that, and a black surface at noon in the kitchen
+is a cinema, not a home. The brand had already voted anyway: `AccentColor` ships a light
+variant that had never once been rendered.
 
-**La visionneuse reste noire**, épinglée sur elle-même et non à la racine de l'app : une photo
-se regarde sur du noir quelle que soit la lumière de la pièce, et c'est ce que fait Photos.
+**The viewer stays black**, pinned on itself and not at the app's root: a photo is looked at
+on black whatever the light in the room, and that is what Photos does.
 
-Ce qui a dû changer : le rail de timeline peignait en `.white` sur un fond supposé noir, il
-peint en `.primary` ; la mascotte, crème sur blanc, serait invisible — elle est devenue une
-image *template* qui reçoit sa couleur au lieu de la porter. (La mascotte a depuis disparu :
-voir plus bas.) Les blancs restants sont tous posés **sur des photos**, où ils sont justes
-dans les deux modes.
+What had to change: the timeline rail painted in `.white` on a background assumed black, it
+paints in `.primary`; the mascot, cream on white, would be invisible, so it became a
+*template* image that receives its colour instead of carrying it. (The mascot has since gone:
+see below.) The remaining whites are all laid **on photos**, where they are right in both
+modes.
 
-### La mascotte, et pourquoi elle n'est plus là
+### The mascot, and why it is no longer there
 
-La loutre en rendu 3D n'est jamais entrée dans l'app : de la fourrure photoréaliste à côté de
-SF Symbols et de verre liquide se lit comme un écran-titre de jeu free-to-play, et ça daterait
-en deux ans. Elle reste sur l'icône, et nulle part ailleurs.
+The 3D-rendered otter never made it into the app: photorealistic fur next to SF Symbols and
+liquid glass reads like the title screen of a free-to-play game, and it would date within two
+years. It stays on the icon, and nowhere else.
 
-La silhouette crème plate, elle, a vécu dans trois écrans « l'app n'a encore rien de toi à
-montrer » : l'association, la carte de bienvenue, l'indexation jamais commencée. Elle est
-partie avec eux. Ce qui la remplace n'est pas un autre dessin mais **moins de dessin** : ces
-écrans disent ce qu'ils attendent, en texte, et la marque ne paraît plus que sur l'icône et
-sur l'onglet Accueil (`MarkGlyph`, la cage redessinée pour 30 pt). Une mascotte qui n'apparaît
-que là où l'app est vide est une mascotte qu'on associe au vide.
+The flat cream silhouette, for its part, lived in three "the app has nothing of yours to show
+yet" screens: pairing, the welcome card, indexing never started. It left with them. What
+replaces it is not another drawing but **less drawing**: those screens say what they are
+waiting for, in text, and the brand now appears only on the icon and on the Home tab
+(`MarkGlyph`, the cage redrawn for 30 pt). A mascot that appears only where the app is empty
+is a mascot you associate with emptiness.
 
 ## Structure
 
-| Dossier | Rôle |
+| Folder | Role |
 |---|---|
-| `Keo/App/` | Entrée, `Store` (session, association), trousseau, tampon de build |
-| `Keo/Freebox/` | `Item` et `FolderContents`, transports, client, asset vidéo authentifié |
-| `Keo/Media/` | Pipeline de vignettes, décodage ImageIO, cache disque LRU, index des dates |
-| `Keo/Downloads/` | File d'attente, pellicule, feuille de partage |
-| `Keo/Sync/` | Miroir CloudKit de la personnalisation : identité des enregistrements, moteur |
-| `Keo/UI/` | Accueil, association, grille, recherche, statistiques, visionneuse |
-| `KeoWidget/` | L'extension WidgetKit. Ne lie que Foundation, SwiftUI, ImageIO et AppIntents |
+| `Keo/App/` | Entry point, `Store` (session, pairing), Keychain, build stamp |
+| `Keo/Freebox/` | `Item` and `FolderContents`, transports, client, authenticated video asset |
+| `Keo/Media/` | Thumbnail pipeline, ImageIO decoding, LRU disk cache, date index |
+| `Keo/Downloads/` | Queue, camera roll, share sheet |
+| `Keo/Sync/` | CloudKit mirror of personalisation: record identity, engine |
+| `Keo/UI/` | Home, pairing, grid, search, statistics, viewer |
+| `KeoWidget/` | The WidgetKit extension. Links only Foundation, SwiftUI, ImageIO and AppIntents |
 
-Les dépendances vont vers l'intérieur : `UI` → `Media`/`Downloads` → `Freebox`. Rien dans
-`Freebox` ne connaît SwiftUI.
+Dependencies point inwards: `UI` → `Media`/`Downloads` → `Freebox`. Nothing in `Freebox`
+knows about SwiftUI.
 
-Le découpage en paquets SPM a été volontairement différé : à cette taille il ajouterait de la
-cérémonie sans réduire la complexité. Les frontières sont déjà posées pour le faire le jour où
-plusieurs personnes travaillent dessus en parallèle.
+Splitting into SPM packages was deliberately deferred: at this size it would add ceremony
+without reducing complexity. The boundaries are already in place to do it the day several
+people work on it in parallel.
 
-## Date affichée en plein écran
+## The date shown in full screen
 
-Le nom et la date apparaissent en haut, dans une capsule translucide.
+The name and the date appear at the top, in a translucent capsule.
 
-La date vient de l'**EXIF** (`DateTimeOriginal`) quand le fichier la porte — lisible
-gratuitement, puisque la visionneuse télécharge déjà l'original. Pour les vidéos, c'est
-`creationDate` de l'asset. À défaut, la date de modification est affichée **préfixée de
-« Modifié le »** : une date de copie ne doit jamais passer pour une date de prise de vue.
-Sans aucune date, rien ne s'affiche plutôt qu'une date inventée.
+The date comes from the **EXIF** (`DateTimeOriginal`) when the file carries it, readable for
+free, since the viewer already downloads the original. For videos, it is the asset's
+`creationDate`. Failing that, the modification date is shown **prefixed with "Modifié le"**
+(modified on): a copy date must never pass for a capture date. With no date at all, nothing
+is shown rather than an invented date.
 
-C'est aussi la réponse à la limite du tri : en plein écran, la vraie date est connue. La
-grille, elle, ne peut pas trier là-dessus sans télécharger un bout de chaque fichier.
+It is also the answer to the sorting limit: in full screen, the real date is known. The grid,
+though, cannot sort on it without downloading a piece of every file.
 
-## La date de copie n'entre pas dans la timeline
+## The copy date stays out of the timeline
 
-`timelineDate` retombait sur `modified` quand la date de prise de vue manquait. Sur un NAS,
-`modified` est la date de **copie** : une photo sans date portait donc une date récente et
-remontait en tête du tri « plus récentes », au-dessus de photos réellement prises hier.
+`timelineDate` fell back to `modified` when the capture date was missing. On a NAS, `modified`
+is the **copy** date: an undated photo therefore carried a recent date and rose to the top of
+the "plus récentes" (newest) sort, above photos actually taken yesterday.
 
-Et c'était incohérent selon le chemin. Un listing frais de la box porte ce mtime, une relecture
-depuis l'index non — la même photo changeait de place suivant qui peignait la grille.
+And it was inconsistent depending on the path. A fresh listing from the box carries that
+mtime, a re-read from the index does not; the same photo changed place depending on who
+painted the grid.
 
-La timeline ne regarde plus que la date de prise de vue. La date de modification reste
-disponible et reste dite honnêtement là où elle a un sens, sous la photo en plein écran
-(« Modifié le »). Une photo sans date appartient à « sans date », pas en haut d'une chronologie
-sous une date à laquelle personne ne l'a prise.
+The timeline now looks only at the capture date. The modification date stays available and is
+still stated honestly where it means something, under the photo in full screen ("Modifié
+le"). An undated photo belongs in "sans date" (undated), not at the top of a chronology under
+a date on which nobody took it.
 
-## Dates réelles plutôt que dates de copie
+## Real dates rather than copy dates
 
-Sur un NAS, la date de modification est souvent le jour où tout a été copié : tous les
-fichiers portent alors la même, et trier ou regrouper par date ne donne rien. Keo lit donc la
-vraie date de prise de vue.
+On a NAS, the modification date is often the day everything was copied: every file then
+carries the same one, and sorting or grouping by date yields nothing. So Keo reads the real
+capture date.
 
-Combien d'octets faut-il lire ? Mesuré sur **120 photos tirées au hasard d'une vraie
-photothèque**, pas sur des fichiers fabriqués pour l'occasion :
+How many bytes does it take? Measured on **120 photos drawn at random from a real photo
+library**, not on files made up for the occasion:
 
-| Premier palier | Dates trouvées | Requêtes/photo | Transfert moyen |
+| First tier | Dates found | Requests/photo | Average transfer |
 |---|---|---|---|
-| 4 Ko | 38,9 % | 1,63 | 85 Ko |
-| 16 Ko | 92,0 % | 1,13 | 33 Ko |
-| **24 Ko** | **99,1 %** | **1,07** | **33 Ko** |
-| 128 Ko | 100 % | 1,06 | 135 Ko |
+| 4 KB | 38.9% | 1.63 | 85 KB |
+| 16 KB | 92.0% | 1.13 | 33 KB |
+| **24 KB** | **99.1%** | **1.07** | **33 KB** |
+| 128 KB | 100% | 1.06 | 135 KB |
 
-Keo lit donc **24 Ko**, puis 128 Ko pour le dernier pour cent. Aucune photo de l'échantillon
-n'a révélé sa date uniquement dans le fichier entier : ce que 128 Ko ne trouve pas n'existe
-pas. Sur cet échantillon, 6 % des photos n'ont réellement aucune date — exports web, images
-reçues, captures d'écran.
+So Keo reads **24 KB**, then 128 KB for the last percent. No photo in the sample revealed its
+date only in the full file: what 128 KB does not find does not exist. In this sample, 6% of
+photos genuinely have no date: web exports, received images, screenshots.
 
-**`readerVersion`** : quand ce lecteur s'améliore, toutes les photos restées sans date sont
-remises en file. Une date déjà trouvée n'est jamais rejetée. Sans ça, les 61 % manqués par le
-palier à 4 Ko seraient restés faux pour toujours.
+**`readerVersion`**: when this reader improves, every photo still without a date is queued
+again. A date already found is never discarded. Without that, the 61% missed by the 4 KB
+tier would have stayed wrong forever.
 
-Attention au piège HEIC : il faut une source `CGImageSourceCreateWithData`, car en mode
-incrémental non finalisé ImageIO refuse de parser les métadonnées HEIF et ne rend rien, quel
-que soit le nombre d'octets fournis.
+Beware the HEIC trap: the source must be a `CGImageSourceCreateWithData`, because in
+non-finalised incremental mode ImageIO refuses to parse HEIF metadata and returns nothing,
+however many bytes it is given.
 
-- À l'ouverture d'un dossier, les dates déjà connues sont appliquées **avant le premier rendu**.
-- Les fichiers jamais vus sont lus en tâche de fond, `Indexer.parallel` à la fois — **4**,
-  mesuré, voir « Banc d'essai des lectures » — et 24 Ko chacun. Un dossier de 10 000 photos
-  coûte donc environ 240 Mo de lectures, **une seule fois**.
-- Le pipeline de vignettes enregistre la date au passage : il télécharge déjà 256 Ko par image,
-  la lecture est gratuite. Mais il n'a pas le droit d'en **effacer** une : son `note()` passe
-  `preservingCapture`, qui bascule le `DO UPDATE` sur `coalesce(excluded.capture, …)`. Sans
-  ça, un décodage qui ne trouvait pas de date remplaçait par NULL celle que l'indexation avait
-  lue, et marquait la ligne `read = 1` — plus personne ne la relisait. Le `coalesce` ne peut
-  pas être global : l'indexeur, lui, doit garder le droit d'écrire NULL, parce que
-  « lu, sans date EXIF » est un verdict et non une ignorance. C'est la même distinction que
-  partout ailleurs dans ce fichier, à un étage de plus.
-- `IndexStore` persiste tout dans Application Support, y compris les fichiers **sans**
-  date — sinon chaque visite les réanalyserait indéfiniment.
-- Le réordonnancement n'a lieu **qu'à la fin du scan**, pas pendant : la grille ne se réorganise
-  jamais sous le doigt. L'avancement se lit sur le contour de la barre d'onglets
-  (`TabBarGlow`) et dans la rangée « Indexation » de l'accueil.
+- When a folder is opened, the dates already known are applied **before the first render**.
+- Files never seen before are read in the background, `Indexer.parallel` at a time (**4**,
+  measured, see "Read benchmark") and 24 KB each. A folder of 10,000 photos therefore costs
+  about 240 MB of reads, **once**.
+- The thumbnail pipeline records the date on the way through: it already downloads 256 KB
+  per image, so the read is free. But it is not allowed to **erase** one: its `note()` passes
+  `preservingCapture`, which switches the `DO UPDATE` to `coalesce(excluded.capture, …)`.
+  Without that, a decode that found no date replaced the one the indexer had read with NULL,
+  and marked the row `read = 1`, so nobody ever read it again. The `coalesce` cannot be
+  global: the indexer, for its part, must keep the right to write NULL, because "read, no
+  EXIF date" is a verdict and not ignorance. It is the same distinction as everywhere else in
+  this file, one level up.
+- `IndexStore` persists everything in Application Support, including files **without** a
+  date; otherwise every visit would analyse them again indefinitely.
+- Reordering happens **only at the end of the scan**, not during it: the grid never
+  rearranges itself under your finger. Progress shows on the outline of the tab bar
+  (`TabBarGlow`) and in the "Indexation" row on Home.
 
-### 6,9 % sans date : mesurer avant de corriger
+### 6.9% undated: measure before fixing
 
-L'échantillon de 120 photos promettait ~1 % de vraies sans-date ; la bibliothèque entière en
-montre **1 584 sur 23 073** (6,9 %), lues de bout en bout. Un échantillon d'un seul dossier
-n'était pas la bibliothèque — la leçon est déjà écrite plus haut, elle se répète.
+The 120-photo sample promised ~1% genuinely undated; the whole library shows **1,584 of
+23,073** (6.9%), read end to end. A sample from a single folder was not the library; the
+lesson is already written above, and it repeats.
 
-Avant de toucher au lecteur, une sonde `ReadBench.dateless` (retirée depuis : sa réponse est
-ci-dessous) a tiré au sort dans la liste même que compte l'écran Statistiques et demande à chaque fichier
-*pourquoi* : pour une photo, il regrimpe l'échelle exacte de l'indexeur (24 Ko puis 128 Ko —
-une date trouvée là est marquée `(!)`, l'index aurait dû l'avoir), puis deux barreaux qu'il
-n'a pas (512 Ko, puis le fichier entier sous 8 Mo) ; pour une vidéo, il rejoue le parseur
-d'atomes. Le tout est agrégé **par extension et par verdict** dans `[keo] sansdate:`, parce
-que les hypothèses à départager s'y lisent directement : EXIF au-delà de 128 Ko, formats sans
-EXIF (PNG, captures, exports), bogue du second essai, ou vidéos qui dominent le compte.
+Before touching the reader, a probe, `ReadBench.dateless` (since removed: its answer is
+below), drew at random from the very list the Statistics screen counts and asked each file
+*why*: for a photo, it climbs the indexer's exact ladder again (24 KB then 128 KB; a date
+found there is marked `(!)`, the index should have had it), then two rungs the indexer does
+not have (512 KB, then the whole file under 8 MB); for a video, it replays the atom parser.
+The whole thing is aggregated **by extension and by verdict** in `[keo] sansdate:`, because
+the hypotheses to settle can be read straight off it: EXIF beyond 128 KB, formats without
+EXIF (PNG, screenshots, exports), a bug in the second attempt, or videos dominating the count.
 
-La dernière ligne compte ce qu'un repli sur le **nom de fichier** récupérerait
-(`FilenameDate`, pur et testé : `IMG_20190714_103000`, WhatsApp, captures d'écran, Pixel —
-et les pièges rejetés : compteurs, 30 février, futur). C'est une **autre vérité** que la date
-de prise de vue — une étiquette posée par un appareil, pas un obturateur — et elle ne sera
-jamais mélangée en silence à une vraie date. Aujourd'hui seul le banc la consomme ; la brancher
-dans l'index, élargir une fenêtre, ou conclure que N fichiers n'ont réellement aucune date et
-le dire tel quel : la décision attend le verdict du banc, pas une intuition.
+The last line counts what a fallback on the **filename** would recover (`FilenameDate`, pure
+and tested: `IMG_20190714_103000`, WhatsApp, screenshots, Pixel, and the traps rejected:
+counters, 30 February, the future). It is **another truth** than the capture date, a label
+put there by a device, not a shutter, and it will never be silently mixed with a real date.
+Today only the benchmark consumes it; wiring it into the index, widening a window, or
+concluding that N files genuinely have no date and saying so as is: the decision waits for
+the benchmark's verdict, not for a hunch.
 
-### L'index : SQLite, incrémental et durable
+### The index: SQLite, incremental and durable
 
-`Keo/Media/IndexStore.swift` — un actor propriétaire d'une connexion SQLite en WAL, dans
-Application Support. `libsqlite3` est dans iOS, donc toujours aucune dépendance externe.
+`Keo/Media/IndexStore.swift`: an actor owning a SQLite connection in WAL mode, in Application
+Support. `libsqlite3` ships with iOS, so still no external dependency.
 
-L'ancienne version était un dictionnaire JSON chargé entièrement en mémoire et **réécrit en
-entier** à chaque sauvegarde. Le problème n'était pas la taille mais la granularité : l'unité
-d'écriture était « tout l'index » et l'unité de perte « tout depuis la dernière sauvegarde ».
-Un kill au milieu d'un dossier de 14 600 photos jetait six minutes de travail.
+The previous version was a JSON dictionary loaded whole into memory and **rewritten in full**
+on every save. The problem was not the size but the granularity: the unit of writing was
+"the whole index" and the unit of loss "everything since the last save". A kill in the middle
+of a folder of 14,600 photos threw away six minutes of work.
 
 ```sql
 folder(id, path UNIQUE, mtime, child_count, media_count, bytes, gen)
@@ -392,1066 +386,1039 @@ INDEX file_by_identity ON file(name, size)
 meta(k, v)
 ```
 
-| Garantie | Comment |
+| Guarantee | How |
 |---|---|
-| Durable à tout instant | WAL + `synchronous = NORMAL`. Un kill, un crash ou une batterie à plat ne corrompt rien |
-| Perte bornée | Une transaction tous les 256 fichiers : au pire 256 lectures à refaire, pas un dossier entier |
-| Cohérence du marquage | Le marquage « dossier terminé » part dans **la même transaction** que son dernier lot — il ne peut jamais prétendre plus que ce qui est écrit |
-| Mémoire | Plus rien n'est chargé au démarrage ; une requête par dossier ouvert |
-| Renommage gratuit | `file_by_identity` retrouve la date d'un fichier déplacé par `(nom, taille)`. Renommer un dossier de 14 600 photos coûtait des heures de relecture, c'est maintenant quelques millisecondes |
-| Pas de gonflement | Compteur de génération : ce qui n'a pas été revu dans le listing est supprimé, les sous-arbres par cascade |
-| Sous-arbres ignorés | Un dossier intact n'est pas listé, mais tout son sous-arbre voit sa génération avancer — sinon le balayage l'effacerait |
+| Durable at every instant | WAL + `synchronous = NORMAL`. A kill, a crash or a flat battery corrupts nothing |
+| Bounded loss | One transaction every 256 files: at worst 256 reads to redo, not a whole folder |
+| Consistent marking | The "folder finished" mark goes in **the same transaction** as its last batch; it can never claim more than what is written |
+| Memory | Nothing is loaded at startup any more; one query per folder opened |
+| Free renames | `file_by_identity` finds the date of a moved file by `(name, size)`. Renaming a folder of 14,600 photos used to cost hours of rereading; it is now a few milliseconds |
+| No bloat | Generation counter: whatever was not seen again in the listing is deleted, subtrees by cascade |
+| Skipped subtrees | An untouched folder is not listed, but its whole subtree sees its generation advance; otherwise the sweep would erase it |
 
-La clé `(dossier, nom, taille)` remplace `"chemin|taille"` : l'ancienne répétait 456 Ko de
-préfixe de chemin sur le seul gros dossier.
+The key `(folder, name, size)` replaces `"path|size"`: the old one repeated 456 KB of path
+prefix on the one big folder alone.
 
-**Migration** : les anciens `capture-dates.json` et `indexed-folders.json` sont repris au
-premier lancement puis supprimés. Une indexation déjà payée ne se re-paye pas — c'est vérifié.
+**Migration**: the old `capture-dates.json` and `indexed-folders.json` are taken over on
+first launch, then deleted. Indexing already paid for is not paid for again; that is checked.
 
-### La première fois
+### The first time
 
-Tant que l'index est vide, Keo explique une fois pourquoi l'indexation compte : sans elle, le
-NAS ne fournit que la date de copie, donc le tri par date et la timeline restent inertes — et
-l'app a l'air cassée plutôt que non configurée. L'écran propose de lancer ou de remettre à
-plus tard ; dans ce cas la pastille et le menu suffisent, on ne redemande pas.
+As long as the index is empty, Keo explains once why indexing matters: without it, the NAS
+only provides the copy date, so sorting by date and the timeline stay inert, and the app
+looks broken rather than unconfigured. The screen offers to start or to put it off; in that
+case the badge and the menu are enough, it does not ask again.
 
-### Keo n'oubliait rien, sauf ce qu'il venait de faire
+### Keo forgot nothing, except what it had just done
 
-Le bilan d'une marche vivait huit secondes dans une carte flottante, le lecteur le remettait à
-`nil`, et les ennuis — dossiers injoignables, fichiers illisibles, dossiers écartés par la
-règle — ne vivaient que dans `Progress`, donc le temps de la marche et pas une seconde de
-plus. Tout ce que l'app savait de son indexation portait donc sur les cinq pour cent du temps
-où une marche tourne. Le reste du temps, il ne restait que des totaux, et un total ne répond à
-aucune question.
+The summary of a walk lived eight seconds in a floating card, the reader set it back to
+`nil`, and the trouble (unreachable folders, unreadable files, folders set aside by the rule)
+lived only in `Progress`, so for the duration of the walk and not a second longer. Everything
+the app knew about its indexing therefore covered the five per cent of the time a walk is
+running. The rest of the time, only totals remained, and a total answers no question.
 
-`LastPass` est ce que la passe laisse derrière elle : le `WalkSummary`, sa date, les compteurs
-d'ennuis et les premiers chemins en détail. Il est rangé dans la table `meta` de l'index et
-non dans les réglages, **parce qu'il décrit l'index** : « Tout relire depuis zéro » l'emporte
-dans la même transaction que les dates qu'il résume. Un enregistrement écrit par une version
-plus ancienne qui ne se relit plus est simplement absent — un bilan manquant est une phrase en
-moins, refuser d'ouvrir l'écran pour ça serait pire.
+`LastPass` is what the pass leaves behind: the `WalkSummary`, its date, the trouble counters
+and the first paths in detail. It is stored in the index's `meta` table and not in settings,
+**because it describes the index**: "Tout relire depuis zéro" (reread everything from
+scratch) takes it away in the same transaction as the dates it summarises. A record written
+by an older version that no longer reads back is simply absent; a missing summary is one
+sentence fewer, and refusing to open the screen for that would be worse.
 
-Ce qu'il débloque, et qui est le vrai sujet : l'écran Indexation a enfin quelque chose à dire
-quand rien ne tourne, et la rangée de l'accueil peut parler d'échecs et de fraîcheur au lieu
-d'un rapport de dossiers.
+What it unlocks, which is the real subject: the Indexation screen finally has something to
+say when nothing is running, and the Home row can speak of failures and freshness instead of
+a folder report.
 
-#### Mais il se souvenait trop bien
+#### But it remembered too well
 
-Garder le bilan a révélé l'inverse du bug d'origine. Quatre compteurs — `datesRead`,
-`dateless`, `adopted`, `unreadable` — n'étaient pas remis à zéro entre deux passes d'une même
-session. Le cumul est **juste** pour une reprise : une passe interrompue qui repart saute les
-dossiers déjà finis au lieu de les relire, donc ses compteurs doivent continuer. Il est
-**faux** pour une passe neuve lancée après une passe `finished` : « N dates lues » annonçait
-alors la somme de deux marches, et `LastPass.hasTrouble` — qui ne regarde que
-`unreadable > 0` — restait vrai jusqu'à la fin des temps après un seul fichier illisible, bien
-après que la cause ait disparu. Un voyant qui ne s'éteint jamais est un voyant qu'on
-n'allume plus. Le progrès de départ se choisit donc sur l'état : `.paused`/`.running` continue,
-`.idle`/`.finished` repart de zéro.
+Keeping the summary revealed the reverse of the original bug. Four counters (`datesRead`,
+`dateless`, `adopted`, `unreadable`) were not reset between two passes of the same session.
+Accumulating is **right** for a resume: an interrupted pass that starts again skips the
+folders already finished instead of rereading them, so its counters must carry on. It is
+**wrong** for a fresh pass launched after a `finished` one: "N dates lues" then announced
+the sum of two walks, and `LastPass.hasTrouble`, which only looks at `unreadable > 0`,
+stayed true until the end of time after a single unreadable file, long after the cause had
+gone. A warning light that never goes out is a warning light nobody reads any more. The
+starting progress is therefore chosen on the state: `.paused`/`.running` carries on,
+`.idle`/`.finished` starts from zero.
 
-Deux autres mensonges du même écran sont partis avec :
+Two other lies from the same screen went with it:
 
-- **« Interrompue » sur un index sain.** Ouvrir un dossier non indexé lance un scan ciblé sans
-  marche ; la fin d'un tel passage n'avait pas de `walkCompleted`, donc elle posait `.paused`,
-  donc l'accueil affichait « Interrompue · reste N » en ambre alors que rien n'avait été
-  interrompu. La distinction juste est `resumeWanted`, que seule une vraie passe pose ; sans
-  lui, la fin d'un scan ciblé retombe sur `.idle` et la rangée dit « N fichiers à lire », en
-  noir, ce qui est exactement ce qui s'est passé.
-- **Un worker supplanté décidait.** La garde `token == runToken` de `finishRun` était sous la
-  publication du bilan et sous l'effacement de `summary`/`record` : un worker périmé pouvait
-  vider le rapport qu'un worker frais était en train de construire. Elle est remontée en tête.
-  `walkCompleted = true` n'existe toujours qu'à un seul endroit du projet — c'est le critère de
-  relecture de ce fichier, et il se vérifie d'un `grep`.
+- **"Interrompue" on a healthy index.** Opening a non-indexed folder starts a targeted scan
+  without a walk; the end of such a pass had no `walkCompleted`, so it set `.paused`, so
+  Home displayed "Interrompue · reste N" in amber when nothing had been interrupted. The
+  right distinction is `resumeWanted`, which only a real pass sets; without it, the end of a
+  targeted scan falls back to `.idle` and the row says "N fichiers à lire", in black, which
+  is exactly what happened.
+- **A superseded worker was deciding.** The `token == runToken` guard in `finishRun` sat
+  below the publication of the summary and below the clearing of `summary`/`record`: a stale
+  worker could empty the report a fresh worker was in the middle of building. It has moved
+  to the top. `walkCompleted = true` still exists in only one place in the project; that is
+  the criterion for rereading this file, and it can be checked with a `grep`.
 
-### « X dossiers sur Y » ne disait rien
+### "X folders of Y" said nothing
 
-La rangée « Indexation » de l'accueil annonçait `4 781 dossiers sur 4 802`. Mauvaise réponse
-deux fois : la soustraction est laissée au lecteur, et la branche ne s'affiche presque jamais —
-la découverte périodique tamponne chaque dossier qu'elle liste, donc les dossiers sont à jour
-bien avant les fichiers. Un rapport de dossiers, c'est la machinerie qui parle d'elle-même.
+The "Indexation" row on Home announced `4 781 dossiers sur 4 802`. Wrong answer twice over:
+the subtraction is left to the reader, and the branch almost never shows, because periodic
+discovery stamps every folder it lists, so folders are up to date long before files are. A
+folder report is the machinery talking about itself.
 
-`IndexingLine` la remplace par un **ordre de priorité**, pas une formule : à chaque instant une
-seule chose mérite la ligne, et la plus rare est la plus précieuse.
+`IndexingLine` replaces it with an **order of priority**, not a formula: at any moment only
+one thing deserves the line, and the rarest is the most precious.
 
-1. une marche en cours, avec un chiffre qui bouge — `En cours · 412 dates lues`. Pas de points
-   de suspension : une ellipse prouve qu'un drapeau est levé, un compteur prouve du travail,
-   et c'est exactement la distinction que `isStalled` existe pour faire ;
-2. `Interrompue · reste 340`, en ambre — le seul état qui attend un geste ;
-3. `3 dossiers inaccessibles`, en ambre — un partage démonté laisse l'index pourrir en
-   silence, et rien d'autre sur l'accueil n'en parlerait jamais ;
-4. `340 fichiers à lire`, **sans** ambre : la découverte périodique en fabrique toute seule à
-   chaque arrivée de photos, et colorer le cours normal des choses apprend à ignorer la
-   couleur ;
-5. `Vérifié hier`, sinon. La question quotidienne n'est pas « combien ? » mais « est-ce que je
-   peux faire confiance à ce que je regarde ». Registre machine, donc le style relatif du
-   système et surtout pas `HumanDate` : « Un mardi de juillet » pour une marche sur un NAS
-   serait absurde.
+1. a walk in progress, with a figure that moves: `En cours · 412 dates lues`. No ellipsis: an
+   ellipsis proves a flag is raised, a counter proves work, and that is exactly the
+   distinction `isStalled` exists to make;
+2. `Interrompue · reste 340`, in amber: the only state waiting for a gesture;
+3. `3 dossiers inaccessibles`, in amber: an unmounted share lets the index rot in silence,
+   and nothing else on Home would ever mention it;
+4. `340 fichiers à lire`, **without** amber: periodic discovery produces these on its own
+   every time photos arrive, and colouring the normal course of things teaches you to ignore
+   the colour;
+5. `Vérifié hier`, otherwise. The daily question is not "how many?" but "can I trust what I
+   am looking at". Machine register, so the system's relative style and above all not
+   `HumanDate`: "Un mardi de juillet" (a Tuesday in July) for a walk over a NAS would be
+   absurd.
 
-L'ordre est vérifié dans `Tests/indexation.swift`, pas la mise en forme : c'est lui qui est
-facile à casser et impossible à voir.
+The order is checked in `Tests/indexation.swift`, not the formatting: the order is what is
+easy to break and impossible to see.
 
-### L'écran Indexation, remonté
+### The Indexation screen, rebuilt
 
-Quatre sections au lieu de trois, et surtout du contenu au bon moment.
+Four sections instead of three, and above all content at the right moment.
 
-- **Maintenant** — pendant la marche, le dossier sous l'aiguille et sa barre ; le reste du
-  temps, le dernier passage raconté. Les dix lignes de compteurs étaient un vidage de la
-  structure `Progress` : per-passe et global mélangés, zéros dits, et deux d'entre elles
-  répétaient ce que la barre disait déjà. Elles passent maintenant par `WalkSummary.details`,
-  qui décide déjà quoi dire et dans quel ordre — la marche et son bilan parlent d'une seule
-  voix.
-- **À surveiller** — injoignables, illisibles, dossiers techniques écartés, chacun ouvrant la
-  liste des chemins. Absente quand il n'y a rien à dire. Ils ne se lisaient qu'en marchant,
-  ce qui est l'inverse du besoin : un partage disparu mérite d'être su précisément quand rien
-  ne tourne.
-- **Action** — un geste principal et « Revérifier ». « Tout relire depuis zéro » part dans le
-  menu « … » de la barre : trois lignes de même rang, c'était l'écran qui affirmait que les
-  trois gestes se valent. Ils ne se valent pas — le dernier jette des heures de lecture
-  réseau.
-- **Comment ça marche** — quatre paragraphes au lieu de six plus un pied de section. Le
-  paragraphe qui comparait « Revérifier » et « Tout relire » est parti : il vit déjà dans
-  `rebuildWarning`, au seul moment où on en a besoin.
+- **Maintenant** (now): during the walk, the folder under the needle and its bar; the rest
+  of the time, the last pass told. The ten lines of counters were a dump of the `Progress`
+  struct: per-pass and global mixed, zeros spelled out, and two of them repeated what the
+  bar already said. They now go through `WalkSummary.details`, which already decides what to
+  say and in what order; the walk and its summary speak with one voice.
+- **À surveiller** (to watch): unreachable, unreadable, technical folders set aside, each
+  opening the list of paths. Absent when there is nothing to say. They could only be read
+  while walking, which is the opposite of the need: a vanished share deserves to be known
+  precisely when nothing is running.
+- **Action**: one main gesture and "Revérifier". "Tout relire depuis zéro" goes into the "…"
+  menu of the bar: three lines of equal rank was the screen claiming the three gestures are
+  equivalent. They are not; the last throws away hours of network reads.
+- **Comment ça marche** (how it works): four paragraphs instead of six plus a section footer.
+  The paragraph comparing "Revérifier" and "Tout relire" is gone: it already lives in
+  `rebuildWarning`, at the one moment it is needed.
 
-### Ouverture instantanée
+### Instant opening
 
-La base reflète le listing complet de chaque dossier déjà indexé — y compris les fichiers
-jamais lus, d'où la colonne `read` qui distingue « vu » de « lu ». Un dossier déjà visité
-s'affiche donc **avant que la box ait répondu**, puis se met à jour quand le vrai listing
-arrive.
+The database mirrors the full listing of every folder already indexed, including files never
+read, hence the `read` column that distinguishes "seen" from "read". A folder already visited
+therefore displays **before the box has answered**, then updates when the real listing
+arrives.
 
-Deux conséquences assumées :
+Two consequences, accepted:
 
-- La première page du listing live n'est plus affichée quand la grille vient déjà du cache :
-  elle ferait rétrécir l'affichage avant de le regarnir.
-- Si la box ne répond pas, un dossier déjà connu reste consultable au lieu d'afficher une
-  erreur. Seul un dossier jamais vu montre l'échec.
+- The first page of the live listing is no longer displayed when the grid already comes from
+  the cache: it would shrink the display before filling it back up.
+- If the box does not answer, a folder already known stays browsable instead of showing an
+  error. Only a folder never seen shows the failure.
 
-### Un piège de migration de schéma
+### A schema migration trap
 
-`ALTER TABLE ... ADD COLUMN kind INTEGER NOT NULL DEFAULT 0` a donné la valeur 0 à toutes les
-lignes existantes — et 0 voulait dire « dossier ». Les photos déjà indexées revenaient donc du
-cache comme des dossiers dans lesquels on pouvait entrer, et disparaissaient de la grille.
+`ALTER TABLE ... ADD COLUMN kind INTEGER NOT NULL DEFAULT 0` gave the value 0 to every
+existing row, and 0 meant "folder". Photos already indexed therefore came back from the
+cache as folders you could enter, and vanished from the grid.
 
-Trois corrections, parce qu'une seule n'aurait pas suffi :
+Three fixes, because one would not have been enough:
 
-- `isDirectory` décide seul de ce qui est un dossier. Un mimeType ne peut plus le faire, ce qui
-  rend la classe de bug impossible plutôt que corrigée.
-- Le défaut de la colonne devient 3 (« autre ») : **aucune valeur par défaut ne doit affirmer
-  qu'un fichier est un dossier**.
-- Les bases déjà écrites sont réparées à l'ouverture, le type étant redéduit du nom de fichier.
+- `isDirectory` alone decides what is a folder. A mimeType can no longer do it, which makes
+  the class of bug impossible rather than fixed.
+- The column default becomes 3 ("other"): **no default value may claim a file is a folder**.
+- Databases already written are repaired on opening, the kind being re-derived from the
+  filename.
 
-### Un seul pipeline de lecture
+### A single read pipeline
 
-`DateScan` et `Indexer` étaient deux boucles indépendantes qui pouvaient lire le même dossier
-en même temps et doubler le trafic vers la box. Il n'en reste qu'une : une file sérielle que le
-dossier affiché double par la tête, puisque c'est lui que quelqu'un attend.
+`DateScan` and `Indexer` were two independent loops that could read the same folder at the
+same time and double the traffic to the box. Only one remains: a serial queue that the
+displayed folder jumps to the head of, since it is the one somebody is waiting for.
 
-Au-delà de **2 000 fichiers sans date**, un dossier ne se lit plus à l'ouverture : une pastille
-renvoie vers l'écran d'indexation (menu « … » → *Indexation de la bibliothèque*). L'indexation se met en
-pause en arrière-plan et reprend au retour.
+Beyond **2,000 undated files**, a folder is no longer read on opening: a badge points to the
+indexing screen ("…" menu → *Indexation de la bibliothèque*). Indexing pauses in the
+background and resumes on return.
 
-### Les dossiers techniques ne sont pas parcourus
+### Technical folders are not walked
 
-Un NAS qui sert aussi de disque de travail contient des projets de développement, et un seul
-`node_modules` fait des dizaines de milliers de fichiers répartis sur des milliers de
-répertoires, dont pas un n'est une photo. Les parcourir coûtait des requêtes de listing à la
-box, des lignes dans SQLite, du balayage à chaque fin de passage, et gonflait tous les compteurs
-et tous les poids affichés sur les tuiles de dossier.
+A NAS that also serves as a working disk contains development projects, and a single
+`node_modules` is tens of thousands of files spread over thousands of directories, not one
+of which is a photo. Walking them cost listing requests to the box, rows in SQLite, a sweep
+at the end of every pass, and inflated every counter and every weight shown on folder tiles.
 
-`Keo/Media/FolderExclusion.swift` tient la règle. Pure et hors SwiftUI, comme `LivePhotos` et
-`WalkOutcome`, et pour la même raison : elle doit tenir à deux endroits — le parcours, qui ne
-doit pas descendre, et le nettoyage de ce que les versions précédentes ont déjà indexé. Une
-règle qui dérive entre les deux laisse des lignes que plus rien n'ira jamais supprimer.
+`Keo/Media/FolderExclusion.swift` holds the rule. Pure and outside SwiftUI, like `LivePhotos`
+and `WalkOutcome`, and for the same reason: it has to hold in two places, the walk, which
+must not descend, and the cleanup of what previous versions have already indexed. A rule
+that drifts between the two leaves rows nothing will ever delete.
 
-| Exclu | Pourquoi |
+| Excluded | Why |
 |---|---|
-| `node_modules` | npm, et la raison d'être du fichier |
-| `__pycache__` | bytecode Python, souligné des deux côtés par l'interpréteur |
-| `venv` | environnement virtuel Python ; `.venv` relève de la règle du point |
-| `@eaDir` | la réserve de vignettes et d'index de Synology |
-| `#recycle` | la corbeille de Synology |
-| `$RECYCLE.BIN` | la corbeille de Windows, telle qu'elle apparaît sur un partage |
-| `System Volume Information` | métadonnées de volume Windows, écrites sur tout partage |
-| `lost+found` | ce que `fsck` recolle, jamais ce que quelqu'un a rangé |
-| tout nom commençant par `.` | `.git`, `.svn`, `.venv`, `.build`, `.gradle`, `.next`, `.tox`, `.Trash`, `.Spotlight-V100`, `.fseventsd`, `.DS_Store`, `._*` |
+| `node_modules` | npm, and the reason this file exists |
+| `__pycache__` | Python bytecode, underscored on both sides by the interpreter |
+| `venv` | Python virtual environment; `.venv` falls under the dot rule |
+| `@eaDir` | Synology's store of thumbnails and indexes |
+| `#recycle` | Synology's recycle bin |
+| `$RECYCLE.BIN` | the Windows recycle bin, as it appears on a share |
+| `System Volume Information` | Windows volume metadata, written on every share |
+| `lost+found` | what `fsck` pieces back together, never what someone put away |
+| any name starting with `.` | `.git`, `.svn`, `.venv`, `.build`, `.gradle`, `.next`, `.tox`, `.Trash`, `.Spotlight-V100`, `.fseventsd`, `.DS_Store`, `._*` |
 
-La comparaison est **insensible à la casse** : un partage SMB l'est, donc `NODE_MODULES` et
-`node_modules` désignent le même répertoire. Même raisonnement que `LivePhotos.key`.
+The comparison is **case-insensitive**: an SMB share is, so `NODE_MODULES` and
+`node_modules` name the same directory. Same reasoning as `LivePhotos.key`.
 
-La ligne sur le point mérite une note. `FreeboxClient.listPage` écarte déjà tout nom pointé
-avant que la règle soit consultée, donc elle n'enlève rien de plus au parcours. Ce qu'elle
-apporte : le nettoyage ci-dessous atteint les lignes qu'un ancien build a pu écrire, et la règle
-reste **la** réponse à « Keo indexe-t-il ce dossier ? » plutôt que la moitié d'une réponse
-répartie entre le transport et l'indexeur.
+The dot line deserves a note. `FreeboxClient.listPage` already discards every dotted name
+before the rule is consulted, so it removes nothing more from the walk. What it brings: the
+cleanup below reaches the rows an old build may have written, and the rule stays **the**
+answer to "does Keo index this folder?" rather than half an answer split between the
+transport and the indexer.
 
-### Ce que la règle n'exclut délibérément pas
+### What the rule deliberately does not exclude
 
-`build`, `dist`, `target`, `vendor`, `Pods`, `bin`, `obj`, `cache`, `tmp` — tous proposés, tous
-refusés. Ce sont des mots ordinaires : « Build » peut être un dossier de chantier photographié,
-« Vendor » un dossier de photos fournisseur. Les deux erreurs ne coûtent pas la même chose. Un
-dossier indexé à tort, c'est quelques requêtes perdues sur un répertoire d'artefacts qui pèse de
-toute façon mille fois moins qu'un `node_modules`. Un dossier exclu à tort, ce sont des photos
-que le propriétaire ne retrouvera jamais, **sans le moindre message**. La liste reste donc
-courte, et un nom n'y entre que si personne ne le donnerait à un dossier de photos.
+`build`, `dist`, `target`, `vendor`, `Pods`, `bin`, `obj`, `cache`, `tmp`: all proposed, all
+refused. They are ordinary words: "Build" may be a building site someone photographed,
+"Vendor" a folder of supplier photos. The two errors do not cost the same. A folder indexed
+by mistake is a few requests wasted on an artefact directory that weighs a thousand times
+less than a `node_modules` anyway. A folder excluded by mistake is photos the owner will
+never find again, **without the slightest message**. So the list stays short, and a name
+only enters it if nobody would give it to a folder of photos.
 
-La correspondance est exacte, jamais un sous-texte : `node_modules copie` et `mon-node_modules`
-restent indexés. `Tests/exclusions.swift` épingle les deux sens.
+The match is exact, never a substring: `node_modules copie` and `mon-node_modules` stay
+indexed. `Tests/exclusions.swift` pins both directions.
 
-Les dossiers exclus **restent consultables dans Parcourir** : on peut entrer dedans, les
-fichiers s'affichent, ils se téléchargent. Seul l'index les ignore. Masquer serait une décision
-plus lourde que celle qui est demandée ici, et impossible à rattraper du doigt.
+Excluded folders **stay browsable in Parcourir** (Browse): you can enter them, the files
+display, they download. Only the index ignores them. Hiding would be a heavier decision than
+the one asked for here, and impossible to recover from with a finger.
 
-### Pas d'écran de réglages
+### No settings screen
 
-Ni liste modifiable, ni interrupteur. Huit noms qui ne peuvent pas être des dossiers de
-photos, plus la règle du point, ne justifient pas un écran que personne n'ouvrira, et un réglage mal compris est exactement la
-façon dont on perd des photos en silence. Le seul mode d'échec réel — une règle devenue trop
-gourmande — est déjà visible : l'écran Indexation affiche **« Dossiers techniques exclus »**
-avec le compte du passage, et la ligne s'ouvre sur les dix premiers chemins écartés. Une liste
-d'exclusion silencieuse ressemble à un bug ; celle-ci se lit.
+No editable list, no switch. Eight names that cannot be photo folders, plus the dot rule, do
+not justify a screen nobody will open, and a misunderstood setting is exactly how photos get
+lost in silence. The only real failure mode, a rule grown too greedy, is already visible: the
+Indexation screen shows **"Dossiers techniques exclus"** (technical folders excluded) with
+the pass's count, and the line opens on the first ten paths set aside. A silent exclusion
+list looks like a bug; this one can be read.
 
-### Nettoyer ce qui est déjà indexé
+### Cleaning up what is already indexed
 
-Arrêter d'ajouter ne suffit pas : l'index du propriétaire contenait 4 799 dossiers et environ
-48 000 fichiers, détritus de développement compris. `exclusionVersion` dans `meta` suit l'idiome
-déjà en place (`listingVersion`, `liveVersion`, `readerVersion`) : au premier lancement qui voit
-un numéro plus récent, `IndexStore` balaie une fois la table `folder` et supprime toute ligne
-dont un composant du chemin est exclu. Les fichiers suivent par cascade (`ON DELETE CASCADE`,
-avec `PRAGMA foreign_keys = ON`).
+Ceasing to add is not enough: the owner's index held 4,799 folders and about 48,000 files,
+development debris included. `exclusionVersion` in `meta` follows the idiom already in place
+(`listingVersion`, `liveVersion`, `readerVersion`): on the first launch that sees a newer
+number, `IndexStore` sweeps the `folder` table once and deletes every row with an excluded
+component in its path. Files follow by cascade (`ON DELETE CASCADE`, with
+`PRAGMA foreign_keys = ON`).
 
-Ce que ça ne touche pas, et c'est structurel plutôt que déclaratif : **seule la table `folder`
-est visée**. Les favoris, les collections, les raccourcis et les notes sont clavetés sur le
-chemin et n'ont aucune clé étrangère vers `folder` — ils sont délibérément hors de la durée de
-vie de l'index. Un favori posé *à l'intérieur* d'un `node_modules`, un raccourci vers ce dossier,
-une note sur un de ses fichiers : tous survivent, et `Tests/exclusions.swift` le vérifie contre
-le vrai SQLite, nettoyage rejoué deux fois pour montrer que la passe est idempotente.
+What it does not touch, and this is structural rather than declarative: **only the `folder`
+table is targeted**. Favourites, collections, shortcuts and notes are keyed on the path and
+have no foreign key to `folder`; they are deliberately outside the index's lifetime. A
+favourite set *inside* a `node_modules`, a shortcut to that folder, a note on one of its
+files: all survive, and `Tests/exclusions.swift` checks it against real SQLite, the cleanup
+replayed twice to show the pass is idempotent.
 
-Le filtre agit **avant** que le parcours descende, pas pendant : rien dans le cycle de vie de
-l'indexation ne change, un sous-arbre n'y entre simplement jamais. C'est ce qui rend ce
-changement sûr là où les autres pistes d'optimisation ne le sont pas.
+The filter acts **before** the walk descends, not during: nothing in the indexing lifecycle
+changes, a subtree simply never enters it. That is what makes this change safe where the
+other optimisation leads are not.
 
-## Les vignettes : scroller loin ne doit pas vider la grille
+## Thumbnails: scrolling far must not empty the grid
 
-Un scroll lent allait bien, un scroll long arrivait sur des cases grises — et ouvrir une photo
-ou une vidéo depuis ce point-là n'affichait rien non plus. Trois causes, toutes dans le chemin
-de lecture, aucune dans le réseau.
+A slow scroll was fine, a long scroll landed on grey cells, and opening a photo or a video
+from that point displayed nothing either. Three causes, all in the read path, none in the
+network.
 
-**Le préchargement empilait au lieu de remplacer.** Chaque cellule qui apparaissait demandait
-les vingt-quatre lignes suivantes, chacune en tâche séparée. Passer mille cellules laissait
-donc des dizaines de milliers de demandes en attente, toutes pour des lignes sorties de
-l'écran depuis longtemps, et toutes **devant** celle où le lecteur venait de s'arrêter. La
-déduplication ne rattrapait rien : la clé n'entrait dans `inFlight` qu'une fois la tâche
-ordonnancée, donc le même fichier était redemandé autant de fois qu'il était survolé.
+**Prefetching stacked up instead of replacing.** Every cell that appeared requested the next
+twenty-four rows, each as a separate task. Passing a thousand cells therefore left tens of
+thousands of pending requests, all for rows long gone off screen, and all **ahead** of the
+one where the reader had just stopped. Deduplication caught none of it: the key only entered
+`inFlight` once the task was scheduled, so the same file was requested again as many times
+as it was flown over.
 
-`PrefetchWindow` remplace cette file par une **fenêtre unique**, écrasée à chaque consigne et
-vidée par deux drains. Ce qui a été dépassé est oublié : personne ne le regarde, et le cache
-disque répond si le lecteur remonte. C'est une structure pure, hors de l'acteur, pour que
-`Tests/prefetch.swift` puisse la pousser à mille consignes d'affilée et vérifier qu'il reste
-une fenêtre et deux drains.
+`PrefetchWindow` replaces that queue with a **single window**, overwritten on every
+instruction and emptied by two drains. What has been passed is forgotten: nobody is looking
+at it, and the disk cache answers if the reader scrolls back up. It is a pure structure,
+outside the actor, so that `Tests/prefetch.swift` can push it through a thousand
+instructions in a row and check that one window and two drains remain.
 
-**Tout le décodage était sérialisé sur l'acteur.** `Task { }` créé dans une méthode isolée
-**hérite de l'acteur** — la lecture disque, le décodage, l'encodage JPEG et l'écriture du cache
-s'exécutaient donc sur l'exécuteur du pipeline, une vignette à la fois. Le `Gate(limit: 4)`
-bornait une file déjà sérielle, et une cellule arrivant à l'écran attendait derrière tout ce
-qui était déjà en file. Le `Task` est devenu `Task.detached`, et `produce` / `still` / `frame`
-sont `nonisolated`. L'acteur ne garde que ce qui est à lui : le cache mémoire, les tâches en
-cours, la fenêtre.
+**All decoding was serialised on the actor.** A `Task { }` created in an isolated method
+**inherits the actor**: disk read, decode, JPEG encode and cache write therefore ran on the
+pipeline's executor, one thumbnail at a time. The `Gate(limit: 4)` bounded a queue that was
+already serial, and a cell arriving on screen waited behind everything already queued. The
+`Task` became `Task.detached`, and `produce` / `still` / `frame` are `nonisolated`. The
+actor keeps only what is its own: the memory cache, the tasks in flight, the window.
 
-**Le visualiseur attendait sa vignette avant de commencer son travail.** `PhotoPage` enchaînait
-« vignette, puis fichier complet » ; la vignette venant du pipeline encombré, la page restait
-noire alors que le téléchargement aurait pu démarrer tout de suite. Les deux courent désormais
-en parallèle, et le premier arrivé s'affiche — la vignette ne réécrit pas une image déjà nette.
+**The viewer waited for its thumbnail before starting its work.** `PhotoPage` chained
+"thumbnail, then full file"; with the thumbnail coming from the congested pipeline, the page
+stayed black when the download could have started straight away. The two now run in
+parallel, and whichever arrives first is displayed; the thumbnail does not overwrite an
+image already sharp.
 
-Accessoirement, `still` n'attend plus l'écriture de la date de prise de vue dans SQLite : c'est
-un effet de bord de la vignette, pas sa raison d'être, et le faire attendre mettait chaque
-cellule derrière ce que la passe d'indexation était en train d'écrire.
+Incidentally, `still` no longer waits for the capture date to be written to SQLite: that is
+a side effect of the thumbnail, not its reason for being, and making it wait put every cell
+behind whatever the indexing pass was writing.
 
-### Vérifier à la main
+### Checking by hand
 
-`Tests/prefetch.swift` couvre la fenêtre ; le reste demande l'appareil et une vraie
-bibliothèque :
+`Tests/prefetch.swift` covers the window; the rest needs the device and a real library:
 
-- **Scroll long** : ouvrir un dossier de plusieurs milliers de photos, scroller d'un trait
-  jusqu'au milieu, lâcher. Les cases visibles doivent se remplir en une seconde ou deux, sans
-  rapport avec la distance parcourue.
-- **Ouvrir depuis là** : taper une photo juste après ce scroll. Quelque chose doit apparaître
-  tout de suite — la vignette ou l'image nette, peu importe laquelle gagne — jamais un écran
-  noir qui dure.
-- **Vidéo depuis là** : même geste sur une vidéo, la lecture doit démarrer comme depuis le
-  haut du dossier.
-- **Remonter** : rescroller vers le haut, les vignettes déjà vues reviennent du cache disque
-  instantanément.
-- **Pendant une indexation** : refaire les trois premiers pendant que l'écran d'indexation
-  travaille. C'est le cas où l'acteur SQLite est le plus occupé.
+- **Long scroll**: open a folder of several thousand photos, scroll in one go to the middle,
+  let go. The visible cells must fill within a second or two, regardless of the distance
+  covered.
+- **Open from there**: tap a photo right after that scroll. Something must appear at once,
+  the thumbnail or the sharp image, whichever wins, never a black screen that lingers.
+- **Video from there**: same gesture on a video, playback must start as it would from the
+  top of the folder.
+- **Scroll back up**: scroll back to the top, thumbnails already seen come back from the
+  disk cache instantly.
+- **During indexing**: repeat the first three while the indexing screen is working. That is
+  the case where the SQLite actor is busiest.
 
-## Recherche
+## Search
 
-Onglet dédié, porté par `TabRole.search` : iOS le range où il range la recherche partout
-ailleurs — à part, à l'extrémité droite — au lieu d'enfoncer un cinquième onglet égal dans la
-rangée. Les quatre autres passent en symboles non remplis (`symbolVariants = .none`), qu'une
-barre d'onglets applique en `.fill` par défaut ; la rangée respire.
+A dedicated tab, carried by `TabRole.search`: iOS puts it where it puts search everywhere
+else, apart, at the far right, instead of forcing a fifth equal tab into the row. The other
+four switch to unfilled symbols (`symbolVariants = .none`), which a tab bar applies as
+`.fill` by default; the row breathes.
 
-Et, et **une seule source : l'index local**. On n'interroge jamais la box.
+And **a single source: the local index**. The box is never queried.
 
-Le marché est explicite : la recherche répond en quelques millisecondes, elle marche box
-éteinte — et elle ne voit que ce qui a été indexé. Un dossier jamais parcouru n'apparaît pas.
-L'écran le dit (« la recherche porte sur les N dossiers déjà indexés »), avec un bouton vers
-l'analyse, plutôt que de laisser un « aucun résultat » mentir par omission.
+The deal is explicit: search answers in a few milliseconds, it works with the box switched
+off, and it only sees what has been indexed. A folder never walked does not appear. The
+screen says so ("la recherche porte sur les N dossiers déjà indexés", search covers the N
+folders already indexed), with a button to the analysis, rather than letting a "aucun
+résultat" (no results) lie by omission.
 
 ### Accents
 
-`LIKE` n'ignore la casse que pour l'ASCII : `Été` ne répondrait jamais à `ete`. On enregistre
-donc une fonction SQL `fold()` sur la connexion (`registerFold`), qui replie casse et
-diacritiques côté Swift. Le prix est un balayage de la table `file` au lieu d'un parcours
-d'index — quelques millisecondes à notre échelle. Le plafond est noté dans le code : si l'index
-grossit beaucoup, il faudra une colonne repliée et son index.
+`LIKE` only ignores case for ASCII: `Été` would never answer `ete`. So a SQL function
+`fold()` is registered on the connection (`registerFold`), which folds case and diacritics
+on the Swift side. The price is a scan of the `file` table instead of an index walk: a few
+milliseconds at our scale. The ceiling is noted in the code: if the index grows a lot, a
+folded column and its index will be needed.
 
-Les jokers SQL `%` et `_` sont échappés : un fichier peut légitimement s'appeler `100%_brut`.
+The SQL wildcards `%` and `_` are escaped: a file can legitimately be called `100%_brut`.
 
-### Les documents aussi
+### Documents too
 
-L'index ne retenait que les photos et les vidéos : un `Contrat.pdf` était compté dans le
-poids du dossier et nulle part ailleurs. Il était donc introuvable, et absent d'une grille
-peinte depuis le cache. Le parcours enregistre maintenant toute la liste, documents compris —
-**enregistrés, jamais lus** : il n'y a pas de date de prise de vue dans un PDF, aller en
-chercher les premiers kilo-octets n'achèterait rien.
+The index only kept photos and videos: a `Contrat.pdf` was counted in the folder's weight
+and nowhere else. It was therefore unfindable, and missing from a grid painted from the
+cache. The walk now records the whole list, documents included, **recorded, never read**:
+there is no capture date in a PDF, fetching its first kilobytes would buy nothing.
 
-Les dossiers déjà tamponnés resteraient complets pour toujours, donc leurs fichiers
-n'apparaîtraient jamais. `listingVersion` efface les tampons une fois : chaque dossier est
-relisté, aucun fichier n'est relu (`read = 1` n'est pas touché).
+Folders already stamped would stay complete forever, so their files would never appear.
+`listingVersion` clears the stamps once: every folder is relisted, no file is reread
+(`read = 1` is untouched).
 
-Un filtre de période exclut forcément les documents, qui n'ont pas de date. C'est voulu et
-c'est dit par le filtre « Fichiers ».
+A period filter necessarily excludes documents, which have no date. That is intended, and
+the "Fichiers" (files) filter says so.
 
-### Retrouver l'endroit
+### Finding the place again
 
-Un résultat est montré dépouillé de son dossier, ce qui est précisément le repère qu'on veut
-récupérer une fois qu'on l'a trouvé. Appui long sur n'importe quel résultat → « Aller dans
-*…* ». Vaut aussi dans les Favoris et les Collections, qui perdent le même repère ; inutile
-dans un vrai dossier, on y est déjà.
+A result is shown stripped of its folder, which is precisely the bearing you want back once
+you have found it. Long-press any result → "Aller dans *…*" (go to …). Also applies in
+Favourites and Collections, which lose the same bearing; pointless in a real folder, you are
+already there.
 
-`BrowserSource.parent(of:)` est volontairement hors SwiftUI pour être vérifiable : elle rend
-`nil` à la racine et pour tout chemin qu'on ne sait pas découper, jamais un dossier inventé.
+`BrowserSource.parent(of:)` is deliberately outside SwiftUI so it can be checked: it returns
+`nil` at the root and for any path we do not know how to split, never an invented folder.
 
-### Période
+### Period
 
-Un seul axe, trois états : toutes les périodes, une année, ou un intervalle entre deux dates.
-Pas une année *et* une plage côte à côte — deux contrôles qui restreignent la même chose
-finissent par se contredire. `SearchQuery.Period` porte les trois cas et calcule lui-même la
-fenêtre en secondes : bornes inclusives, journées entières (mêmes dates aux deux bouts = cette
-journée, pas cet instant), et bornes remises à l'endroit si elles sont inversées.
+One axis, three states: all periods, one year, or an interval between two dates. Not a year
+*and* a range side by side: two controls restricting the same thing end up contradicting
+each other. `SearchQuery.Period` carries the three cases and computes the window in seconds
+itself: inclusive bounds, whole days (same date at both ends = that day, not that instant),
+and bounds put back the right way round if reversed.
 
-### Dossiers
+### Folders
 
-Un dossier remonte sur **son nom**, jamais sur son chemin : chercher `Photos` ne doit pas
-retourner les deux cents sous-dossiers de `/Photos`. Un dossier qui matche remonte aussi ce
-qu'il contient. Les filtres de type et de période excluent les dossiers, qui n'ont ni l'un ni
-l'autre.
+A folder matches on **its name**, never on its path: searching `Photos` must not return the
+two hundred subfolders of `/Photos`. A folder that matches also brings up what it contains.
+Type and period filters exclude folders, which have neither.
 
-Les résultats passent par le même `BrowserView` que le reste (`BrowserSource.results`) : même
-grille, même visionneuse, même sélection, mêmes téléchargements.
+Results go through the same `BrowserView` as everything else (`BrowserSource.results`): same
+grid, same viewer, same selection, same downloads.
+## Live Photos
 
-## Photos live
+An iPhone Live Photo copied to a NAS arrives as two ordinary files: `IMG_4821.HEIC` and
+`IMG_4821.MOV`, same stem, same folder. The pairing iOS kept in the `PHAsset` metadata is lost
+in the copy, and nothing in the files says they belong together. The result: a library that
+looks twice as full as it is, and a grey twin next to every photo.
 
-Une photo live d'iPhone copiée sur un NAS arrive en deux fichiers ordinaires :
-`IMG_4821.HEIC` et `IMG_4821.MOV`, même racine, même dossier. L'appariement qu'iOS tenait
-dans les métadonnées `PHAsset` est perdu à la copie, et rien dans les fichiers ne dit qu'ils
-vont ensemble. Résultat : une bibliothèque qui paraît deux fois plus pleine qu'elle n'est, et
-un jumeau gris à côté de chaque photo.
+Keo reunites them on the only evidence left, the name. The `.MOV` disappears from the grid; in
+full screen, a button in the bottom bar plays the video: muted, one pass, tap again to stop.
+Its mere presence says the photo has one: the "LIVE" badge in the top-left corner that used to
+say so has been removed, it was ugly and redundant.
 
-Keo les réunit sur la seule preuve qui reste, le nom. Le `.MOV` disparaît de la grille ; en
-plein écran, un bouton dans la barre du bas joue la vidéo — muet, une passe, retap pour
-arrêter. Sa seule présence dit que la photo en a une : la pastille « LIVE » en haut à gauche
-qui le disait avant a été retirée, elle était laide et redondante.
+Two attempts preceded this button, and both failed under the finger. **Long press**, as in
+Photos: you don't know how long to hold or whether anything is happening. **The badge itself
+as a button**: top left is the corner furthest from the thumb. Hence the rule already written
+in the code, *"Bottom: everything you actually do, within thumb reach"*, applied here too.
 
-Deux essais ont précédé ce bouton, et les deux ont échoué au doigt. **L'appui long**, à la
-Photos : on ne sait pas combien de temps tenir ni si quelque chose se passe. **La pastille
-elle-même comme bouton** : en haut à gauche, c'est l'angle le plus éloigné du pouce. D'où la
-règle déjà écrite dans le code — *« Bottom: everything you actually do, within thumb reach »*
-— appliquée aussi ici.
+So the bar moves to **five slots of equal width** instead of fixed spacing, and the fifth stays
+empty on a photo without a video. Placing it only when it exists would slide the heart out of
+thumb reach when going from a Live Photo to an ordinary one.
 
-La barre passe donc à **cinq emplacements de largeur égale** au lieu d'un espacement fixe, et
-le cinquième reste vide sur une photo sans vidéo. Ne le poser que lorsqu'il existe ferait
-glisser le cœur hors du pouce en passant d'une photo live à une photo ordinaire.
+### The name is not enough: Apple's identity
 
-### Le nom ne suffit pas : l'identité d'Apple
+A real case showed it: an `IMG_0988.HEIC` and an `IMG_0988.MOV` with no relation whatsoever,
+merged into a single moment because the iPhone's counters cycle through the same numbers. A
+real video was silently disappearing.
 
-Un cas réel l'a montré : un `IMG_0988.HEIC` et un `IMG_0988.MOV` sans aucun rapport, fondus en
-un seul moment parce que les compteurs de l'iPhone repassent par les mêmes numéros. Une vraie
-vidéo disparaissait en silence.
+Apple writes a **shared UUID** into both halves of a Live Photo, MakerNote 17 on the image
+side, `com.apple.quicktime.content.identifier` on the video side, and Photos itself requires
+them to match. The filename is just a convention laid on top. Pairing therefore becomes an
+identity, and the name only serves to designate candidates.
 
-Apple écrit un **UUID partagé** dans les deux moitiés d'une photo live — MakerNote 17 côté
-image, `com.apple.quicktime.content.identifier` côté vidéo — et Photos lui-même exige leur
-égalité. Le nom de fichier n'est qu'une convention posée par-dessus. L'appariement devient
-donc une identité, et le nom ne sert plus qu'à désigner les candidats.
+**Measured before being written**, twice:
 
-**Mesuré avant d'être écrit**, deux fois :
+- On 120 photos drawn at random: identifier present in **80.8%**, and the figure is
+  *identical* at 24 KB and at 128 KB. So it isn't truncation: an ordinary photo simply has no
+  identifier. (The date, for its part, is at 95.0% then 96.7%.)
+- On 60 **real pairs**: 57 identical, **0 contradictions**, 3 with an identifier on one side
+  only.
 
-- Sur 120 photos tirées au hasard : identifiant présent dans **80,8 %**, et le chiffre est
-  *identique* à 24 Ko et à 128 Ko. Ce n'est donc pas une troncature — une photo ordinaire n'a
-  simplement pas d'identifiant. (La date, elle, est à 95,0 % puis 96,7 %.)
-- Sur 60 **vraies paires** : 57 identiques, **0 contradiction**, 3 avec un identifiant d'un
-  seul côté.
+### Why silence does not unpair
 
-### Pourquoi le silence ne dé-apparie pas
+The recommendation said a single carrying side is enough to reject the pair, since a Live
+Photo video always carries one. The measurement demands caution: the probe cannot tell "read,
+no identifier" from "read failure". Unpairing on silence would have cost correct pairs to buy
+nothing: the reported case carries an identifier **on both sides**.
 
-La recommandation disait qu'un seul côté porteur suffit à refuser la paire, une vidéo de photo
-live en portant toujours un. La mesure impose la prudence : le sondage ne sait pas distinguer
-« lu, pas d'identifiant » d'« échec de lecture ». Dé-apparier sur un silence aurait coûté des
-paires correctes pour n'acheter rien — le cas signalé porte un identifiant **des deux côtés**.
+So the rule is: **only an explicit contradiction rejects the pair**. Both halves read, both
+carrying, and both different. As long as one side has not been read, the name rule applies
+exactly as before: no flag day, the index converges as reads go by.
 
-La règle est donc : **seule une contradiction explicite refuse la paire**. Les deux moitiés
-lues, les deux porteuses, et les deux différentes. Tant qu'un côté n'a pas été lu, la règle du
-nom s'applique exactement comme avant : pas de jour J, l'index converge au fil des lectures.
+**Pairing has never crossed folder boundaries**: the rule requires the same `folder_id` on
+the SQL side, and only works on the media of a single folder on the Swift side. The real case
+came from elsewhere: **two different iPhones** whose counters cycle through the same numbers,
+and whose photos ended up in the same folder.
 
-**L'appariement n'a jamais franchi les frontières d'un dossier** : la règle exige le même
-`folder_id` côté SQL, et ne travaille que sur les médias d'un seul dossier côté Swift. Le cas
-réel venait d'ailleurs — **deux iPhone différents** dont les compteurs repassent par les mêmes
-numéros, et dont les photos ont fini dans un même dossier.
+Across the whole library, once the migration had run: **13,882 matching pairs, 71
+contradictions, 227 with a single carrying side, 40 with no identifier at all**. The 71
+contradictions are 70 real videos that were hidden behind an unrelated photo.
 
-Sur l'ensemble de la bibliothèque, une fois la migration passée : **13 882 paires concordantes,
-71 contradictions, 227 avec un seul côté porteur, 40 sans aucun identifiant**. Les 71
-contradictions sont 70 vraies vidéos qui étaient masquées derrière une photo sans rapport.
+The cost is bounded by construction: only a video whose name matches a photo in the same
+folder is a candidate. On the photo side, the identifier arrives in the prefix already read:
+free.
 
-Le coût est borné par construction — seule une vidéo dont le nom correspond à une photo du
-même dossier est candidate. Côté photo, l'identifiant arrive dans le préfixe déjà lu : gratuit.
+**An isolated `.MOV` stays a visible video.** That is everything not shot on an iPhone, and
+hiding it would lose it.
 
-**Un `.MOV` isolé reste une vidéo visible.** C'est tout ce qui n'a pas été pris à l'iPhone, et
-le masquer le perdrait.
+#### "Not read" is not "no identifier", and that had been lost twice
 
-#### « Pas lu » n'est pas « pas d'identifiant », et ça s'était perdu deux fois
+The whole doctrine above rests on a three-valued verdict: *found*, *absent*, *I need more
+bytes*. An audit found two places where the third value was being overwritten by the second,
+that is, where ignorance was presenting itself as certainty.
 
-Toute la doctrine ci-dessus repose sur un verdict à trois valeurs : *trouvé*, *absent*,
-*il me faut d'autres octets*. Un audit a trouvé deux endroits où la troisième valeur se
-faisait écraser par la deuxième — c'est-à-dire où une ignorance se présentait comme une
-certitude.
+`metaChildrenStart` returns a `.bail` that sometimes means "this `meta` is too small to hold
+anything" (certain absence), sometimes "the four probe bytes haven't been fetched yet" (ask
+again). The date path propagated the inner verdict; **the identifier path flattened both into
+`.absent`**. Bytes never read thus became "no Live Photo identifier", and the driver recorded
+that `nil` as "ordinary video": a real pair unpaired, permanently, with nothing to catch it.
+Reachable as soon as a `moov` exceeds the 512 KB slurp with an unfavourable chunk geometry,
+that is, on large clips. `Tests/videodatechecks.swift` builds that exact geometry and shows
+the two scanners disagreeing.
 
-`metaChildrenStart` rend un `.bail` qui porte tantôt « ce `meta` est trop petit pour contenir
-quoi que ce soit » (absence sûre), tantôt « les quatre octets de sonde ne sont pas encore
-récupérés » (il faut redemander). Le chemin date propageait le verdict intérieur ; **le chemin
-identifiant aplatissait les deux en `.absent`**. Des octets jamais lus devenaient donc
-« pas d'identifiant de photo live », et le pilote enregistrait ce `nil` comme « vidéo
-ordinaire » — une vraie paire dé-appariée, définitivement, sans rien pour la rattraper.
-Atteignable dès qu'un `moov` dépasse les 512 Ko du slurp avec une géométrie de tranches
-défavorable, c'est-à-dire sur les gros clips. `Tests/videodatechecks.swift` construit cette
-géométrie exacte et montre les deux scanneurs en désaccord.
+The same flattening existed one floor up, on the indexer side. The group that probes the
+*video* side of a pair committed `read = 1` even when the scan had thrown (`Undecided`, network
+cut) without incrementing `failures`, so the folder was stamped complete and the video never
+read again. Yet it is precisely its date that settles the 227 one-sided pairs. The group now
+returns a `Result`, like the photo one: a legitimate verdict is committed, a throw is counted,
+reported, and retried on the next pass. That is exactly the population the
+`identityVersion = 2` migration had once had to catch up on.
 
-Le même aplatissement existait un étage plus haut, côté indexeur. Le groupe qui sonde la face
-*vidéo* d'une paire commitait `read = 1` même quand le scan avait jeté — `Undecided`, coupure
-réseau — sans incrémenter `failures`, donc le dossier était tamponné complet et la vidéo plus
-jamais relue. Or c'est précisément sa date qui départage les 227 paires à une face. Le groupe
-rend maintenant un `Result`, comme celui des photos : un verdict légitime se commite, un jet
-se compte, se signale et se retente à la passe suivante. C'est exactement la population que la
-migration `identityVersion = 2` avait dû rattraper une fois.
+The lesson fits in one sentence, and it holds beyond Live Photos: **a dropped connection gets
+retried, it never gets recorded.** A `catch` that returns the same thing as an empty success
+is a bug that cannot be seen.
 
-La leçon tient en une phrase, et elle vaut au-delà des photos live : **une connexion coupée se
-retente, elle ne s'enregistre jamais.** Un `catch` qui rend la même chose qu'un succès vide est
-un bug qui ne se voit pas.
+The rule lives in `LivePhotos`, outside SwiftUI, because it must hold in three places, a
+fresh listing from the box, a listing replayed from the index, and the `UPDATE` that marks the
+database, and a rule that drifts between them shows the video on one side and hides it on the
+other. On the SQL side it is the same function, registered on the connection under the name
+`stem`, like `fold` for accents.
 
-La règle vit dans `LivePhotos`, hors SwiftUI, parce qu'elle doit tenir à trois endroits — un
-listing frais venu de la box, un listing rejoué depuis l'index, et le `UPDATE` qui marque la
-base — et qu'une règle qui dérive entre eux montre la vidéo d'un côté et la cache de l'autre.
-Côté SQL c'est la même fonction, enregistrée sur la connexion sous le nom `stem`, comme
-`fold` pour les accents.
+And it did drift: a fresh listing from the box carries neither identifier nor date, so
+`FolderContents` re-paired on name alone at every refresh: the video that identity had freed
+went back into hiding as soon as the box answered. `IndexStore.enrich` now copies onto the
+fresh listing what the index already knows, *before* pairing.
 
-Et elle dérivait : un listing frais venu de la box ne porte ni identifiant ni date, donc
-`FolderContents` ré-appariait au nom seul à chaque rafraîchissement — la vidéo que
-l'identité avait libérée se recachait dès que la box répondait. `IndexStore.enrich`
-recopie maintenant sur le listing frais ce que l'index sait déjà, *avant* l'appariement.
+### The one-sided 227s: the date decides
 
-### Les 227 à une face : la date départage
+The real case, in a real folder: `IMG_0985.JPEG` read end to end, no identifier;
+`IMG_0985.MOV` carrying one. Two possible stories, and the right one changes per file. Either
+the photo was re-encoded by a tool that lost Apple's MakerNote, and the pair is real:
+unpairing it manufactures a visible duplicate. Or the real half is elsewhere and the video is
+a separate film: keeping it paired hides a real video, which is the only serious fault.
 
-Le cas réel, dans un dossier réel : `IMG_0985.JPEG` lue de bout en bout, aucun identifiant ;
-`IMG_0985.MOV` qui en porte un. Deux histoires possibles, et la bonne change par fichier.
-Soit la photo a été ré-encodée par un outil qui a perdu le MakerNote d'Apple, et la paire est
-vraie — la dé-apparier fabrique un doublon visible. Soit la vraie moitié est ailleurs et la
-vidéo est un film à part — la garder appariée cache une vraie vidéo, ce qui est la seule
-faute grave.
+What tells them apart: **the dates**. The two halves of a Live Photo are written within a few
+seconds of each other, the photo's date is already in the index, and the video's comes out of
+the same `moov` as its identifier, so it is read in the same window, for free, and recorded.
 
-Ce qui les distingue : **les dates**. Les deux moitiés d'une photo live sont écrites à
-quelques secondes l'une de l'autre, la date de la photo est déjà dans l'index, et celle de la
-vidéo sort du même `moov` que son identifiant — elle est donc lue dans la même fenêtre,
-gratuitement, et enregistrée.
+The rule, held in all three places: **a single carrying side and two known dates that diverge
+by more than sixteen hours, the pair comes apart.** A missing date keeps the pair (hiding
+wrongly loses a video, showing a duplicate is only cosmetic) and the index converges as reads
+go by, like everything else.
 
-La règle, tenue aux trois endroits : **une seule face porteuse et deux dates connues qui
-divergent de plus de seize heures, la paire se défait.** Une date manquante garde la paire —
-masquer à tort perd une vidéo, montrer un doublon n'est que cosmétique — et l'index converge
-au fil des lectures, comme pour le reste.
+Sixteen hours, not a few seconds, because of a trap already pinned here: the photo's EXIF
+date is a naive local time, reduced to an epoch by *this* device's time zone, whereas the
+video's `creationdate` carries its original time zone. A real pair taken abroad therefore
+lands up to ~13 hours apart once both are reduced to an epoch. No false pair the date could
+catch lives that close: two iPhones cycling through the same counter do so months apart. The
+false pair taken *on the same day* remains the rule's accepted limit: the error is in the
+right direction, at worst it hides what was already hidden.
 
-Seize heures, pas quelques secondes, à cause d'un piège déjà épinglé ici : la date EXIF de la
-photo est une heure locale naïve, réduite en epoch par le fuseau de *cet* appareil, alors que
-la `creationdate` de la vidéo porte son fuseau d'origine. Une vraie paire prise à l'étranger
-atterrit donc jusqu'à ~13 heures d'écart une fois les deux réduites en epoch. Aucune fausse
-paire que la date puisse attraper ne vit si près : deux iPhone qui repassent par le même
-compteur le font à des mois d'écart. La paire fausse prise *le même jour* reste la limite
-assumée de la règle — l'écart est dans le bon sens, elle cache au pire ce qu'on cachait déjà.
+Three mechanical consequences:
 
-Trois conséquences mécaniques :
+- `identityVersion = 2` re-queues **only** the videos of one-sided pairs whose date is
+  missing: ~227 reads of two or three requests, not a general re-read.
+- The companion now carries its own date in the database. All date aggregates (years, months,
+  loaded days, "that day", "undated") therefore filter on `live = 0`: the moment is already
+  counted by its photo, and an undated companion does not make the *moment* "undated".
+- `ReadBench.oneSided` (since removed) judged the whole library **before** the queue made the
+  verdicts permanent: it read the video date exactly as the indexer was going to, and traced,
+  per pair, the gap and the verdict, then the totals. The result is below, "The one-sided
+  227s, judged". What the probe guaranteed, `Tests/live.swift` keeps without it:
+  `IndexStore.oneSidedPairs` and the Swift rule are held against each other and must return
+  the same verdict.
 
-- `identityVersion = 2` remet en file **uniquement** les vidéos des paires à une face dont la
-  date manque — ~227 lectures de deux ou trois requêtes, pas une relecture générale.
-- Le compagnon porte désormais sa propre date en base. Tous les agrégats de dates — années,
-  mois, jours chargés, « ce jour-là », « sans date » — filtrent donc sur `live = 0` : le
-  moment est déjà compté par sa photo, et un compagnon sans date ne rend pas le *moment*
-  « sans date ».
-- `ReadBench.oneSided` (retirée depuis) a jugé toute la bibliothèque **avant**
-  que la file ne rende les verdicts permanents : il lisait la date vidéo exactement comme
-  l'indexeur allait le faire et traçait, par paire, l'écart et le verdict, puis les totaux.
-  Le résultat est plus bas, « Les 227 à une face, jugées ». Ce que la sonde garantissait sans
-  elle, `Tests/live.swift` le garde : `IndexStore.oneSidedPairs` et la règle Swift sont tenus
-  l'un contre l'autre et doivent rendre le même verdict.
+### The cache returns everything, the grid applies the rule
 
-### Le cache rend tout, la grille applique la règle
+`IndexStore.listing` returns the companion along with the rest, and it is `FolderContents`
+that hides it: the same code as for a fresh listing from the box. Filtering in SQL looked
+cleaner, but a folder opened from the cache then had no `.MOV` to pair: no "live" badge, no
+playback under the finger, until the box answered. Two paths, two behaviours, for a rule meant
+to be unique.
 
-`IndexStore.listing` renvoie le compagnon avec le reste, et c'est `FolderContents` qui le
-masque — le même code que pour un listing frais venu de la box. Filtrer en SQL paraissait plus
-propre, mais un dossier ouvert depuis le cache n'avait alors aucun `.MOV` à apparier : pas de
-pastille « live », pas de lecture au doigt, jusqu'à ce que la box réponde. Deux chemins, deux
-comportements, pour une règle censée être unique.
+The `live` column serves the queries that have no `FolderContents` to lean on: search, tile
+covers, the widget's photos, the counters.
 
-La colonne `live` sert aux requêtes qui n'ont pas de `FolderContents` sur quoi s'appuyer : la
-recherche, les couvertures de tuiles, les photos du widget, les compteurs.
+### What is hidden stays indexed
 
-### Ce qui est caché reste indexé
+Hiding a file from the grid must never hide it from the index: the sweep would erase it, and
+the viewer would have no video left to play. Companions are therefore recorded, and probed for
+the only two things their pairing depends on, the identifier and the date, read in the same
+`moov` window. Nothing else: the rest of their content is not worth a request.
 
-Masquer un fichier de la grille ne doit jamais le masquer de l'index : le balayage
-l'effacerait, et la visionneuse n'aurait plus de vidéo à jouer. Les compagnons sont donc
-enregistrés — et sondés pour les deux seules choses dont leur appariement dépend,
-l'identifiant et la date, lus dans la même fenêtre du `moov`. Rien d'autre : le reste de leur
-contenu ne vaut pas une requête.
+They also count in the folder's **weight**, which must say what the NAS occupies, not what is
+visible. The media counter, for its part, counts moments: a Live Photo is one.
 
-Ils comptent aussi dans le **poids** du dossier, qui doit dire ce que le NAS occupe, pas ce
-qui est visible. Le compteur de médias, lui, compte les moments : une photo live, c'est un.
+The migration re-reads nothing from the NAS. A single `UPDATE` on the `file` table marks every
+folder already indexed at first launch, governed by `liveVersion`.
 
-La migration ne relit rien sur le NAS. Un seul `UPDATE` sur la table `file` marque tous les
-dossiers déjà indexés au premier lancement, gouverné par `liveVersion`.
+## Undo
 
-## Annuler
+Removing three favourites at once took them out of the list instantly, and the list was the
+only place they existed: nothing left to find them with. None of this touches the NAS, so none
+of it is dangerous, but it is **unrecoverable**, which in practice is worse.
 
-Retirer trois favoris d'un coup les sortait de la liste instantanément, et la liste était le
-seul endroit où ils existaient : plus rien pour les retrouver. Rien de tout cela ne touche au
-NAS, donc rien n'est dangereux — mais c'est **irrécupérable**, ce qui à l'usage est pire.
+A banner *and* a shake, deliberately both. The shake is the iOS mechanism, but nobody
+discovers it: alone, the feature would exist without existing. The banner makes it visible;
+the shake lets you go further back, up to eight steps.
 
-Un bandeau *et* un secouage, délibérément les deux. Le secouage est le mécanisme iOS, mais
-personne ne le découvre : seul, la fonctionnalité existerait sans exister. Le bandeau la rend
-visible ; le secouage laisse remonter plus loin, jusqu'à huit pas en arrière.
+Undoable: favourites (adding as well as removing, multiple selection included), adding to a
+collection, pinning a folder, and writing or erasing a note. For the note, the previous text is
+captured **before** the write: clearing the field deletes the row, and there would be nothing
+left to read back.
 
-Sont annulables : les favoris (ajout comme retrait, sélection multiple comprise), l'ajout à une
-collection, l'épinglage d'un dossier, et l'écriture ou l'effacement d'une note. Pour la note,
-le texte précédent est capturé **avant** l'écriture : vider le champ supprime la ligne, et il
-ne resterait rien à relire.
+A swipe down dismisses it without waiting the five seconds. The step stays on the stack (the
+shake still undoes it), the banner has simply stopped demanding attention.
 
-Un glissement vers le bas le chasse sans attendre les cinq secondes. L'étape reste sur la
-pile — le secouage l'annule toujours — le bandeau a simplement cessé de réclamer l'attention.
+The banner is placed in two spots: above the tab bar, and again in the viewer. A
+`fullScreenCover` is drawn over the root, so an overlay placed on the root would be invisible
+from the photo.
 
-Le bandeau est posé à deux endroits — au-dessus de la barre d'onglets, et à nouveau dans la
-visionneuse. Un `fullScreenCover` est dessiné par-dessus la racine, donc une superposition
-posée sur la racine serait invisible depuis la photo.
+### A single place that knows something changed
 
-### Un seul endroit qui sait que quelque chose a changé
+A thumbnail's markers (favourite, collection, note) are read once per load. Each screen
+therefore refreshed its own where the action happened, which worked as long as the action
+happened there: favouriting from full screen left the grid behind with the old markers, and an
+undo refreshed nothing at all.
 
-Les marqueurs d'une vignette — favori, collection, note — sont lus une fois par chargement.
-Chaque écran rafraîchissait donc les siens là où l'action se produisait, ce qui marchait tant
-que l'action se produisait là : mettre un favori depuis le plein écran laissait la grille
-derrière avec les anciens marqueurs, et une annulation ne rafraîchissait rien du tout.
+Every change to personalisation already goes through the `Undoer` to be reversible. So it is
+the `Undoer` that carries a revision number, and every screen watches it. One source, instead
+of a refresh to copy into each new call site.
 
-Toute modification de la personnalisation passe déjà par l'`Undoer` pour être réversible.
-C'est donc lui qui porte un numéro de révision, et chaque écran le regarde. Une seule source,
-au lieu d'un rafraîchissement à recopier à chaque nouvel appel.
-
-Le capteur de secouage est un premier répondeur de taille nulle, faute de geste de secouage en
-SwiftUI et parce que les alternatives sont le *swizzling* de `UIWindow` ou une liste de
-fenêtres dépréciée. Il cède le premier répondeur dès qu'un champ de texte le réclame, ce qui
-est le comportement voulu : pendant qu'on tape, un secouage appartient à l'annulation du champ.
+The shake sensor is a zero-sized first responder, for lack of a shake gesture in SwiftUI and
+because the alternatives are *swizzling* `UIWindow` or a deprecated window list. It gives up
+first responder as soon as a text field claims it, which is the intended behaviour: while
+typing, a shake belongs to the field's undo.
 
 ## Notes
 
-Une note sur une photo, une vidéo ou un dossier. C'est la seule personnalisation dont le
-**contenu** change, et ça change tout pour la synchronisation : pour un favori, la présence
-suffit à trancher un conflit, donc `INSERT OR IGNORE` règle tout. Deux appareils peuvent en
-revanche détenir des *textes différents* pour la même note. La ligne porte donc son propre
-`modified`, et le gardien est dans l'instruction SQL elle-même :
+A note on a photo, a video or a folder. It is the only personalisation whose **content**
+changes, and that changes everything for sync: for a favourite, presence is enough to settle a
+conflict, so `INSERT OR IGNORE` handles it all. Two devices can however hold *different texts*
+for the same note. The row therefore carries its own `modified`, and the guard is in the SQL
+statement itself:
 
 ```sql
 ON CONFLICT(path, size) DO UPDATE SET body = excluded.body, modified = excluded.modified
   WHERE excluded.modified > note.modified
 ```
 
-Une édition plus ancienne qui arrive en retard ne peut pas écraser une plus récente. Le rejeu
-du journal réémet la date de la note, jamais celle du rejeu — sinon une note périmée passerait
-pour la plus fraîche.
+An older edit arriving late cannot overwrite a newer one. Replaying the journal re-emits the
+note's date, never the replay's, otherwise a stale note would pass for the freshest.
 
-Une note vidée est une note **supprimée**, pas une ligne contenant `""` que la recherche
-remonterait sur n'importe quelle requête.
+An emptied note is a **deleted** note, not a row containing `""` that search would surface on
+any query.
 
-Rien n'est écrit sur le NAS : un fichier d'accompagnement à côté de la photo serait une
-écriture, et c'est précisément ce que l'app ne fait jamais. Les notes vivent dans l'index,
-à côté des favoris, et passent par le même miroir CloudKit.
+Nothing is written on the NAS: a sidecar file next to the photo would be a write, and that is
+precisely what the app never does. Notes live in the index, next to the favourites, and go
+through the same CloudKit mirror.
 
-La note fait partie du texte de l'élément pour la recherche : écrire « facture EDF » sur une
-photo est le seul moyen de retrouver un fichier qui s'appelle `IMG_4821.HEIC`.
+The note is part of the item's text for search: writing "EDF bill" on a photo is the only way
+to find a file called `IMG_4821.HEIC`.
 
-### Le piège de la racine
+### The root trap
 
-Le périmètre d'un sous-arbre s'écrivait `substr(path, 1, length(?1) + 1) = ?1 || '/'`. À la
-racine, `?1` vaut `/` et l'expression cherche des chemins commençant par `//` — aucun. Deux
-bugs vivants en découlaient, découverts en écrivant les statistiques : `hasChildFolders("/")`
-répondait « aucun enfant » (ce qui autorise l'indexeur à sauter un dossier d'emblée), et
-`listing("/")` ne rendait aucun sous-dossier, donc la racine s'affichait vide tant que la box
-n'avait pas répondu.
+A subtree's extent used to be written `substr(path, 1, length(?1) + 1) = ?1 || '/'`. At the
+root, `?1` is `/` and the expression looks for paths starting with `//`: none. Two live bugs
+followed from it, discovered while writing the statistics: `hasChildFolders("/")` answered "no
+children" (which lets the indexer skip a folder outright), and `listing("/")` returned no
+subfolder, so the root showed empty until the box had answered.
 
-Le préfixe se calcule maintenant en Swift (`Statistics.scopePrefix`) et se lie en paramètre.
-Mais la correction évidente en réintroduit un autre dans l'autre sens : à la racine, `/`
-satisfait son propre préfixe, et la racine s'est mise à figurer **parmi ses propres
-sous-dossiers** — une tuile dans laquelle on entrait indéfiniment. D'où la garde de longueur,
-`length(path) > length(?1)`, qui rend « strictement à l'intérieur » vrai dans les deux cas.
-`Tests/stats.swift` épingle les trois comportements, sur la vraie base, pas en raisonnement.
+The prefix is now computed in Swift (`Statistics.scopePrefix`) and bound as a parameter. But
+the obvious fix reintroduces another in the opposite direction: at the root, `/` satisfies its
+own prefix, and the root started to appear **among its own subfolders**, a tile you could enter
+indefinitely. Hence the length guard, `length(path) > length(?1)`, which makes "strictly
+inside" true in both cases. `Tests/stats.swift` pins all three behaviours, on the real
+database, not by reasoning.
 
-Le même préfixe sert les cinq requêtes de sous-arbre — totaux de tuile, couvertures, listing,
-génération, poids. Les deux bornes se lient ensemble, par `bindSubtree`, et c'est tout l'objet
-de cette fonction : la borne haute oubliée donne `path < NULL`, qui ne rend rien et ne dit
-rien. `touchSubtree` l'avait oubliée sur sa branche fichiers — les dossiers d'un sous-arbre
-sauté remontaient de génération, leurs fichiers non. `Tests/store.swift` l'épingle
-maintenant.
+The same prefix serves the five subtree queries: tile totals, covers, listing, generation,
+weight. Both bounds are bound together, by `bindSubtree`, and that is the whole point of that
+function: a forgotten upper bound gives `path < NULL`, which returns nothing and says nothing.
+`touchSubtree` had forgotten it on its file branch: the folders of a skipped subtree moved up a
+generation, their files did not. `Tests/store.swift` pins it now.
 
-## Favoris, collections, raccourcis
+## Favourites, collections, shortcuts
 
-Deux niveaux, parce qu'ils répondent à deux gestes différents :
+Two levels, because they answer two different gestures:
 
-- **Favoris** — un cœur, un tap, depuis le plein écran ou le mode sélection. Pas de choix à
-  faire quand on veut juste marquer une belle photo.
-- **Collections** — un choix délibéré, en deux temps. Une photo peut être en favori **et**
-  dans plusieurs collections.
-- **Raccourcis** — des dossiers épinglés par appui long sur leur tuile, avec leur chemin
-  parent et les totaux que l'index a déjà comptés.
+- **Favourites**: a heart, one tap, from full screen or selection mode. No choice to make when
+  you just want to mark a nice photo.
+- **Collections**: a deliberate choice, in two steps. A photo can be a favourite **and** in
+  several collections.
+- **Shortcuts**: folders pinned by long-pressing their tile, with their parent path and the
+  totals the index has already counted.
 
-Cinq onglets : **Accueil · Parcourir · Favoris · Collections · Recherche**. Les raccourcis n'en ont plus : ils sont une étagère de l'accueil, là où on les cherche en arrivant.
+Five tabs: **Accueil · Parcourir · Favoris · Collections · Recherche** (Home · Browse · Favourites · Collections · Search). Shortcuts no longer have one: they are a shelf on the home screen, where you look for them on arrival.
 
-Un tiroir latéral aurait été la forme évidente, et c'est précisément ce que les guidelines
-d'Apple écartent : une navigation cachée derrière une icône est une navigation que personne ne
-trouve. Les onglets sont ce que Photos utilise pour le même découpage. Retaper l'onglet actif
-remonte à sa racine, et sur iOS 26 la barre se réduit au défilement pour ne rien voler à la
-grille.
+A side drawer would have been the obvious shape, and it is precisely what Apple's guidelines
+rule out: navigation hidden behind an icon is navigation nobody finds. Tabs are what Photos
+uses for the same split. Tapping the active tab again goes back to its root, and on iOS 26 the
+bar shrinks on scroll so as to steal nothing from the grid.
 
-Le mot « collection » est délibéré : **rien n'est créé sur le NAS**. « Album » laisserait croire
-qu'un dossier a été écrit sur la box, ce que Keo ne fait jamais.
+The word "collection" is deliberate: **nothing is created on the NAS**. "Album" would suggest
+a folder had been written on the box, which Keo never does.
 
-### Quand un favori disparaît du NAS
+### When a favourite disappears from the NAS
 
-Rien n'est purgé dans le dos de l'utilisateur. La règle est de distinguer **« absent »** de
-**« inconnu »** :
+Nothing is purged behind the user's back. The rule is to distinguish **"absent"** from
+**"unknown"**:
 
-- Un fichier dont le dossier n'a **jamais été lu entièrement** est inconnu, pas disparu. Le
-  condamner cacherait des photos parfaitement valides.
-- Un fichier absent d'un dossier **portant un marquage de complétion** est réellement parti.
-- Un fichier retrouvé ailleurs **sous le même nom et la même taille** a bougé, pas disparu :
-  son chemin est corrigé en silence et persisté. L'identité de synchronisation dérivant du nom
-  et de la taille, ce déplacement ne génère aucun trafic entre appareils.
-- Plusieurs correspondances : on ne devine pas, même doctrine que l'adoption des dates.
+- A file whose folder has **never been fully read** is unknown, not gone. Condemning it would
+  hide perfectly valid photos.
+- A file absent from a folder **carrying a completion marker** has really gone.
+- A file found elsewhere **under the same name and the same size** has moved, not vanished:
+  its path is silently corrected and persisted. Since the sync identity derives from name and
+  size, that move generates no traffic between devices.
+- Several matches: no guessing, same doctrine as date adoption.
 
-Les introuvables s'affichent dans un bandeau qui annonce leur nombre, et leur retrait reste
-**un geste délibéré**.
+The unfindable ones show up in a banner announcing their number, and removing them remains
+**a deliberate gesture**.
 
-Les raccourcis suivent la même règle — mais ne la suivaient pas vraiment. `resolveFolders`,
-le pendant de `resolve` pour un dossier épinglé, existait, était vérifié dans
-`Tests/favourites.swift`, et n'était appelé par aucun code de production : un raccourci vers
-un dossier disparu du NAS ne disait rien, il menait simplement à une grille vide. C'était du
-câblage inachevé, pas du code mort — la différence compte, parce que supprimer aurait eu l'air
-d'un nettoyage. L'étagère « Épinglés » de l'accueil affiche maintenant
-« N dossiers épinglés introuvables sur le NAS » avec un bouton **Retirer**, et reste visible
-même quand tous les raccourcis manquent : une étagère qui disparaît n'explique rien.
+Shortcuts follow the same rule, but didn't really. `resolveFolders`, the counterpart of
+`resolve` for a pinned folder, existed, was checked in `Tests/favourites.swift`, and was
+called by no production code: a shortcut to a folder gone from the NAS said nothing, it simply
+led to an empty grid. That was unfinished wiring, not dead code; the difference matters,
+because deleting it would have looked like a clean-up. The home screen's "Épinglés" (Pinned)
+shelf now shows "N dossiers épinglés introuvables sur le NAS" (N pinned folders not found on
+the NAS) with a **Retirer** (Remove) button, and stays visible even when every shortcut is
+missing: a shelf that disappears explains nothing.
 
-### Elles survivent à l'index, pas l'inverse
+### They outlive the index, not the other way round
 
-`favourite`, `shortcut`, `collection` et `collection_item` sont **clés sur le chemin**, pas sur
-une ligne de l'index. Un balayage, un « Tout relire depuis zéro », ou un dossier injoignable un
-soir ne doivent jamais emporter les favoris de quelqu'un. C'est vérifié : les checks effacent
-tout l'index et exigent que favoris, collections et membres soient toujours là.
+`favourite`, `shortcut`, `collection` and `collection_item` are **keyed on the path**, not on
+an index row. A sweep, a "Tout relire depuis zéro" (re-read everything from scratch), or a
+folder unreachable one evening must never take someone's favourites with it. It is checked:
+the checks wipe the whole index and require favourites, collections and members to still be
+there.
 
-Elles sont aussi la seule chose qui mérite de survivre à l'appareil : c'est exactement ce que
-la synchronisation iCloud ci-dessous miroite — et rien d'autre.
+They are also the only thing that deserves to outlive the device: that is exactly what the
+iCloud sync below mirrors, and nothing else.
 
-Une collection emprunte à l'index la date de prise de vue qu'il connaît déjà, donc elle se
-trie et se regroupe exactement comme un dossier.
+A collection borrows from the index the capture date it already knows, so it sorts and groups
+exactly like a folder.
 
-## Synchronisation iCloud de la personnalisation
+## iCloud sync of personalisation
 
-`Keo/Sync/` miroite les cinq natures de personnalisation — `favourite`, `shortcut`,
-`collection`, `collection_item` et `note` — dans la base **privée** CloudKit, via
-`CKSyncEngine`.
-Framework système, donc toujours zéro dépendance. L'index, lui, **n'est pas synchronisé** :
-il est volumineux et se reconstruit depuis le NAS ; la personnalisation, elle, est
-irremplaçable et pèse quelques centaines de Ko.
+`Keo/Sync/` mirrors the five kinds of personalisation (`favourite`, `shortcut`, `collection`,
+`collection_item` and `note`) into the **private** CloudKit database, via `CKSyncEngine`.
+System framework, so still zero dependencies. The index, for its part, **is not synced**: it
+is bulky and rebuilds from the NAS; personalisation is irreplaceable and weighs a few hundred
+KB.
 
-**SQLite reste la source de vérité.** CloudKit est un miroir, et le moteur ne décide jamais
-rien : il pousse ce que le journal lui donne et applique ce qu'il reçoit.
+**SQLite remains the source of truth.** CloudKit is a mirror, and the engine never decides
+anything: it pushes what the journal gives it and applies what it receives.
 
-Trois idées portent tout le reste :
+Three ideas carry everything else:
 
-- **`recordName` déterministe** (`SyncModel.swift`) : le nom d'un enregistrement est un hash
-  stable de l'action de l'utilisateur — « ce fichier est un favori », « ce dossier est
-  épinglé ». Deux appareils qui ajoutent le même favori écrivent *le même* enregistrement :
-  l'ajout est idempotent et le conflit de doublon disparaît par construction. Une collection
-  est identifiée par son **nom** ; la renommer est donc une suppression de l'ancienne
-  identité plus une création de la nouvelle, membres compris — coûteux en enregistrements,
-  mais deux appareils qui créent « Vacances » chacun de leur côté n'en font qu'une.
-- **Un journal de changements** (`sync_pending` dans `IndexStore`), écrit **dans la même
-  transaction** que le changement qu'il reflète. Un kill ne peut donc ni perdre une
-  modification ni en inventer une : la ligne survit jusqu'à l'acquittement du serveur, et la
-  renvoyer est inoffensif puisque le nom est déterministe. Une ligne par enregistrement —
-  ajouter puis retirer se replie sur la dernière opération. Appliquer un changement *reçu*
-  ne passe jamais par le journal : c'est ce qui interdit à deux appareils de se renvoyer le
-  même changement pour toujours.
-- **Dernier écrivain gagne, par enregistrement, avec un biais assumé vers la résurrection.**
-  Une suppression distante est ignorée tant qu'un ajout local n'est pas encore poussé ; un
-  ajout distant annule une suppression locale en attente. Dans les cas tordus, un favori
-  réapparaît plutôt qu'il ne disparaît : un favori en trop se re-supprime en un tap, un favori
-  perdu en silence est irrécupérable. Les horloges ne départagent que deux *ajouts* du même
-  enregistrement — dont le contenu est identique par construction, l'identité étant dans la
-  clé — donc une horloge décalée peut au pire choisir la date d'ajout de l'autre appareil,
-  jamais perdre un favori.
+- **Deterministic `recordName`** (`SyncModel.swift`): a record's name is a stable hash of the
+  user's action, "this file is a favourite", "this folder is pinned". Two devices adding the
+  same favourite write *the same* record: the addition is idempotent and the duplicate
+  conflict disappears by construction. A collection is identified by its **name**; renaming
+  it is therefore a deletion of the old identity plus a creation of the new one, members
+  included, costly in records, but two devices each creating "Vacances" on their own end up
+  with only one.
+- **A change journal** (`sync_pending` in `IndexStore`), written **in the same transaction**
+  as the change it reflects. A kill can therefore neither lose a change nor invent one: the
+  row survives until the server acknowledges it, and resending it is harmless since the name
+  is deterministic. One row per record: add then remove collapses to the last operation.
+  Applying a *received* change never goes through the journal: that is what forbids two
+  devices from bouncing the same change back to each other forever.
+- **Last writer wins, per record, with a deliberate bias towards resurrection.** A remote
+  deletion is ignored while a local addition is not yet pushed; a remote addition cancels a
+  pending local deletion. In the twisted cases, a favourite reappears rather than disappears:
+  an extra favourite is removed again in one tap, a favourite lost in silence is
+  unrecoverable. Clocks only settle between two *additions* of the same record, whose content
+  is identical by construction, the identity being in the key, so a skewed clock can at worst
+  pick the other device's addition date, never lose a favourite.
 
-### Les cas limites, et ce que fait le code
+### The edge cases, and what the code does
 
-| Cas | Réponse |
+| Case | Answer |
 |---|---|
-| Pas de compte, iCloud coupé pour Keo, contrôle parental | `status = .off`, l'app est exactement l'app d'avant, en local, avec une ligne discrète en bas des onglets de personnalisation. Jamais de dialogue |
-| Changement de compte iCloud | L'identifiant du compte est mémorisé dans `meta`. Un **autre** compte qui arrive efface la personnalisation et le journal (`wipePersonalisation`) : on ne mélange jamais deux personnes, ni en poussant les données de l'un chez l'autre, ni l'inverse. Une **déconnexion** n'efface rien : les données restent locales |
-| Hors ligne prolongé | Le journal accumule, replié par enregistrement ; au retour, `CKSyncEngine` pousse et les noms déterministes absorbent les doublons |
-| App tuée avec des envois en attente | Le journal est dans la transaction du changement ; l'état du moteur est persisté (`sync-state.json`). Une ligne ne sort du journal qu'à l'acquittement, et seulement si elle n'a pas été réécrite pendant l'aller-retour |
-| Réinstallation | Tant que la première récupération n'est pas terminée (`syncFetched`), un onglet vide affiche « Récupération en cours » au lieu de « Aucun favori » : vide-parce-que-rien-n'est-arrivé n'est pas vide-parce-qu'il-n'y-a-rien |
-| Premier lancement avec des données locales (l'utilisateur actuel) | `seedSyncJournalIfNeeded` journalise tout l'existant, une fois (`syncSeeded`). Les noms déterministes garantissent zéro doublon côté serveur |
-| Zone supprimée dans Réglages → iCloud → Stockage | Le local est la source de vérité : la zone est recréée et tout re-remonte — sans transformer les suppressions en attente en ajouts |
-| Quota plein | Message discret, le journal garde tout, ça repart quand la place revient |
-| `retryAfter`, débit limité, jeton de changement expiré | Gérés par `CKSyncEngine` lui-même — c'est la raison de ce choix |
-| `serverRecordChanged` | Dernier écrivain gagne ; si le local gagne, le nouvel essai est construit **sur** l'enregistrement serveur (system fields archivés dans le journal) pour ne pas re-collisionner |
-| Renommage contre renommage d'une collection | Chacun étant suppression + création, il reste les deux collections, avec les mêmes membres : visible et réparable en un geste, plutôt qu'un des deux renommages perdu en silence |
-| Suppression contre ajout de membre | L'ajout gagne : un membre reçu pour une collection disparue la recrée |
-| Boucle de suppression | Impossible : l'application d'un changement distant ne journalise rien, donc rien ne repart |
-| **SQLite refuse un changement reçu** | Le moteur compte les enregistrements consommés dès que la poignée rend la main, donc un `try?` les perdait définitivement. L'échec **gèle le fichier d'état** : le jeton d'avant le fetch reste sur disque et le prochain lancement redemande exactement ce qui a été refusé. Perdre l'état coûte un refetch, perdre la donnée coûte des favoris — et la ligne de synchro le dit en français au lieu de se taire |
-| **`userRecordID()` échoue hors ligne alors que le compte est disponible** | Le journal n'est plus donné au moteur tant que l'identité n'est pas liée. Sans ça, `adopt` n'était pas appelé mais l'envoi partait : sur un appareil qui a changé de compte depuis la dernière fois, les données de l'ancien propriétaire pouvaient remonter avant le nettoyage promis. La fenêtre était étroite — `nextRecordZoneChangeBatch` relit le journal au moment de l'envoi — mais rien ne garantit que `.switchAccounts` précède le premier lot |
+| No account, iCloud off for Keo, parental controls | `status = .off`, the app is exactly the app from before, local, with a discreet line at the bottom of the personalisation tabs. Never a dialogue |
+| iCloud account change | The account identifier is remembered in `meta`. A **different** account arriving wipes personalisation and the journal (`wipePersonalisation`): two people are never mixed, neither by pushing one's data to the other nor the reverse. A **sign-out** wipes nothing: the data stays local |
+| Extended offline | The journal accumulates, collapsed per record; on return, `CKSyncEngine` pushes and the deterministic names absorb the duplicates |
+| App killed with pending sends | The journal is in the change's transaction; the engine's state is persisted (`sync-state.json`). A row only leaves the journal on acknowledgement, and only if it hasn't been rewritten during the round trip |
+| Reinstall | Until the first fetch has completed (`syncFetched`), an empty tab shows "Récupération en cours" (recovery in progress) instead of "Aucun favori" (no favourites): empty-because-nothing-has-arrived is not empty-because-there-is-nothing |
+| First launch with local data (the current user) | `seedSyncJournalIfNeeded` journals everything that exists, once (`syncSeeded`). Deterministic names guarantee zero duplicates on the server side |
+| Zone deleted in Settings → iCloud → Storage | Local is the source of truth: the zone is recreated and everything goes back up, without turning pending deletions into additions |
+| Quota full | Discreet message, the journal keeps everything, it resumes when space comes back |
+| `retryAfter`, rate limiting, expired change token | Handled by `CKSyncEngine` itself; that is the reason for this choice |
+| `serverRecordChanged` | Last writer wins; if local wins, the retry is built **on** the server record (system fields archived in the journal) so as not to collide again |
+| Rename against rename of a collection | Each being deletion + creation, both collections remain, with the same members: visible and repairable in one gesture, rather than one of the two renames lost in silence |
+| Deletion against member addition | The addition wins: a member received for a vanished collection recreates it |
+| Deletion loop | Impossible: applying a remote change journals nothing, so nothing goes back out |
+| **SQLite rejects a received change** | The engine counts records as consumed as soon as the handler returns, so a `try?` lost them for good. The failure **freezes the state file**: the pre-fetch token stays on disk and the next launch asks again for exactly what was rejected. Losing the state costs a refetch, losing the data costs favourites, and the sync line says so in French instead of keeping quiet |
+| **`userRecordID()` fails offline while the account is available** | The journal is no longer handed to the engine until the identity is bound. Without that, `adopt` was not called but the send went out: on a device that had changed account since last time, the former owner's data could go up before the promised clean-up. The window was narrow (`nextRecordZoneChangeBatch` re-reads the journal at send time) but nothing guarantees `.switchAccounts` precedes the first batch |
 
-### Configuration — ce que le propriétaire doit faire à la main
+### Configuration: what the owner must do by hand
 
-Le dépôt contient déjà `Keo/Keo.entitlements` (CloudKit, conteneur
-`iCloud.com.oasutalab.keo`, `aps-environment`, groupe d'app) et les modes background
-`remote-notification`, `processing` et `fetch` — les deux derniers pour
-`ContinuedIndexing` et `PeriodicDiscovery`. Le build **simulateur** passe tel quel. Pour un appareil, une fois,
-dans Xcode, avec ton équipe Apple déclarée dans `Local.xcconfig` (voir `Signing.xcconfig`) :
+The repo already contains `Keo/Keo.entitlements` (CloudKit, container
+`iCloud.com.oasutalab.keo`, `aps-environment`, app group) and the background modes
+`remote-notification`, `processing` and `fetch`, the last two for `ContinuedIndexing` and
+`PeriodicDiscovery`. The **simulator** build passes as is. For a device, once, in Xcode, with
+your Apple team declared in `Local.xcconfig` (see `Signing.xcconfig`):
 
-1. Cible Keo → *Signing & Capabilities* → vérifier que les capacités **iCloud → CloudKit**
-   (conteneur `iCloud.com.oasutalab.keo`) et **Push Notifications** apparaissent ; la
-   signature automatique enregistre alors l'App ID et crée le conteneur.
-2. Premier lancement en debug : le schéma (type `Personalisation`, champs chiffrés) se crée
-   tout seul dans l'environnement **Development** au premier enregistrement.
-3. Avant toute distribution : [CloudKit Console](https://icloud.developer.apple.com) →
-   conteneur → *Deploy Schema Changes* vers **Production**. Sans ce clic, une build
-   TestFlight/App Store ne peut rien écrire.
-4. **Groupe d'app, pour le widget.** Cibles **Keo** *et* **KeoWidgetExtension** →
-   *Signing & Capabilities* → **App Groups** doit lister `group.com.oasutalab.keo`. Les deux
-   fichiers d'entitlements le déclarent déjà ; ce qui manque est son enregistrement côté App
-   ID, et c'est ce clic qui le fait.
+1. Keo target → *Signing & Capabilities* → check that the **iCloud → CloudKit** (container
+   `iCloud.com.oasutalab.keo`) and **Push Notifications** capabilities appear; automatic
+   signing then registers the App ID and creates the container.
+2. First launch in debug: the schema (`Personalisation` type, encrypted fields) creates itself
+   in the **Development** environment on the first record.
+3. Before any distribution: [CloudKit Console](https://icloud.developer.apple.com) → container
+   → *Deploy Schema Changes* to **Production**. Without that click, a TestFlight/App Store
+   build cannot write anything.
+4. **App group, for the widget.** **Keo** *and* **KeoWidgetExtension** targets → *Signing &
+   Capabilities* → **App Groups** must list `group.com.oasutalab.keo`. Both entitlements files
+   already declare it; what is missing is its registration on the App ID side, and that click
+   is what does it.
 
-   `xcodebuild` ne sait pas le faire : en ligne de commande la build échoue sur
-   « *Provisioning profile … doesn't include the App Groups capability* » pour les deux
-   cibles, tant que Xcode n'a pas été ouvert une fois. Ce n'est pas un défaut du projet — la
-   compilation et l'assemblage passent (`CODE_SIGNING_ALLOWED=NO` le montre), seule la
-   signature attend ce passage par l'interface.
+   `xcodebuild` cannot do it: on the command line the build fails with "*Provisioning profile
+   … doesn't include the App Groups capability*" for both targets, until Xcode has been opened
+   once. It is not a project defect: compilation and assembly pass (`CODE_SIGNING_ALLOWED=NO`
+   shows it), only signing waits for that trip through the UI.
 
-### La ligne de synchro ne parle que quand elle a quelque chose à dire
+### The sync line only speaks when it has something to say
 
-`SyncFootnote` disait « Synchronisé avec iCloud » en permanence, au pied de Favoris, de
-Collections et de l'accueil. Un état stable, vrai pendant des mois, qui ne demande rien : une
-ligne qui rassure en permanence est du mobilier, la même maladie que le rapport de dossiers de
-la rangée d'indexation.
+`SyncFootnote` used to say "Synchronisé avec iCloud" (synced with iCloud) permanently, at the
+foot of Favourites, Collections and the home screen. A stable state, true for months, asking
+nothing: a line that reassures permanently is furniture, the same disease as the folder report
+in the indexing row.
 
-Elle est donc muette sur les deux états stables — « Synchronisé avec iCloud » et « sans
-iCloud » — et garde la moitié transitoire : récupération en cours, synchro en cours, hors
-ligne, erreur. Celles-là méritent une ligne précisément parce qu'elles finissent, et parce
-qu'elles expliquent une liste qui bouge toute seule ou qui n'est pas encore complète —
-`SyncRecoveryView` ne couvre que la liste *vide*, une liste non vide en pleine récupération
-n'avait que cette ligne pour le dire.
+So it is silent on the two stable states, "Synchronisé avec iCloud" and "no iCloud", and keeps
+the transient half: recovery in progress, sync in progress, offline, error. Those deserve a
+line precisely because they end, and because they explain a list that moves on its own or is
+not yet complete: `SyncRecoveryView` only covers the *empty* list, a non-empty list in
+mid-recovery had only this line to say so.
 
-L'accueil fait exception et demande à être rassuré (`SyncFootnote(reassures: true)`) : c'est
-la pièce où l'on vient voir si tout est à sa place, la carte Bibliothèque est juste au-dessus,
-et « tout est là » est ce qu'on vient y lire. Quand elle se tait, elle rend `EmptyView` et le
-`safeAreaInset` qui la porte se replie avec elle, sans laisser de bande vide.
+The home screen is the exception and asks to be reassured (`SyncFootnote(reassures: true)`):
+it is the room you come to check that everything is in its place, the Library card is just
+above, and "everything is here" is what you come to read there. When it is silent, it returns
+`EmptyView` and the `safeAreaInset` carrying it folds away with it, leaving no empty band.
 
-### Vérifier le reste à la main
+### Checking the rest by hand
 
-Tout ce qui est pur — noms, journal, acquittements, résurrection, renommage, graine, zone,
-changement de compte — est couvert par `Tests/sync.swift`. Ce qui exige le vrai iCloud ne se
-simule pas :
+Everything pure (names, journal, acknowledgements, resurrection, renaming, seed, zone,
+account change) is covered by `Tests/sync.swift`. What requires the real iCloud cannot be
+simulated:
 
-- **Deux appareils**, même compte : favori ajouté sur A → apparaît sur B en quelques
-  secondes ; supprimé sur B → disparaît sur A sans revenir.
-- **Hors ligne** : mode avion sur A, dix modifications, mode avion sur B, modifications
-  contradictoires, puis réseau : convergence sans doublon, le favori contesté survit.
-- **Kill** : modifier puis tuer l'app depuis le sélecteur avant la synchro ; relancer : la
-  modification part quand même, une seule fois (visible dans la CloudKit Console).
-- **Réinstallation** : supprimer l'app, réinstaller : « Récupération en cours » puis tout
-  revient.
-- **Zone supprimée** : Réglages → compte → iCloud → Stockage → Keo → Supprimer les données ;
-  au lancement suivant tout re-remonte.
-- **Changement de compte** : se déconnecter d'iCloud (les données restent), se connecter avec
-  un autre compte (elles s'effacent, celles de l'autre compte arrivent).
+- **Two devices**, same account: favourite added on A → appears on B within seconds; deleted
+  on B → disappears from A without coming back.
+- **Offline**: aeroplane mode on A, ten changes, aeroplane mode on B, conflicting changes,
+  then network: convergence without duplicates, the contested favourite survives.
+- **Kill**: change then kill the app from the switcher before sync; relaunch: the change still
+  goes out, once (visible in the CloudKit Console).
+- **Reinstall**: delete the app, reinstall: "Récupération en cours" then everything comes
+  back.
+- **Zone deleted**: Settings → account → iCloud → Storage → Keo → Delete Data; at the next
+  launch everything goes back up.
+- **Account change**: sign out of iCloud (the data stays), sign in with another account (it is
+  wiped, the other account's data arrives).
 
-### Migration et refus
+### Migration and refusal
 
-Rien à migrer : les tables locales ne changent pas, le journal s'y ajoute. Au premier
-lancement avec un compte, l'existant remonte tout seul (la graine ci-dessus). Pas de réglage
-dans l'app : iOS fournit déjà l'interrupteur (Réglages → compte → iCloud → Keo), et le couper
-ramène simplement au comportement d'avant — tout local, rien de perdu, le journal attend. Le
-retirer du système pour le redonder dans l'app serait un deuxième endroit où se tromper.
-
+Nothing to migrate: the local tables do not change, the journal is added to them. On first
+launch with an account, what exists goes up by itself (the seed above). No setting in the app:
+iOS already provides the switch (Settings → account → iCloud → Keo), and turning it off simply
+brings back the previous behaviour: all local, nothing lost, the journal waits. Taking it out
+of the system to duplicate it in the app would be a second place to get it wrong.
 ## Widget
 
-**L'app pré-rend, le widget ne fait qu'ouvrir des fichiers.** L'extension ne lie que
-Foundation, SwiftUI, ImageIO et AppIntents. Pas d'entitlement de trousseau, aucune socket,
-jamais de SQLite.
+**The app pre-renders, the widget only opens files.** The extension links only Foundation,
+SwiftUI, ImageIO and AppIntents. No Keychain entitlement, no sockets, never any SQLite.
 
-L'autre option aurait été de partager l'index par App Group. Elle est écartée pour une raison
-simple : **l'index ne contient aucun pixel.** Il stocke `(folder_id, name, size, capture,
-read, kind, gen)` — des chemins et des dates. Le partager ferait migrer la base irremplaçable
-du propriétaire pour n'y gagner qu'un nom de fichier et un flou. Et `IndexStore.open()`
-exécute huit écritures avant son premier `SELECT` : quatre `ALTER TABLE`, un `UPDATE`, puis
-`retryDatelessAfterReaderChange`, `repairKinds` et `migrateFromJSON` — sans compter le
-`CREATE TABLE` du schéma. Une extension de 30 Mo que le système peut tuer en pleine
-transaction ne doit jamais faire tourner ça.
+The other option would have been to share the index through the App Group. It was ruled out
+for a simple reason: **the index contains no pixels.** It stores `(folder_id, name, size,
+capture, read, kind, gen)`: paths and dates. Sharing it would mean migrating the owner's
+irreplaceable database to gain nothing but a file name and a blur. And `IndexStore.open()`
+runs eight writes before its first `SELECT`: four `ALTER TABLE`s, one `UPDATE`, then
+`retryDatelessAfterReaderChange`, `repairKinds` and `migrateFromJSON`, not counting the
+schema's `CREATE TABLE`. A 30 MB extension that the system can kill mid-transaction must
+never run that.
 
-Les seuls pixels qui existent sont des vignettes de 400 px dans `Caches/`, purgeable et évincé
-en LRU par l'app elle-même, et seulement pour les photos déjà défilées.
+The only pixels that exist are 400 px thumbnails in `Caches/`, purgeable and LRU-evicted by
+the app itself, and only for photos already scrolled past.
 
-### Pourquoi pas de réseau dans l'extension
+### Why there is no networking in the extension
 
-1. L'app est **LAN uniquement**, et le téléphone est hors du Wi-Fi de la maison les deux tiers
-   de la journée. Un widget réseau passerait sa vie à afficher un échec.
-2. Partager le jeton voudrait dire un `keychain-access-groups` et réécrire l'élément sous un
-   nouveau groupe. Perdre ce jeton coûte un déplacement physique devant la face avant de la
-   Freebox, et c'est déjà arrivé une fois. Par ailleurs `Keychain.service` vaut
-   `Bundle.main.bundleIdentifier`, soit `com.oasutalab.keo.KeoWidget` dans l'extension :
-   elle chercherait en silence dans le mauvais service.
-3. 30 Mo pour tout le processus, quand `ThumbnailPipeline.still()` peut retomber sur un
-   téléchargement de 40 Mo.
-4. `NSLocalNetworkUsageDescription` dans un `.appex` lève un **second** dialogue de
-   permission, attribué à quelque chose que le propriétaire ne voit pas.
-5. Une extension sans `FreeboxClient` ne peut pas écrire sur le NAS, même par accident.
+1. The app is **LAN only**, and the phone is away from the home Wi-Fi two thirds of the day.
+   A networked widget would spend its life showing a failure.
+2. Sharing the token would mean a `keychain-access-groups` entitlement and rewriting the item
+   under a new group. Losing that token costs a physical trip to the front panel of the
+   Freebox, and it has already happened once. Besides, `Keychain.service` is
+   `Bundle.main.bundleIdentifier`, which is `com.oasutalab.keo.KeoWidget` in the extension:
+   it would silently look in the wrong service.
+3. 30 MB for the whole process, when `ThumbnailPipeline.still()` can fall back to a 40 MB
+   download.
+4. `NSLocalNetworkUsageDescription` in an `.appex` raises a **second** permission dialog,
+   attributed to something the owner never sees.
+5. An extension without `FreeboxClient` cannot write to the NAS, even by accident.
 
-### Ce que l'app écrit
+### What the app writes
 
-Au premier plan, avec un client vivant, `WidgetRenderer` prend les douze captures les plus
-récentes du **sous-arbre** de chaque dossier épinglé, les passe par le pipeline de vignettes
-existant en 1200 px, et écrit le tout dans `group.com.oasutalab.keo/Widget/` :
+In the foreground, with a live client, `WidgetRenderer` takes the twelve most recent captures
+from the **subtree** of each pinned folder, runs them through the existing thumbnail pipeline
+at 1200 px, and writes the lot to `group.com.oasutalab.keo/Widget/`:
 
 ```
-Widget/widget.json                  le manifeste, écrit en atomique
-Widget/<sha256(chemin)>/<sha256(chemin du fichier)>
+Widget/widget.json                  the manifest, written atomically
+Widget/<sha256(path)>/<sha256(file path)>
 ```
 
-Les noms sont hachés parce qu'un chemin du NAS n'est pas un nom de fichier : il porte des
-slashes et pourrait porter des `..`. L'extension joint donc de l'hexadécimal plat, qui ne peut
-pas remonter hors du conteneur.
+The names are hashed because a NAS path is not a file name: it carries slashes and could
+carry `..`. The extension therefore joins flat hexadecimal, which cannot climb out of the
+container.
 
-- Protection `completeUntilFirstUserAuthentication`, **pas** `complete` : le widget se
-  rafraîchit téléphone verrouillé, et des fichiers illisibles le videraient à chaque fois.
-- Le rendu est **sauté entièrement pendant que l'`Indexer` tourne** — c'est volontairement un
-  lecteur série unique, un second ramènerait le trafic doublé qu'on avait justement supprimé.
-- Une fois par heure, **sauf si l'ensemble des épingles a changé** : épingler un dossier ne
-  doit pas attendre une heure pour s'afficher.
-- Les dossiers désépinglés et les photos sorties du top 12 sont retirés du conteneur au
-  passage ; sinon il grossirait indéfiniment.
+- `completeUntilFirstUserAuthentication` protection, **not** `complete`: the widget refreshes
+  with the phone locked, and unreadable files would empty it every time.
+- Rendering is **skipped entirely while the `Indexer` runs**: it is deliberately a single
+  serial reader, and a second one would bring back the doubled traffic that had just been
+  removed.
+- Once an hour, **unless the set of pins has changed**: pinning a folder must not wait an hour
+  to show up.
+- Unpinned folders and photos that dropped out of the top 12 are removed from the container
+  on the way; otherwise it would grow indefinitely.
 
-### La liste des dossiers
+### The folder list
 
-Elle vient de la table **`shortcut`** — des dossiers que le propriétaire a déjà choisis par
-appui long sur leur tuile. Curée, typiquement moins de cinquante entrées, aucune nouvelle
-interface, et le coût du rendu est borné par construction. Si un dossier n'est pas proposé, la
-réponse tient en un appui long ; la feuille de réglages du widget le dit.
+It comes from the **`shortcut`** table: folders the owner has already chosen by long-pressing
+their tile. Curated, typically fewer than fifty entries, no new interface, and the rendering
+cost is bounded by construction. If a folder is not offered, the answer is a long press; the
+widget's settings sheet says so.
 
-La configuration passe par un `EntityQuery`, pas un `DynamicOptionsProvider` : le choix doit
-persister par une identité stable — le chemin Freebox — et être re-résolu quand la liste
-change. Un fournisseur d'options stocke la valeur au lieu d'une référence et rancit dès le
-premier épinglage.
+Configuration goes through an `EntityQuery`, not a `DynamicOptionsProvider`: the choice must
+persist by a stable identity, the Freebox path, and be re-resolved when the list changes. An
+options provider stores the value instead of a reference and goes stale at the first pin.
 
-`widgetAccentedRenderingMode(.fullColor)` est obligatoire : sans lui le mode teinté de l'écran
-d'accueil aplatit les photos en silhouettes blanches. Pour un widget photo, c'est un bug.
+`widgetAccentedRenderingMode(.fullColor)` is mandatory: without it, the home screen's tinted
+mode flattens photos into white silhouettes. For a photo widget, that is a bug.
 
-### Les quatre widgets, et ce que montre chaque taille
+### The four widgets, and what each size shows
 
-Une photo nue ne dit pas de quel dossier elle vient — « on voit juste la dernière photo du
-dossier plutôt que le nom du dossier ». Chaque taille porte donc son texte, sur un dégradé
-sombre en bas de l'image : pas une ombre, qui disparaîtrait sur un ciel blanc.
+A bare photo does not say which folder it comes from: "you just see the folder's latest photo
+rather than the folder's name". Each size therefore carries its text, on a dark gradient at
+the bottom of the image: not a shadow, which would vanish against a white sky.
 
-| Taille | **Keo** (un dossier) | **Ce jour-là** | **Raccourcis Keo** |
+| Size | **Keo** (one folder) | **Ce jour-là** (on this day) | **Raccourcis Keo** (shortcuts) |
 |---|---|---|---|
-| Petit | Une photo, le nom par-dessus. Pas de place pour autre chose | Une photo, « il y a 7 ans », la date | *non proposé : une tuile seule, c'est déjà le widget de dossier* |
-| Moyen | Une photo, le nom et la ligne de contexte | Trois photos côte à côte, chacune son « il y a N ans » | Trois tuiles : photo la plus récente du dossier, son nom |
-| Grand | Mosaïque : une vedette, trois en bandeau | Vedette plus bandeau, chaque cellule datée | Deux rangs de trois tuiles |
+| Small | One photo, the name over it. No room for anything else | One photo, "il y a 7 ans" (7 years ago), the date | *not offered: a single tile is already the folder widget* |
+| Medium | One photo, the name and the context line | Three photos side by side, each with its "il y a N ans" | Three tiles: the folder's most recent photo, its name |
+| Large | Mosaic: one featured, three in a strip | Featured plus strip, each cell dated | Two rows of three tiles |
 
-La ligne de contexte est « 14 595 photos · 2009 – 2024 ». Ses deux moitiés sont optionnelles
-dans le manifeste, et **omises** quand elles manquent : sur un dossier que l'index n'a pas
-fini, le compte est réellement inconnu, et retomber sur le nombre d'images donnerait douze —
-les couvertures pré-rendues, pas le dossier. Jamais de zéro, jamais d'estimation.
+The context line reads "14 595 photos · 2009 – 2024". Its two halves are optional in the
+manifest, and **omitted** when missing: on a folder the index has not finished, the count is
+genuinely unknown, and falling back to the number of images would give twelve, the
+pre-rendered covers, not the folder. Never a zero, never an estimate.
 
-Mosaïque = une vedette plus un bandeau, et non une grille fixe, parce que le bandeau
-raccourcit tout seul quand le dossier offre moins de photos : quatre cellules, puis trois,
-puis deux, puis la vedette seule. Une grille aurait dû répéter une photo pour rester carrée.
+Mosaic = one featured photo plus a strip, not a fixed grid, because the strip shortens by
+itself when the folder offers fewer photos: four cells, then three, then two, then the
+featured photo alone. A grid would have had to repeat a photo to stay square.
 
-**« Ce jour-là »** est le seul des trois dont le contenu est différent demain, donc le seul
-qui donne une raison de regarder l'écran d'accueil. Il n'a pas d'intent de configuration : un
-jour ne se choisit pas, c'est aujourd'hui. Trois états plutôt qu'un :
+**"Ce jour-là"** is the only one of the three whose content is different tomorrow, so the only
+one that gives a reason to look at the home screen. It has no configuration intent: a day is
+not chosen, it is today. Three states rather than one:
 
-- des photos, avec « il y a N ans » **calculé** à partir de l'année — stocker la phrase
-  ferait dire « il y a 7 ans » en janvier à un widget archivé le 31 décembre ;
-- rien aujourd'hui, ce qui est le cas de la plupart des jours d'une photothèque modeste :
-  « Rien ce jour-là dans les années passées », dit platement, pas déguisé en erreur ;
-- un manifeste qui ne date pas d'aujourd'hui — passé minuit, ses souvenirs sont ceux d'hier :
-  « Ouvre Keo pour les photos d'aujourd'hui », plutôt que les photos d'hier sous la date
-  d'hier. La timeline s'arrête donc à minuit, puisque c'est à minuit que la réponse change.
+- photos, with "il y a N ans" **computed** from the year: storing the sentence would make a
+  widget archived on 31 December say "il y a 7 ans" in January;
+- nothing today, which is the case most days for a modest photo library: "Rien ce jour-là
+  dans les années passées" (nothing on this day in past years), said flatly, not dressed up
+  as an error;
+- a manifest that is not from today: past midnight, its memories are yesterday's: "Ouvre Keo
+  pour les photos d'aujourd'hui" (open Keo for today's photos), rather than yesterday's photos
+  under yesterday's date. The timeline therefore stops at midnight, since midnight is when
+  the answer changes.
 
-Le quatrième, **« Index Keo »**, n'est pas un widget photo et ne vit que sur l'écran
-verrouillé — la section suivante dit pourquoi.
+The fourth, **"Index Keo"**, is not a photo widget and lives only on the lock screen; the next
+section says why.
 
-### « Index Keo » : le seul chiffre qui bouge
+### "Index Keo": the only number that moves
 
-Le brief tenait en une phrase : « un widget de statistiques peut être sympa ». La recherche
-qui a produit l'écran de statistiques était pourtant franchement hostile aux chiffres de
-vanité, avec une règle simple — *chaque chiffre affiché est un appui vers une grille ou un
-dossier ; un chiffre sur lequel on ne peut rien faire ne sort pas*. Un widget ne se tape pas
-vers une grille, il ne sait qu'ouvrir un lien. « 48 212 fichiers » sur l'écran d'accueil
-serait exactement la décoration que cette recherche refuse.
+The brief fit in one sentence: "a statistics widget could be nice". Yet the research that
+produced the statistics screen was frankly hostile to vanity numbers, with a simple rule:
+*every number shown is a tap towards a grid or a folder; a number you can do nothing about
+does not ship*. A widget cannot be tapped towards a grid; all it knows is how to open a link.
+"48 212 files" on the home screen would be exactly the decoration that research refuses.
 
-**Ce qui a été écarté, et pourquoi :**
+**What was ruled out, and why:**
 
-- **Les totaux** — nombre de fichiers, poids, étendue, première photo. Déjà rejetés dans
-  l'app (« il ne survit que comme dénominateur du bandeau : seul, il flatte sans rien
-  apprendre »), et un widget ne les rend pas meilleurs.
-- **« ~23 Go récupérables · 1 940 doublons probables »**, pourtant la piste la plus
-  séduisante. Deux raisons de la refuser. D'abord, l'honnêteté de ce chiffre *est* sa réserve
-  — « même nom et même taille, ce n'est pas une empreinte », quatre lignes de pied de section
-  dans l'app. Un petit widget a de la place pour le nombre et aucune pour la réserve, et un
-  chiffre dont on a retiré la réserve est précisément un chiffre qu'il ne faut pas croire.
-  Ensuite, Keo n'écrira jamais sur le NAS : l'« action » se résume à aller regarder une liste
-  puis à supprimer ailleurs. Une corvée affichée tous les jours sans moyen de l'exécuter
-  n'est pas de l'actionnable, c'est du mobilier culpabilisant.
-- **Le jour le plus photographié, l'année qui ressort.** Ce sont des records historiques : ils
-  ne changent plus. Et la seule chose qui change tous les jours dans Keo a déjà son widget,
-  « Ce jour-là », qui le fait avec des photos.
+- **Totals**: file count, size, span, first photo. Already rejected in the app ("it only
+  survives as the denominator of the banner: alone, it flatters without teaching anything"),
+  and a widget does not make them any better.
+- **"~23 GB recoverable · 1 940 probable duplicates"**, yet the most tempting lead. Two
+  reasons to refuse it. First, this number's honesty *is* its caveat: "même nom et même
+  taille, ce n'est pas une empreinte" (same name and same size is not a fingerprint), four
+  lines of section footer in the app. A small widget has room for the number and none for the
+  caveat, and a number stripped of its caveat is precisely a number not to be believed.
+  Second, Keo will never write to the NAS: the "action" boils down to going to look at a list
+  and then deleting elsewhere. A chore displayed every day with no way to carry it out is not
+  actionable, it is guilt-inducing furniture.
+- **The most photographed day, the year that stands out.** These are historical records: they
+  no longer change. And the one thing that changes every day in Keo already has its widget,
+  "Ce jour-là", which does it with photos.
 
-**Ce qui reste, et c'est le seul :** la couverture de l'index. Une bibliothèque de quinze ans
-bouge de fractions de pour-cent par mois ; l'index, lui, avance de milliers de fichiers entre
-deux coups d'œil, et son avancée demande quelque chose — ouvrir Keo et le laisser tourner.
-C'est aussi le seul chiffre de l'app qui a une **fin** : le jour où tout est lu, la
-complication le dit et le propriétaire la retire. Un widget de totaux n'a jamais eu ce
-moment-là, parce qu'il n'a jamais eu de travail.
+**What remains, and it is the only one:** index coverage. A fifteen-year library moves by
+fractions of a percent per month; the index, though, advances by thousands of files between
+two glances, and its progress asks for something: opening Keo and letting it run. It is also
+the only number in the app that has an **end**: the day everything has been read, the
+complication says so and the owner removes it. A totals widget never had that moment, because
+it never had a job.
 
-**Écran verrouillé seulement**, deux familles : `accessoryCircular` et `accessoryRectangular`.
-Trois raisons, toutes assumées :
+**Lock screen only**, two families: `accessoryCircular` and `accessoryRectangular`. Three
+reasons, all deliberate:
 
-1. **C'est de la machinerie.** « La machinerie visible partout est la maladie qui fait
-   qu'Immich ressemble à une console d'administration » — c'est l'argument qui a sorti
-   l'indexation du menu de tri de chaque dossier. Une tuile d'indexation sur l'écran
-   d'accueil, à côté de « Ce jour-là », referait exactement cette erreur. Une complication
-   d'écran verrouillé est le seul emplacement du système où un voyant d'état est le contenu
-   attendu.
-2. **`systemSmall` et au-delà n'ont rien à mettre dans leurs pixels.** Deux lignes de texte
-   dans 158 × 158 pt, c'est 80 % de vide — qu'il faudrait meubler avec un chiffre de vanité.
-3. **`accessoryInline` est refusé** : une seule chaîne tronquée à côté de l'horloge, sans
-   place pour le mot qui rend le nombre honnête. « 12 400 » sans « pas encore lus » ne veut
-   rien dire.
+1. **It is machinery.** "Machinery visible everywhere is the disease that makes Immich look
+   like an admin console": that is the argument that took indexing out of every folder's sort
+   menu. An indexing tile on the home screen, next to "Ce jour-là", would make exactly that
+   mistake again. A lock screen complication is the only place in the system where a status
+   light is the expected content.
+2. **`systemSmall` and above have nothing to put in their pixels.** Two lines of text in
+   158 × 158 pt is 80 % empty space, which would have to be furnished with a vanity number.
+3. **`accessoryInline` is refused**: a single string truncated next to the clock, with no room
+   for the word that makes the number honest. "12 400" without "pas encore lus" (not read
+   yet) means nothing.
 
-**Ce qu'il dit**, dans les mots que la carte Bibliothèque emploie déjà, et jamais fusionnés :
+**What it says**, in the words the Library card already uses, and never merged:
 
-| État | Titre | Détail |
+| State | Title | Detail |
 |---|---|---|
-| Rien d'indexé | « Index vide » | « Ouvre Keo pour le construire » |
-| Marche en cours | « 3 812 dossiers sur 4 799 » | « 12 400 fichiers pas encore lus » |
-| Dossiers finis, lecture non | « 12 400 fichiers pas encore lus » | « Tous les dossiers sont parcourus » |
-| Terminé | « Bibliothèque à jour » | « 312 fichiers sans date » |
+| Nothing indexed | "Index vide" (empty index) | "Ouvre Keo pour le construire" (open Keo to build it) |
+| Walk in progress | "3 812 dossiers sur 4 799" (folders out of) | "12 400 fichiers pas encore lus" (files not read yet) |
+| Folders done, reading not | "12 400 fichiers pas encore lus" | "Tous les dossiers sont parcourus" (all folders walked) |
+| Finished | "Bibliothèque à jour" (library up to date) | "312 fichiers sans date" (undated files) |
 
-**« Pas encore lus » et « sans date » ne se croisent jamais**, et ce n'est pas une question de
-place : le second n'est même pas *connaissable* tant que la marche n'est pas finie. L'ordre
-des branches de `Coverage.lines` est donc la règle d'honnêteté elle-même, ce qui est la raison
-pour laquelle ces phrases vivent dans `WidgetManifest.swift` plutôt que dans la vue —
-`Tests/widget.swift` les tient.
+**"Pas encore lus" and "sans date" never cross**, and it is not a matter of room: the second
+is not even *knowable* until the walk is finished. The order of the branches in
+`Coverage.lines` is therefore the honesty rule itself, which is why these sentences live in
+`WidgetManifest.swift` rather than in the view; `Tests/widget.swift` holds them.
 
-**La barre est la moitié la moins avancée.** Deux fractions indépendantes : les dossiers
-parcourus, et les fichiers lus. Une barre pleine sur les dossiers pendant que des fichiers
-restent à lire promettrait une fin qui n'a pas eu lieu ; dans l'autre sens, des fichiers tous
-lus ne disent rien des dossiers jamais listés. Le minimum des deux n'atteint 1 que lorsque les
-deux y sont. Le pourcentage est **arrondi vers le bas** : « 100 % » affiché alors qu'il reste
-deux fichiers à lire est le seul chiffre que ce widget existe pour ne pas imprimer. Et il peut
-**reculer**, parce que `knownFolders` grossit au fur et à mesure que la marche découvre des
-dossiers — c'est vrai, et l'écran de statistiques dit déjà la même chose en toutes lettres.
+**The bar is the less advanced half.** Two independent fractions: folders walked, and files
+read. A full bar on folders while files remain to be read would promise an end that has not
+happened; the other way round, files all read say nothing about folders never listed. The
+minimum of the two reaches 1 only when both do. The percentage is **rounded down**: a
+displayed "100 %" while two files remain to be read is the one number this widget exists not
+to print. And it can **go backwards**, because `knownFolders` grows as the walk discovers
+folders; that is true, and the statistics screen already spells out the same thing.
 
-**L'appui ouvre les statistiques**, pas l'indexation. Un widget porte un nombre, jamais la
-réserve qui le rend honnête ; son appui atterrit donc là où ces réserves sont imprimées — et
-le bandeau de couverture, en haut de cet écran, porte justement le bouton « Continuer
-l'indexation… ». C'est la destination `keo://stats`, nouvelle, parsée par `DeepLink` et
-présentée en feuille par-dessus l'onglet courant : les statistiques sont le même écran quel
-que soit l'onglet ouvert, et les empiler sous la pile en cours les enterrerait.
+**Tapping opens the statistics**, not the indexing. A widget carries a number, never the
+caveat that makes it honest; its tap therefore lands where those caveats are printed, and the
+coverage banner at the top of that screen carries precisely the "Continuer l'indexation…"
+(continue indexing) button. That is the `keo://stats` destination, new, parsed by `DeepLink`
+and presented as a sheet over the current tab: the statistics are the same screen whatever
+tab is open, and stacking them under the current stack would bury them.
 
-**Ce n'est pas une barre de progression en temps réel, et ça ne prétend pas l'être.**
-`Indexer` s'arrête sur `didEnterBackgroundNotification` : l'index n'avance que pendant que
-l'app est ouverte. Le widget répond « où j'en étais hier soir », pas « où j'en suis à la
-seconde ». C'est exactement la question que « j'en suis où ? » pose.
+**This is not a real-time progress bar, and it does not claim to be.** `Indexer` stops on
+`didEnterBackgroundNotification`: the index only advances while the app is open. The widget
+answers "where I was last night", not "where I am this second". That is exactly the question
+"how far along am I?" asks.
 
-Conséquence côté app : la couverture est écrite **avant** les deux garde-fous de
-`WidgetRenderer.refresh` — le `guard !indexing` et l'étranglement horaire. Aucun des deux ne
-s'applique à cinq scalaires lus dans SQLite local : ni box, ni second lecteur, ni vignette. Le
-`guard !indexing`, surtout, gèlerait la couverture pendant toute la session qu'elle décrit.
-L'écriture est sautée quand rien n'a bougé, parce qu'un rechargement fait rendre à l'extension
-toute sa timeline et le faire pour réafficher le même nombre est du travail pour rien. Et le
-champ `stamped` est **conservé** lors de cette écriture partielle, jamais rafraîchi : c'est lui
-qui dit à « Ce jour-là » que ses souvenirs sont d'aujourd'hui.
+Consequence on the app side: coverage is written **before** the two guards in
+`WidgetRenderer.refresh`, the `guard !indexing` and the hourly throttle. Neither applies to
+five scalars read from local SQLite: no box, no second reader, no thumbnail. The
+`guard !indexing`, above all, would freeze the coverage for the whole session it describes.
+The write is skipped when nothing has moved, because a reload makes the extension render its
+entire timeline, and doing that to redisplay the same number is work for nothing. And the
+`stamped` field is **preserved** during that partial write, never refreshed: it is what tells
+"Ce jour-là" that its memories are today's.
 
-**Mémoire** : aucune photo, donc rien à décoder et rien à retenir dans l'archive. Une entrée,
-cinq entiers — de l'ordre du kilo-octet contre les trente mégaoctets de l'extension. C'est la
-raison pour laquelle la discussion de la section suivante ne le concerne pas.
+**Memory**: no photo, so nothing to decode and nothing to retain in the archive. One entry,
+five integers: on the order of a kilobyte against the extension's thirty megabytes. That is
+why the discussion in the next section does not concern it.
 
-### Longueur de la timeline : une décision de mémoire
+### Timeline length: a memory decision
 
-La timeline fait **4 entrées espacées de 6 h** : un rechargement de fond par jour, pour un
-budget d'environ 40 à 70. `reloadAllTimelines()` depuis l'app au premier plan n'est pas
-budgété du tout, et c'est lui qui fait réellement la fraîcheur — le nombre d'entrées n'y a
-jamais rien changé.
+The timeline has **4 entries spaced 6 h apart**: one background reload per day, out of a
+budget of roughly 40 to 70. `reloadAllTimelines()` from the foreground app is not budgeted at
+all, and it is what actually provides the freshness; the number of entries never changed
+anything there.
 
-Le nombre est contraint par la mémoire, pas par la fraîcheur. WidgetKit rend et archive
-**toutes** les entrées d'une timeline en une passe, dans l'extension, et chaque entrée
-archivée retient la photo que sa vue a décodée. Couvrir un grand widget coûte environ 5 Mo de
-pixels quelle que soit la découpe. Les 48 entrées d'une demi-heure demandaient donc bien plus
-de cent mégaoctets à une extension qui en a trente : elle était tuée avant d'avoir rien
-dessiné — d'où un widget **noir et vide, sans même le texte de repli**, en moyen et en grand,
-alors que le petit (un quart des pixels) passait. Quatre entrées ramènent le pire cas à 19 Mo.
+The number is constrained by memory, not by freshness. WidgetKit renders and archives
+**all** the entries of a timeline in one pass, inside the extension, and each archived entry
+retains the photo its view decoded. Covering a large widget costs about 5 MB of pixels
+whatever the layout. The 48 half-hourly entries therefore asked well over a hundred megabytes
+of an extension that has thirty: it was killed before drawing anything, hence a **black,
+empty widget, without even the fallback text**, in medium and large, while the small one (a
+quarter of the pixels) got through. Four entries bring the worst case down to 19 MB.
 
-Ce n'était **pas** un problème de disposition. `scaledToFill()` rend bien une taille plus
-grande que la proposition, et le `.clipped()` qui suit découpe contre cette taille-là, donc
-ne sert à rien — mais à la racine d'un widget l'hôte centre et recadre le débordement de
-toute façon : rendues, les trois tailles étaient couvertes à **100 %**, aucun pixel noir.
+It was **not** a layout problem. `scaledToFill()` does render a size larger than the proposal,
+and the `.clipped()` that follows clips against that very size, so it does nothing; but at the
+root of a widget the host centres and crops the overflow anyway: rendered, all three sizes
+were **100 %** covered, not a black pixel.
 
-Le `Color.clear.overlay { … }` que `Photo` utilise reste la bonne forme, pour une autre
-raison : **dans une pile**, une cellule qui déborde est mesurée à sa largeur débordée et prend
-la place de ses voisines. Un bandeau de trois cellules rendait **15 / 70 / 15** au lieu de
-33 / 33 / 33. C'est ce qui aurait cassé la mosaïque et les tuiles de raccourcis.
+The `Color.clear.overlay { … }` that `Photo` uses remains the right form, for another reason:
+**inside a stack**, a cell that overflows is measured at its overflowed width and takes its
+neighbours' room. A strip of three cells rendered **15 / 70 / 15** instead of 33 / 33 / 33.
+That is what would have broken the mosaic and the shortcut tiles.
 
-Chaque décodage est dimensionné à **sa cellule**, pas au widget : la vedette de la mosaïque
-tire 1092 px de côté long (3,6 Mo en 4:3), les trois cellules du bandeau 0,4 Mo chacune.
+Each decode is sized to **its cell**, not to the widget: the mosaic's featured photo pulls
+1092 px on the long side (3.6 MB in 4:3), the three strip cells 0.4 MB each.
 
-### Où atterrit un appui
+### Where a tap lands
 
-Un appui sur le widget ouvrait Keo à la racine, ce qui est l'autre moitié du « pas très
-pratique à l'usage ». Les URL viennent de `WidgetManifest.link(folder:)` et `link(day:)`,
-et la façon de les poser n'est pas la même partout :
+A tap on the widget used to open Keo at the root, which is the other half of "not very
+practical in use". The URLs come from `WidgetManifest.link(folder:)` and `link(day:)`, and
+the way they are attached is not the same everywhere:
 
-- **widget de dossier** et **Ce jour-là** : `widgetURL(_:)`, une destination pour tout le
-  widget, puisqu'il n'en montre qu'un ;
-- **raccourcis** : un `Link(destination:)` **par tuile**. `widgetURL` ne sait poser qu'une
-  destination globale, et toutes les tuiles ouvriraient le même dossier — l'erreur qui ne se
-  voit qu'en appuyant sur la deuxième ;
-- **Index Keo** : `widgetURL(_:)` vers `keo://stats`, la seule destination sans paramètre.
+- **folder widget** and **Ce jour-là**: `widgetURL(_:)`, one destination for the whole
+  widget, since it shows only one;
+- **shortcuts**: one `Link(destination:)` **per tile**. `widgetURL` can only set a single
+  global destination, and every tile would open the same folder: the mistake that only shows
+  when you tap the second one;
+- **Index Keo**: `widgetURL(_:)` to `keo://stats`, the only destination without a parameter.
 
-### Récupérer le conteneur partagé depuis l'appareil
+### Retrieving the shared container from the device
 
-Le conteneur de groupe n'est **pas** dans celui de l'app : il a son propre domaine.
+The group container is **not** inside the app's: it has its own domain.
 
 ```sh
 xcrun devicectl device info files --device <UDID> \
@@ -1462,234 +1429,232 @@ xcrun devicectl device copy from --device <UDID> \
   --username mobile --source Widget --destination /tmp/keo-widget
 ```
 
-Y vérifier `widget.json` (nombre de dossiers, noms d'images) et la taille des JPEG. L'app
-trace la même chose à chaque rendu, en build DEBUG :
+Check `widget.json` there (folder count, image names) and the JPEG sizes. The app traces the
+same thing on every render, in a DEBUG build:
 
 ```sh
 grep -a "\[keo\] widget" /tmp/keo-console.log
 ```
 
-### À vérifier à la main
+### To check by hand
 
-Rien de tout ceci ne se simule : il faut l'appareil, un widget posé, et de la patience.
+None of this can be simulated: it takes the device, a placed widget, and patience.
 
-- **Écran verrouillé.** Poser le widget, verrouiller, attendre un rafraîchissement : la photo
-  reste visible. Si elle devient noire, la classe de protection est repassée à `complete`.
-- **Avant le premier déverrouillage après un redémarrage.** Redémarrer le téléphone et
-  regarder l'écran d'accueil **sans** déverrouiller : le widget doit afficher un état vide
-  propre, jamais une case cassée. C'est le seul moment où
-  `completeUntilFirstUserAuthentication` refuse réellement les fichiers.
-- **Mode avion.** Le widget doit continuer à tourner sur ses photos déjà rendues. S'il affiche
-  quoi que ce soit qui ressemble à une erreur réseau, c'est qu'il a appris à parler au NAS et
-  il faut l'en empêcher.
-- **Dossier désépinglé sous le widget.** Épingler un dossier, le choisir dans le widget,
-  rouvrir Keo et le désépingler, puis laisser l'app re-rendre : le widget doit annoncer « Ce
-  dossier n'est plus épinglé » et surtout **pas** les photos d'un autre dossier.
-- **Widget posé avant le premier lancement de Keo.** Sur une installation neuve, poser le
-  widget sans jamais ouvrir l'app : « Ouvre Keo pour remplir le widget », pas un crash.
-- **Rien d'épinglé.** Ouvrir Keo sans aucun raccourci : « Épingle un dossier dans Keo ».
-- **Les trois tailles du widget de dossier.** Poser « Keo » en **petit**, **moyen** *et*
-  **grand**. Les trois doivent montrer des photos et le nom du dossier. C'est la vérification
-  qui compte : le symptôme corrigé était un widget noir et vide en moyen et en grand, sans
-  même le texte de repli, pendant que le petit marchait. S'il revient, ce n'est pas la
-  disposition — c'est la mémoire : chercher un jetsam de `KeoWidgetExtension` dans
-  `Réglages → Confidentialité → Analyse` et raccourcir encore `WidgetStore.steps`.
-- **La mosaïque avec peu de photos.** Épingler un dossier d'**une seule** photo, puis de deux,
-  puis de trois, et regarder le grand : vedette seule, puis vedette plus une, plus deux. Ni
-  case vide, ni photo répétée.
-- **Les deux tailles des raccourcis.** Poser « Raccourcis Keo » en moyen (trois tuiles) et en
-  grand (deux rangs de trois). Avec **moins de trois** dossiers épinglés, les tuiles doivent
-  garder leur taille et non s'étirer.
-- **Chaque tuile ouvre son dossier.** Avec au moins trois dossiers épinglés, appuyer sur la
-  **deuxième** puis la **troisième** tuile : Keo doit ouvrir le dossier de la tuile touchée,
-  pas celui de la première ni la racine. C'est précisément ce que `widgetURL` ne sait pas
-  faire, donc c'est là que la régression se verrait.
-- **Appui sur le widget de dossier.** Keo doit ouvrir sur le dossier affiché, pas à la racine.
-- **Ligne de contexte.** Sur un dossier entièrement indexé, le moyen doit lire
-  « 14 595 photos · 2009 – 2024 ». Sur un dossier **en cours** d'indexation, le compte doit
-  **disparaître** — jamais « 0 photo », qui se lirait « ce dossier est vide ».
-- **« Ce jour-là », les trois tailles.** Un jour qui a des photos : les trois tailles les
-  montrent, chaque cellule avec son « il y a N ans », et l'appui ouvre la recherche sur ce
-  jour. Vérifier qu'une photo de l'année en cours dit « cette année » et non « il y a 0 an ».
-- **« Ce jour-là » un jour vide.** La plupart des jours : « Rien ce jour-là dans les années
-  passées ». Un widget vide ou une case cassée serait un échec ; cette phrase est le
-  comportement attendu.
-- **« Ce jour-là » après minuit.** Laisser le téléphone passer minuit **sans** ouvrir Keo :
-  le widget doit basculer sur « Ouvre Keo pour les photos d'aujourd'hui » et surtout pas
-  continuer à montrer les photos d'hier sous la date d'hier. Rouvrir Keo : il se remplit.
-- **Mode teinté.** Passer l'écran d'accueil en teinté : les photos restent en couleur. Si
-  elles deviennent des silhouettes blanches, un `widgetAccentedRenderingMode(.fullColor)` a
-  sauté — il y en a un, dans `Photo`.
-- **Galerie de widgets.** Les **quatre** widgets doivent apparaître avec leurs descriptions,
-  « Raccourcis Keo » **sans** la taille petite, et « Index Keo » **uniquement** dans la section
-  écran verrouillé — s'il apparaît en petit, moyen ou grand, une famille a été ajoutée par
-  erreur et la tuile de machinerie est de retour sur l'écran d'accueil.
-- **« Index Keo », cercle.** Poser la complication circulaire sur l'écran verrouillé : un
-  anneau rempli à la fraction, le pourcentage lisible au centre. Vérifier qu'il n'affiche
-  **pas** « 100 % » tant que la carte Bibliothèque annonce encore des fichiers à lire — le
-  pourcentage est arrondi vers le bas exprès, et c'est le seul mensonge possible ici.
-- **« Index Keo », rectangle.** La complication rectangulaire doit tenir sur trois lignes sans
-  troncature au milieu d'un mot : titre, barre, détail. Comparer les deux phrases avec la
-  ligne « Indexation » de la carte Bibliothèque dans l'app : elles doivent raconter la même
-  chose.
-- **Les deux moitiés de « sans date » ne se croisent pas.** Sur un index **incomplet**, le
-  widget ne doit jamais prononcer « sans date » — personne n'a encore regardé ces fichiers.
-  Sur un index **terminé**, il ne doit plus prononcer « pas encore lus ». C'est la règle
-  d'honnêteté de l'écran de statistiques, portée telle quelle sur l'écran verrouillé.
-- **La barre pendant une vraie indexation.** Lancer l'indexation, laisser tourner, quitter
-  l'app, regarder l'écran verrouillé : le chiffre doit avoir avancé par rapport à la veille.
-  Il ne bougera **pas** pendant qu'on le regarde — `Indexer` s'arrête au passage en arrière-
-  plan — et c'est le comportement attendu, pas un gel.
-- **La barre peut reculer.** Sur une bibliothèque où la marche découvre encore des dossiers,
-  le pourcentage peut descendre d'un coup d'œil à l'autre. C'est juste : le dénominateur,
-  ce sont les dossiers que l'index **connaît**.
-- **L'appui sur « Index Keo ».** Keo doit ouvrir les statistiques en feuille, quel que soit
-  l'onglet affiché, avec le bandeau de couverture et son bouton « Continuer l'indexation… »
-  en haut. Pas la racine du NAS, pas l'écran d'indexation nu.
-- **Avant le premier lancement de Keo.** Poser « Index Keo » sur une installation neuve sans
-  jamais ouvrir l'app : « Ouvre Keo », jamais « 0 % » ni une case cassée.
-- **Index jamais commencé.** Associer la box sans lancer l'indexation : « Index vide · Ouvre
-  Keo pour le construire ».
-- **Mode avion.** Comme les trois autres : aucun message qui ressemble de près ou de loin à
-  une erreur réseau. Le widget ne lit qu'un fichier.
-- **Numéro de build.** Après installation, vérifier que l'app démarre : iOS refuse une app
-  dont l'extension ne porte pas la version de l'hôte, et l'échec se produit à l'installation,
-  jamais à la compilation.
+- **Lock screen.** Place the widget, lock, wait for a refresh: the photo stays visible. If it
+  turns black, the protection class has gone back to `complete`.
+- **Before the first unlock after a reboot.** Reboot the phone and look at the home screen
+  **without** unlocking: the widget must show a clean empty state, never a broken tile. It is
+  the only moment when `completeUntilFirstUserAuthentication` actually refuses the files.
+- **Airplane mode.** The widget must keep cycling through its already-rendered photos. If it
+  shows anything that looks like a network error, it has learnt to talk to the NAS and must
+  be stopped.
+- **Folder unpinned under the widget.** Pin a folder, choose it in the widget, reopen Keo and
+  unpin it, then let the app re-render: the widget must announce "Ce dossier n'est plus
+  épinglé" (this folder is no longer pinned) and above all **not** another folder's photos.
+- **Widget placed before Keo's first launch.** On a fresh install, place the widget without
+  ever opening the app: "Ouvre Keo pour remplir le widget" (open Keo to fill the widget), not
+  a crash.
+- **Nothing pinned.** Open Keo with no shortcut at all: "Épingle un dossier dans Keo" (pin a
+  folder in Keo).
+- **The three sizes of the folder widget.** Place "Keo" in **small**, **medium** *and*
+  **large**. All three must show photos and the folder name. This is the check that counts:
+  the symptom fixed was a black, empty widget in medium and large, without even the fallback
+  text, while the small one worked. If it comes back, it is not the layout, it is memory:
+  look for a `KeoWidgetExtension` jetsam in Settings → Privacy → Analytics and shorten
+  `WidgetStore.steps` further.
+- **The mosaic with few photos.** Pin a folder with **a single** photo, then two, then three,
+  and look at the large one: featured alone, then featured plus one, plus two. No empty cell,
+  no repeated photo.
+- **The two sizes of the shortcuts.** Place "Raccourcis Keo" in medium (three tiles) and
+  large (two rows of three). With **fewer than three** pinned folders, the tiles must keep
+  their size rather than stretch.
+- **Each tile opens its folder.** With at least three pinned folders, tap the **second** then
+  the **third** tile: Keo must open the folder of the tile tapped, not the first one's nor
+  the root. That is precisely what `widgetURL` cannot do, so that is where the regression
+  would show.
+- **Tap on the folder widget.** Keo must open on the folder shown, not at the root.
+- **Context line.** On a fully indexed folder, the medium one must read
+  "14 595 photos · 2009 – 2024". On a folder **being** indexed, the count must
+  **disappear**: never "0 photo", which would read as "this folder is empty".
+- **"Ce jour-là", all three sizes.** A day that has photos: all three sizes show them, each
+  cell with its "il y a N ans", and tapping opens the search on that day. Check that a photo
+  from the current year says "cette année" (this year) and not "il y a 0 an".
+- **"Ce jour-là" on an empty day.** Most days: "Rien ce jour-là dans les années passées". An
+  empty widget or a broken tile would be a failure; that sentence is the expected behaviour.
+- **"Ce jour-là" after midnight.** Let the phone pass midnight **without** opening Keo: the
+  widget must switch to "Ouvre Keo pour les photos d'aujourd'hui" and above all not keep
+  showing yesterday's photos under yesterday's date. Reopen Keo: it fills up.
+- **Tinted mode.** Switch the home screen to tinted: the photos stay in colour. If they turn
+  into white silhouettes, a `widgetAccentedRenderingMode(.fullColor)` has gone missing; there
+  is one, in `Photo`.
+- **Widget gallery.** All **four** widgets must appear with their descriptions,
+  "Raccourcis Keo" **without** the small size, and "Index Keo" **only** in the lock screen
+  section; if it shows up in small, medium or large, a family was added by mistake and the
+  machinery tile is back on the home screen.
+- **"Index Keo", circle.** Place the circular complication on the lock screen: a ring filled
+  to the fraction, the percentage legible in the centre. Check that it does **not** show
+  "100 %" while the Library card still announces files to read; the percentage is rounded
+  down on purpose, and that is the only possible lie here.
+- **"Index Keo", rectangle.** The rectangular complication must fit on three lines with no
+  truncation mid-word: title, bar, detail. Compare the two sentences with the "Indexation"
+  line of the Library card in the app: they must tell the same story.
+- **The two halves of "undated" do not cross.** On an **incomplete** index, the widget must
+  never utter "sans date" (undated): nobody has looked at those files yet. On a **finished**
+  index, it must no longer utter "pas encore lus". That is the statistics screen's honesty
+  rule, carried as is onto the lock screen.
+- **The bar during a real indexing run.** Start indexing, let it run, quit the app, look at
+  the lock screen: the number must have advanced compared with the day before. It will
+  **not** move while you watch it, `Indexer` stops when going to the background, and that is
+  the expected behaviour, not a freeze.
+- **The bar can go backwards.** On a library where the walk is still discovering folders, the
+  percentage can drop from one glance to the next. That is correct: the denominator is the
+  folders the index **knows**.
+- **Tapping "Index Keo".** Keo must open the statistics as a sheet, whatever tab is shown,
+  with the coverage banner and its "Continuer l'indexation…" button at the top. Not the NAS
+  root, not the bare indexing screen.
+- **Before Keo's first launch.** Place "Index Keo" on a fresh install without ever opening
+  the app: "Ouvre Keo", never "0 %" nor a broken tile.
+- **Index never started.** Pair the box without starting indexing: "Index vide · Ouvre Keo
+  pour le construire".
+- **Airplane mode.** Like the other three: no message that looks anything like a network
+  error. The widget only reads a file.
+- **Build number.** After installing, check that the app starts: iOS refuses an app whose
+  extension does not carry the host's version, and the failure happens at install, never at
+  compile time.
 
-## Lire une vidéo de plusieurs gigaoctets
+## Playing a multi-gigabyte video
 
-La toute première requête d'AVFoundation à un `AVAssetResourceLoader` ne demande **aucune
-donnée** : elle veut la taille, le type, et savoir si les plages d'octets sont gérées. Le code
-ne posait un en-tête `Range` que lorsqu'il y avait une requête de données — cette première-là
-partait donc sans borne, et `URLSession` téléchargeait **le fichier entier en mémoire** pour
-répondre à « quelle taille fait-il ». Sur une GoPro de plusieurs gigaoctets, ça ne revient
-jamais : écran noir, aucun message.
+AVFoundation's very first request to an `AVAssetResourceLoader` asks for **no data**: it
+wants the size, the type, and whether byte ranges are supported. The code only set a `Range`
+header when there was a data request, so that first one went out unbounded, and `URLSession`
+downloaded **the whole file into memory** to answer "how big is it". On a multi-gigabyte
+GoPro file, that never comes back: black screen, no message.
 
-Deux octets répondent à la question aussi bien. Et toute requête part désormais bornée, y
-compris celles qui demandent « tout jusqu'à la fin » : elles sont plafonnées à une fenêtre de
-4 Mo. Une réponse courte est normale et attendue — AVFoundation redemande à partir de là où
-celle-ci s'arrête, ce qui est précisément ce qui rend le plafond sans danger.
+Two bytes answer the question just as well. And every request now goes out bounded, including
+those asking for "everything to the end": they are capped at a 4 MB window. A short response
+is normal and expected; AVFoundation asks again from where this one stops, which is precisely
+what makes the cap safe.
 
-Corollaire : la longueur annoncée vient de `Content-Range`, jamais de la taille reçue. La
-déduire de la réponse ferait croire à AVFoundation que la vidéo fait quatre mégaoctets.
+Corollary: the announced length comes from `Content-Range`, never from the size received.
+Deriving it from the response would make AVFoundation believe the video is four megabytes
+long.
 
-## Fil d'Ariane
+## Breadcrumb
 
-Il défile, il ne tronque pas. Un chemin de NAS peut faire huit dossiers de profondeur, et des
-points de suspension au milieu cachent exactement la partie qui dit où l'on est. Il s'ouvre
-déjà défilé jusqu'au bout : le dossier où l'on se trouve compte plus que la racine d'où l'on
-vient. Le dernier élément n'est pas un bouton — on y est déjà.
+It scrolls, it does not truncate. A NAS path can be eight folders deep, and an ellipsis in
+the middle hides exactly the part that says where you are. It opens already scrolled to the
+end: the folder you are in matters more than the root you came from. The last element is not
+a button; you are already there.
 
-**L'arithmétique vit hors SwiftUI.** Appuyer sur un élément du fil veut dire soit dépiler N
-niveaux, soit pousser une destination quand on arrive de côté — depuis une recherche, un
-favori, un lien de widget — et la pile ne contient pas ce qu'on croit. C'est précisément d'ici
-que venait le bug « le fil d'Ariane bouclait », et c'était le dernier calcul de navigation sans
-vérification. `Breadcrumb.move(toStep:of:stacked:)` (`Keo/UI/Climb.swift`) décide, `BrowserView`
-exécute sur `\.stackPath`, et `Tests/breadcrumb.swift` épingle les trois cas — descente depuis
-la racine, arrivée de côté, et la frontière où la pile est exactement assez profonde.
+**The arithmetic lives outside SwiftUI.** Tapping an element of the breadcrumb means either
+popping N levels, or pushing a destination when you arrived sideways (from a search, a
+favourite, a widget link) and the stack does not contain what you think. This is precisely
+where the "the breadcrumb was looping" bug came from, and it was the last navigation
+computation without a check. `Breadcrumb.move(toStep:of:stacked:)` (`Keo/UI/Climb.swift`)
+decides, `BrowserView` executes on `\.stackPath`, and `Tests/breadcrumb.swift` pins the three
+cases: descent from the root, sideways arrival, and the boundary where the stack is exactly
+deep enough.
 
 ## Timeline
 
-Quand le tri est par date, la grille se regroupe et un rail apparaît à droite.
+When sorting by date, the grid groups itself and a rail appears on the right.
 
-- **Trois niveaux de regroupement** — années, mois, jours — dans le menu « … ».
-  Sur quinze ans de photos, la vue mois produit
-  cent-quatre-vingts en-têtes ; la vue années en produit quinze. Les cellules rétrécissent en
-  s'éloignant, pour voir la forme d'une année d'un coup d'œil.
-- **En-têtes collants**, avec le compte de photos. Un dossier qui tient dans un seul mois se
-  regroupe par jour : sinon le regroupement n'apprendrait rien.
-- Les dates viennent de l'EXIF dès que le scan ci-dessus est passé.
-- **Rail de densité.** Chaque période reçoit un plancher de 5 pt avant que le reste soit
-  réparti au prorata : en proportions pures, un mois creux devenait un trait d'un pixel,
-  invisible et impossible à viser au doigt. Les libellés d'année s'écartent des bords et ne
-  s'affichent qu'espacés de 26 pt, sinon ils se chevauchaient. La hauteur de chaque segment est la part de photos de la période, donc
-  la forme du rail *est* la distribution — un long segment, c'est un mois où tu as beaucoup
-  photographié. Les changements d'année sont étiquetés, avec au moins 64 pt entre deux : sur quinze ans, elles
-s'empilaient par-dessus la grille. Et sans trait de rattachement après le texte — « 2025 – » se
-lisait comme une étiquette privée de sa valeur. On le glisse pour sauter directement.
-- **Le rail ne prend que 16 pt au repos**, et s'élargit à 44 pt une fois le doigt parti en
-  glissade. Il en occupait 44 en permanence : un tiers de la colonne de droite ne pouvait plus
-  ouvrir une photo, le tapotement partait au rail. Et il faut maintenant parcourir 8 pt pour
-  l'armer, sinon un simple tapotement comptait comme une glissade et téléportait la grille.
-- Le segment de la période à l'écran est mis en avant, via la position des en-têtes rendus.
-- Les fichiers **sans date** forment une section en fin de liste plutôt que de disparaître.
+- **Three grouping levels**, years, months, days, in the "…" menu.
+  On fifteen years of photos, the month view produces
+  a hundred and eighty headers; the year view produces fifteen. Cells shrink as you zoom
+  out, to see the shape of a year at a glance.
+- **Sticky headers**, with the photo count. A folder that fits in a single month groups by
+  day: otherwise the grouping would teach nothing.
+- Dates come from EXIF as soon as the scan above has run.
+- **Density rail.** Each period gets a 5 pt floor before the rest is shared out pro rata: in
+  pure proportions, a sparse month became a one-pixel line, invisible and impossible to hit
+  with a finger. Year labels keep away from the edges and are only shown 26 pt apart,
+  otherwise they overlapped. The height of each segment is the period's share of photos, so
+  the shape of the rail *is* the distribution: a long segment is a month where you
+  photographed a lot. Year changes are labelled, with at least 64 pt between two: over fifteen years, they
+piled up over the grid. And no connecting line after the text: "2025 –" read like a label
+missing its value. Drag it to jump straight there.
+- **The rail only takes 16 pt at rest**, and widens to 44 pt once the finger has set off
+  dragging. It used to take 44 permanently: a third of the right-hand column could no longer
+  open a photo, the tap went to the rail. And it now takes 8 pt of travel to arm it, otherwise
+  a simple tap counted as a drag and teleported the grid.
+- The segment of the on-screen period is highlighted, via the position of the rendered headers.
+- **Undated** files form a section at the end of the list rather than disappearing.
 
-Le rail s'efface en mode sélection, et le tri par nom revient à une grille continue sans
-sections — y plaquer des mois n'aurait aucun sens.
+The rail fades out in selection mode, and sorting by name goes back to a continuous grid
+without sections; slapping months onto it would make no sense.
 
-## Tri
+## Sorting
 
-Menu « … » → trois ordres, mémorisés pour toute l'app : plus récentes d'abord (défaut),
-plus anciennes d'abord, par nom. Changer d'ordre ne redemande rien à la box, le tri est local.
+"…" menu → three orders, remembered for the whole app: newest first (default), oldest first,
+by name. Changing the order asks the box for nothing, the sort is local.
 
-Deux choix à connaître :
+Two choices worth knowing:
 
-- **La date est celle de modification du fichier**, pas la date de prise de vue. L'API ne
-  renvoie que `modification`. Lire la date EXIF demanderait de télécharger un bout de chaque
-  fichier avant de pouvoir trier, ce qui est intenable sur un grand dossier.
-- **Les dossiers restent alphabétiques.** Le mtime d'un dossier dit quand on a écrit dedans
-  pour la dernière fois, ce qui n'est presque jamais ce qu'on entend par « la date de ces photos ».
+- **The date is the file's modification date**, not the capture date. The API only returns
+  `modification`. Reading the EXIF date would mean downloading a piece of each file before
+  being able to sort, which is untenable on a large folder.
+- **Folders stay alphabetical.** A folder's mtime says when something was last written into
+  it, which is almost never what anyone means by "the date of these photos".
 
-Les fichiers sans date vont à la fin, pas au 1ᵉʳ janvier 1970.
+Undated files go at the end, not on 1 January 1970.
 
-## Ce que « sans date » veut vraiment dire
+## What "undated" really means
 
-Mesuré sur 120 fichiers tirés au sort parmi les 1 584 que l'index tient pour lus et sans date :
+Measured on 120 files drawn at random from the 1 584 the index holds as read and undated:
 
-| Verdict | Nombre |
+| Verdict | Count |
 |---|---|
-| Fichier entier lu, aucune date | **111** |
-| Date lisible aujourd'hui, donc échec passé | 7 (toutes des vidéos) |
-| Date entre 128 et 512 Ko | 1 |
-| Aucune date dans les atomes | 1 |
+| Whole file read, no date | **111** |
+| Date readable today, so a past failure | 7 (all videos) |
+| Date between 128 and 512 KB | 1 |
+| No date in the atoms | 1 |
 
-**92,5 % n'ont réellement aucune date de prise de vue** — 94 `.jpg`, 7 `.png`, 8 `.jpeg` : des
-captures d'écran, des images reçues, des téléchargements. Aucune fenêtre de lecture ne la
-trouvera, parce qu'elle n'existe pas. C'est un résultat utile : il clôt la question.
+**92.5 % genuinely have no capture date**: 94 `.jpg`, 7 `.png`, 8 `.jpeg`: screenshots,
+received images, downloads. No read window will find it, because it does not exist. That is a
+useful result: it closes the question.
 
-**Sept vidéos sur huit se lisent pourtant parfaitement aujourd'hui.** Leur blanc n'est pas un
-fait sur le fichier mais un échec au moment de l'indexation — lecture coupée, plage tronquée.
-`videoRetryVersion` les remet en file, les vidéos seulement : relire les 1 584 pour récupérer
-la centaine qui sont des vidéos coûterait vingt fois le gain.
+**Seven videos out of eight nevertheless read perfectly today.** Their blank is not a fact
+about the file but a failure at indexing time: read cut short, truncated range.
+`videoRetryVersion` puts them back in the queue, the videos only: re-reading all 1 584 to
+recover the hundred or so that are videos would cost twenty times the gain.
 
-### Deux pistes écartées, avec leurs chiffres
+### Two leads ruled out, with their numbers
 
-- **Une troisième fenêtre de 512 Ko** récupérerait 1 fichier sur 120. Il faudrait la payer sur
-  *tous* les échecs des deux premières, soit ~800 Mo de lecture pour une quinzaine de dates.
-- **La date dans le nom de fichier** (`IMG_20190714_103000.jpg`) ne concerne que 5 fichiers sur
-  120 — et c'est **une autre nature de vérité**. Une date d'étiquette n'est pas une date de
-  prise de vue, et les mélanger silencieusement abîmerait la seule chose que cet index promet.
-  Le parseur existe et reste testé, branché sur rien : la mesure pour laquelle il a été
-  écrit est faite, et ce qu'il débloquerait — une date d'étiquette *annoncée comme telle* sur
-  la timeline — est une décision produit que personne n'a prise.
+- **A third 512 KB window** would recover 1 file in 120. It would have to be paid on *every*
+  failure of the first two, about 800 MB of reading for fifteen or so dates.
+- **The date in the file name** (`IMG_20190714_103000.jpg`) concerns only 5 files in 120, and
+  it is **a different kind of truth**. A label date is not a capture date, and silently mixing
+  them would damage the one thing this index promises. The parser exists and stays tested,
+  wired to nothing: the measurement it was written for is done, and what it would unlock, a
+  label date *announced as such* on the timeline, is a product decision nobody has made.
 
-## Les 227 à une face, jugées
+## The one-sided 227s, judged
 
-Mesuré sur la bibliothèque entière : **172 dé-appariées, 5 gardées, 0 sans date comparable**.
-Les gardées sont toutes à **moins de deux minutes** d'écart ; la plus serrée des dé-appariées
-est à **14,5 jours**, et plusieurs dépassent les mille jours. Le seuil de 16 h est loin des
-données des deux côtés : il n'y avait pas de zone grise à arbitrer.
+Measured on the whole library: **172 unpaired, 5 kept, 0 without a comparable date**. The
+kept ones are all **under two minutes** apart; the tightest of the unpaired is at
+**14.5 days**, and several exceed a thousand days. The 16 h threshold is far from the data on
+both sides: there was no grey area to arbitrate.
+## Indexing without being interrupted
 
-## Indexer sans être interrompu
+The request was "let indexing carry on in the background or while asleep". The investigation
+overturned the premise: **a full pass takes a quarter of an hour**, not a night: 41,000 files
+at 50-60 per second, plus the listings. The problem was never to hold on for hours, but to not
+be cut off for fifteen minutes.
 
-La demande était « que l'indexation continue en arrière-plan ou en veille ». La recherche a
-renversé la prémisse : **un passage complet dure un quart d'heure**, pas une nuit — 41 000
-fichiers à 50-60 par seconde, plus les listings. Le problème n'a jamais été de tenir des
-heures, mais de ne pas être coupé pendant quinze minutes.
+Two answers, from the safest to the most recent:
 
-Deux réponses, de la plus sûre à la plus récente :
+- **The screen stays awake** as long as the Indexing screen is open and a pass is running. No
+  entitlement, no background mode, not a line of the lifecycle touched: the app stays in the
+  foreground, so every existing guarantee applies as is. "Plug it in and leave it on that
+  screen" is a legitimate product answer.
+- **`BGContinuedProcessingTask`** (iOS 26): a pass started *by a tap* survives going to the
+  background and locking, with a system gauge and a cancel button. It is the literal answer to
+  the request, and it did not exist before iOS 26.
 
-- **L'écran reste éveillé** tant que l'écran Indexation est ouvert et qu'un passage tourne.
-  Aucun entitlement, aucun mode d'arrière-plan, aucune ligne du cycle de vie touchée : l'app
-  reste au premier plan, donc toutes les garanties existantes s'appliquent telles quelles.
-  « Branche-le et laisse-le sur cet écran » est une réponse produit légitime.
-- **`BGContinuedProcessingTask`** (iOS 26) : un passage lancé *au doigt* survit au passage en
-  arrière-plan et au verrouillage, avec une jauge du système et un bouton d'annulation. C'est
-  la réponse littérale à la demande, et elle n'existait pas avant iOS 26.
+### What the device actually showed
 
-### Ce que l'appareil a réellement montré
-
-Premier essai mesuré, traces à l'appui :
+First measured attempt, traces to back it up:
 
 ```
 20:45:00.091  bgcontinued submitted folders=75
@@ -1700,187 +1665,184 @@ Premier essai mesuré, traces à l'appui :
 20:45:20.972  bgcontinued progress 144/145
 ```
 
-**Le mécanisme fonctionne** : l'app passe en arrière-plan, le `halt()` est sauté, et la
-progression monte de 25 à 144 dossiers sans l'app au premier plan. C'est observé, plus supposé.
+**The mechanism works**: the app goes to the background, the `halt()` is skipped, and progress
+climbs from 25 to 144 folders without the app in the foreground. That is observed, no longer
+assumed.
 
-**La tenue sur la durée ne l'est pas.** Les traces s'arrêtent net dix-huit secondes après le
-passage en arrière-plan, sans ligne de fin : le système a repris le processus pendant le
-verrouillage. « Continue en arrière-plan » est acquis ; « sans interruption en veille » ne
-l'est pas, et il serait malhonnête de l'écrire ailleurs que mesuré.
+**Holding up over time is not.** The traces stop dead eighteen seconds after going to the
+background, with no closing line: the system reclaimed the process during the lock. "Carries
+on in the background" is established; "without interruption while asleep" is not, and it would
+be dishonest to write it anywhere other than as measured.
 
-Ce qui a tenu, en revanche, est le plus important : **aucun `walk end`, donc aucune complétion
-déclarée, donc aucun balayage**. `resumeWanted` est resté vrai et la reprise au lancement
-suivant fonctionne. Le pire cas reste une pause, jamais une perte.
+What did hold, on the other hand, is what matters most: **no `walk end`, so no completion
+declared, so no sweep**. `resumeWanted` stayed true and resumption at the next launch works.
+The worst case remains a pause, never a loss.
 
-### La seule ligne touchée dans le cycle d'indexation
+### The only line touched in the indexing lifecycle
 
-L'observateur d'arrière-plan saute son `halt()` **uniquement si une tâche continue a réellement
-commencé** — pas si elle a été soumise. La nuance est tout : une requête qu'iOS aurait refusée
-laisserait sinon le parcours courir vers la suspension, c'est-à-dire exactement la forme du bug
-qui avait un jour fait balayer l'index.
+The background observer skips its `halt()` **only if a continued task has actually begun**, not
+if it was merely submitted. The nuance is everything: a request iOS would have refused would
+otherwise let the walk run on into suspension, which is exactly the shape of the bug that once
+swept the index.
 
-Et rien n'ajoute un chemin de complétion. C'est le critère de relecture : un diff qui crée un
-nouvel endroit où `walkCompleted` peut devenir vrai est faux. Une expiration passe par la même
-pause que l'arrière-plan (`pauseKeepingResume`), donc `WalkOutcome.isComplete(cancelled: true)`
-reste faux, aucun balayage n'a lieu et la reprise au prochain lancement fonctionne comme avant.
+And nothing adds a completion path. That is the review criterion: a diff that creates a new
+place where `walkCompleted` can become true is wrong. An expiry goes through the same pause as
+the background (`pauseKeepingResume`), so `WalkOutcome.isComplete(cancelled: true)` stays
+false, no sweep takes place and resumption at the next launch works as before.
 
-### Ce qui a été écarté
+### What was ruled out
 
-- **`URLSession` en configuration background** : conçue pour peu de gros transferts, pas pour
-  41 000 lectures de 24 Ko. Les transferts hors processus sont différables et iOS pénalise les
-  réveils fréquents — le débit effectif se compterait en jours. Et il faudrait réécrire le
-  cycle de vie que `CLAUDE.md` interdit de toucher sur raisonnement, pour un gain (survivre au
-  kill) que `resumeWanted` couvre déjà.
-- **L'entitlement multicast** : inutile. Keo fait de l'HTTP unicast vers un nom d'hôte qui
-  résout en IP publique — le trafic n'est même pas classé « réseau local » par iOS.
-- **Une tâche nocturne `BGProcessingTask`** : écartée au profit d'un `BGAppRefreshTask`, la
-  tâche courte et fréquente qu'iOS accorde volontiers — voir « La découverte périodique »
-  juste en dessous. Le risque nommé d'avance est tenu : un réveil à 3 h du matin ne passe
-  **jamais** par `Store.reconnectIfPossible`, dont le chemin d'échec supprime le jeton du
-  trousseau et dé-apparierait l'app en silence. `PeriodicDiscovery` abandonne sans rien tenter
-  si `Store.shared?.client` est nil.
+- **`URLSession` in a background configuration**: designed for a few large transfers, not for
+  41,000 reads of 24 KB. Out-of-process transfers are deferrable and iOS penalises frequent
+  wake-ups; the effective throughput would be counted in days. And it would mean rewriting the
+  lifecycle that `CLAUDE.md` forbids touching on reasoning alone, for a gain (surviving a kill)
+  that `resumeWanted` already covers.
+- **The multicast entitlement**: pointless. Keo does unicast HTTP to a hostname that resolves
+  to a public IP; iOS does not even classify the traffic as "local network".
+- **A nightly `BGProcessingTask`**: dropped in favour of a `BGAppRefreshTask`, the short,
+  frequent task iOS grants readily; see "Periodic discovery" just below. The risk named in
+  advance is honoured: a 3 a.m. wake-up **never** goes through `Store.reconnectIfPossible`,
+  whose failure path deletes the token from the Keychain and would silently unpair the app.
+  `PeriodicDiscovery` gives up without trying anything if `Store.shared?.client` is nil.
 
-### La découverte périodique
+### Periodic discovery
 
-Sans elle, Keo n'apprenait l'existence d'un fichier qu'en ouvrant le dossier qui le contient,
-ou en lançant une indexation à la main. Tant qu'on n'avait fait ni l'un ni l'autre, rien ne
-signalait qu'il y avait du neuf — il fallait y penser.
+Without it, Keo only learned a file existed by opening the folder that contains it, or by
+starting an indexing run by hand. Until one or the other had been done, nothing signalled that
+there was anything new; you had to think of it.
 
-`PeriodicDiscovery` (`Keo/Media/PeriodicDiscovery.swift`) demande un `BGAppRefreshTask` au
-plus tôt dans l'heure, et **liste seulement**. Elle ne lit aucune date : lire coûte un
-aller-retour réseau par fichier, et ce geste-là reste celui du propriétaire. Ce qu'elle fait
-tenir, c'est la connaissance de ce qui existe — après quoi l'accueil dit « N fichiers à lire »
-tout seul et la rangée « Indexation » passe à l'ambre.
+`PeriodicDiscovery` (`Keo/Media/PeriodicDiscovery.swift`) requests a `BGAppRefreshTask` at the
+earliest within the hour, and **only lists**. It reads no dates: reading costs one network
+round trip per file, and that gesture remains the owner's. What it keeps current is the
+knowledge of what exists, after which Home says "N fichiers à lire" (N files to read) on its
+own and the "Indexation" row turns amber.
 
-Un passage coûte peu sur une bibliothèque qui n'a pas bougé : un dossier dont la date de
-modification et le nombre d'enfants sont inchangés est sauté sans être listé, les sous-arbres
-techniques ne sont jamais parcourus, rien n'est téléchargé. Sur une bibliothèque qui a bougé,
-seules les branches qui ont bougé sont listées.
+A pass costs little on a library that has not moved: a folder whose modification date and
+child count are unchanged is skipped without being listed, technical subtrees are never walked,
+nothing is downloaded. On a library that has moved, only the branches that moved are listed.
 
-Quatre garde-fous, dans cet ordre : la demande suivante est soumise **avant** de travailler
-(sinon une expiration emporte la chaîne) ; pas de client ou autorisation perdue → abandon
-immédiat ; un passage déjà en cours gagne ; et une expiration passe par `pauseKeepingResume`,
-donc jamais par un chemin de complétion — aucun balayage ne peut venir d'un réveil.
+Four safeguards, in this order: the next request is submitted **before** doing any work
+(otherwise an expiry takes the chain down with it); no client or lost authorisation means
+immediate abandonment; a pass already in progress wins; and an expiry goes through
+`pauseKeepingResume`, so never through a completion path: no sweep can come from a wake-up.
 
-Le *handler* est enregistré dans `KeoApp.init`, pas dans un `.task` : `BGTaskScheduler` exige
-l'enregistrement avant la fin du lancement et **termine l'app** s'il la réveille pour un
-identifiant que personne n'a réclamé, or un `.task` ne tourne qu'après le premier rendu.
+The *handler* is registered in `KeoApp.init`, not in a `.task`: `BGTaskScheduler` requires
+registration before launch finishes and **terminates the app** if it wakes it for an identifier
+nobody has claimed, and a `.task` only runs after the first render.
 
-**Une découverte interrompue reprend en découverte.** Le scope ne survivait pas à l'intention
-de reprise : une expiration posait `resumeWanted`, et les deux chemins de reprise — le
-lancement suivant et le retour au premier plan — rappelaient `start` sans scope, c'est-à-dire
-en lecture. Une tâche de fond qui s'était contentée de lister se transformait donc en lecture
-de dates que personne n'avait demandée, ce qui est exactement ce que ce type refuse de faire.
-Seul `.discover` est persisté : `recheck` et `rebuild` ne le sont délibérément pas, leur purge
-ayant déjà eu lieu au départ de la passe — la rejouer à la reprise effacerait ce que la passe
-interrompue venait de reconstruire.
+**An interrupted discovery resumes as a discovery.** The scope did not survive the intent to
+resume: an expiry set `resumeWanted`, and both resumption paths, the next launch and the return
+to the foreground, called `start` again without a scope, that is, in read mode. A background
+task that had merely listed thus turned into a date read nobody had asked for, which is exactly
+what this type refuses to do. Only `.discover` is persisted: `recheck` and `rebuild`
+deliberately are not, their purge having already happened at the start of the pass; replaying
+it on resumption would erase what the interrupted pass had just rebuilt.
 
-**Ce qui reste à mesurer sur l'appareil.** `Store.shared` est une référence faible posée à la
-construction du `Store`, et `@StateObject` ne construit rien tant que le `body` n'a pas été
-évalué. Sur un réveil à froid, où iOS peut lancer le processus sans jamais créer la scène, la
-découverte abandonne proprement (`success: false`) au lieu de tourner. Autrement dit : acquis
-sur une app encore en mémoire, non vérifié sur un lancement de fond pur. À brancher à la
-console avant de l'écrire autrement — règle « mesurer, pas supposer ».
+**What remains to be measured on the device.** `Store.shared` is a weak reference set when the
+`Store` is constructed, and `@StateObject` constructs nothing until the `body` has been
+evaluated. On a cold wake-up, where iOS may launch the process without ever creating the scene,
+discovery gives up cleanly (`success: false`) instead of running. In other words: established
+on an app still in memory, unverified on a pure background launch. To be hooked up to the
+console before writing it any other way: the "measure, don't assume" rule.
 
-## Banc d'essai des lectures
+## Read benchmark
 
-`Indexer.parallel` a longtemps valu 3 par prudence, sans jamais avoir été vérifié. Le bon
-nombre est une propriété de la box et du réseau, pas du code : il se mesure. `ReadBench`
-(builds debug, bouton en bas de l'écran Indexation) lisait les mêmes prefixes de 24 Ko que
-l'indexeur, à plusieurs niveaux de parallélisme, et traçait le débit sur la console.
+`Indexer.parallel` was 3 for a long time, out of caution, without ever having been verified. The
+right number is a property of the box and the network, not of the code: it is measured.
+`ReadBench` (debug builds, button at the bottom of the Indexing screen) read the same 24 KB
+prefixes as the indexer, at several levels of parallelism, and traced the throughput to the
+console.
 
-**Le banc n'existe plus.** Il y a eu cinq sondes — parallélisme, identifiant live, verdict des
-paires, « pourquoi sans date », paires à une face — et toutes les cinq ont rendu leur verdict ;
-les verdicts sont dans ce fichier, c'est-à-dire là où on les relira. Une sonde dont la réponse
-est écrite est un échafaudage, et un échafaudage laissé debout finit par se lire comme de la
-structure : quatre cents lignes d'outillage, dont cent au milieu de l'écran Indexation, qui le
-rendaient pénible à relire.
+**The benchmark no longer exists.** There were five probes: parallelism, Live identifier, pair
+verdict, "why undated", one-sided pairs; and all five delivered their verdict; the verdicts are
+in this file, that is, where they will be read again. A probe whose answer is written down is
+scaffolding, and scaffolding left standing ends up reading as structure: four hundred lines of
+tooling, a hundred of them in the middle of the Indexing screen, which made it painful to
+reread.
 
-Ce qui reste est ce qui compte : les mesures ci-dessous, et les trois précautions au-dessus.
-Si un jour la box change et que `Indexer.parallel` doit être revérifié, c'est une centaine de
-lignes à réécrire — contre quatre cents à porter en attendant ce jour, qui n'est peut-être
-jamais venu.
+What remains is what counts: the measurements below, and the three precautions above. If one
+day the box changes and `Indexer.parallel` has to be re-verified, that is a hundred lines to
+rewrite, against four hundred to carry while waiting for a day that may never have come.
 
-Trois précautions, chacune apprise en lisant un résultat faux :
+Three precautions, each learned by reading a wrong result:
 
-- **Une tranche de fichiers par niveau.** Rejouer les mêmes fichiers d'un niveau à l'autre
-  mesure le cache de la box, et chaque niveau paraît rapide dans l'ordre où il est passé.
-- **Fenêtre contiguë, à un décalage tiré au sort.** La première version gardait l'ordre de la
-  liste depuis le début, donc relancer la mesure retombait sur exactement les mêmes photos —
-  le second passage a donné 243 f/s au lieu de 52, avec une courbe qui ne fait plus que
-  monter. C'était le cache, pas la box.
-- **Contiguë, et pas un mélange de tout le dossier.** La correction suivante mélangeait le
-  pool : tous les niveaux sont alors tombés à 30 f/s quelle que soit la concurrence. Des
-  lectures éparpillées sur huit mille photos sont dominées par les déplacements de tête du
-  disque de la box, ce qui n'est pas la charge réelle — l'indexeur lit un dossier dans l'ordre
-  de sa liste. Mesurer autre chose que la charge réelle donne un chiffre vrai et inutile.
-- **Ordre des niveaux tiré au sort.** Sinon une dérive du réseau pendant la mesure flatte
-  systématiquement les niveaux passés en premier.
+- **One slice of files per level.** Replaying the same files from one level to the next measures
+  the box's cache, and each level looks fast in the order it ran.
+- **A contiguous window, at a randomly drawn offset.** The first version kept the list order
+  from the start, so rerunning the measurement landed on exactly the same photos; the second
+  pass gave 243 f/s instead of 52, with a curve that only goes up. That was the cache, not the
+  box.
+- **Contiguous, and not a shuffle of the whole folder.** The next fix shuffled the pool: every
+  level then fell to 30 f/s whatever the concurrency. Reads scattered across eight thousand
+  photos are dominated by the head movements of the box's disk, which is not the real load; the
+  indexer reads a folder in the order of its listing. Measuring anything other than the real
+  load gives a number that is true and useless.
+- **Level order drawn at random.** Otherwise a network drift during the measurement
+  systematically flatters the levels that ran first.
 
-Photos uniquement : la date d'une vidéo coûte un nombre variable de requêtes et mesurerait le
-parseur. N'écrit rien, ni sur le NAS ni dans l'index.
+Photos only: a video's date costs a variable number of requests and would measure the parser.
+Writes nothing, neither to the NAS nor to the index.
 
-Un seul passage ne suffit pas à conclure. La constante ne bouge que sur plusieurs passages
-indépendants qui disent la même chose.
+A single pass is not enough to conclude. The constant only moves on several independent passes
+that say the same thing.
 
-### Ce que quatre passages ont donné
+### What four passes gave
 
-| parallel | 10:28 | 14:05 | 14:07 | 14:09 | rang moyen |
+| parallel | 10:28 | 14:05 | 14:07 | 14:09 | mean rank |
 |---|---|---|---|---|---|
-| 1 | 36,3 | 42,5 | 22,5 | 21,2 | 7,0 |
-| 2 | 52,5 | 43,7 | 40,4 | 30,6 | 5,75 |
-| 3 | 48,8 | 60,0 | 91,6 | 31,7 | 4,5 |
-| 4 | 63,2 | 64,6 | 64,6 | 50,4 | **2,5** |
-| 6 | 56,5 | 71,2 | 153,9 | 40,5 | 2,75 |
-| 8 | 70,7 | 59,4 | 164,4 | 42,2 | **2,5** |
-| 12 | 67,4 | 63,4 | 60,6 | 42,5 | 3,0 |
+| 1 | 36.3 | 42.5 | 22.5 | 21.2 | 7.0 |
+| 2 | 52.5 | 43.7 | 40.4 | 30.6 | 5.75 |
+| 3 | 48.8 | 60.0 | 91.6 | 31.7 | 4.5 |
+| 4 | 63.2 | 64.6 | 64.6 | 50.4 | **2.5** |
+| 6 | 56.5 | 71.2 | 153.9 | 40.5 | 2.75 |
+| 8 | 70.7 | 59.4 | 164.4 | 42.2 | **2.5** |
+| 12 | 67.4 | 63.4 | 60.6 | 42.5 | 3.0 |
 
-Chaque niveau est classé **à l'intérieur de son propre passage**, pas comparé aux autres
-passages : le débit absolu varie d'un facteur deux d'un passage à l'autre, et une moyenne des
-débits bruts laisserait le passage de 14:07 décider pour les trois autres. Celui-là est à
-jeter — 153 et 164 f/s à 30 Mb/s, c'est du cache : lancé deux minutes après le précédent, sa
-fenêtre aléatoire a recouvert la sienne. C'est la limite résiduelle du banc, et elle se voit
-au débit absolu.
+Each level is ranked **within its own pass**, not compared with the other passes: absolute
+throughput varies by a factor of two from one pass to the next, and an average of raw
+throughputs would let the 14:07 pass decide for the other three. That one is to be thrown out:
+153 and 164 f/s at 30 Mb/s is cache; started two minutes after the previous one, its random
+window overlapped that one's. It is the benchmark's residual limit, and it shows in the
+absolute throughput.
 
-Conclusion : `parallel = 3` est sous le plateau dans les quatre passages, battu à chaque fois
-par au moins deux valeurs plus hautes. Retenu **4** plutôt que 8, qui a le même rang moyen :
-l'écart est dans le bruit et le plus petit nombre laisse davantage de box aux vignettes,
-seul coût que le banc ne mesure pas.
+Conclusion: `parallel = 3` is below the plateau in all four passes, beaten every time by at
+least two higher values. **4** was chosen rather than 8, which has the same mean rank: the gap
+is within the noise, and the smaller number leaves more of the box to the thumbnails, the only
+cost the benchmark does not measure.
 
-### Ce qu'il faut garder de la méthode
+### What to keep of the method
 
-Le banc est parti ; le chiffre et la façon de le réobtenir restent ici. Le bon nombre est une
-propriété de la box et du réseau : il redeviendra faux le jour où la Freebox change, où le
-disque du NAS change, ou où la taille du préfixe lu passe de 24 Ko à autre chose — le coût par
-lecture décide de la concurrence optimale. Ce jour-là, ce qui manquerait n'est pas le chiffre,
-c'est la méthode : il a fallu **trois résultats faux** avant d'en obtenir un honnête, et ces
-trois leçons sont les seules choses à ne pas reperdre.
+The benchmark is gone; the number and the way to obtain it again stay here. The right number is
+a property of the box and the network: it will become wrong again the day the Freebox changes,
+the NAS disk changes, or the size of the prefix read moves from 24 KB to something else; the
+cost per read decides the optimal concurrency. That day, what would be missing is not the
+number, it is the method: it took **three wrong results** before getting an honest one, and
+those three lessons are the only things not to lose again.
 
-1. **Une tranche de fichiers distincte par niveau de parallélisme** — rejouer les mêmes
-   fichiers mesure le cache, pas la box.
-2. **Fenêtre contiguë à décalage tiré au sort** — une tranche prise toujours au même endroit
-   mesure un endroit, pas une bibliothèque.
-3. **Ordre des niveaux tiré au sort** — sans ça, la dérive du réseau pendant la mesure se lit
-   comme un effet du parallélisme.
+1. **A distinct slice of files per parallelism level**: replaying the same files measures the
+   cache, not the box.
+2. **A contiguous window at a randomly drawn offset**: a slice always taken from the same place
+   measures a place, not a library.
+3. **Level order drawn at random**: without it, network drift during the measurement reads as
+   an effect of parallelism.
 
-Une centaine de lignes à réécrire ce jour-là, contre quatre cents à porter en attendant un
-jour qui n'est peut-être jamais venu.
+A hundred lines to rewrite that day, against four hundred to carry while waiting for a day that
+may never have come.
 
-## Enregistrer dans Photos : un piège de Swift 6
+## Saving to Photos: a Swift 6 trap
 
-`PHPhotoLibrary.performChanges` exécute son bloc sur sa propre file,
-`com.apple.PHPhotoLibrary.transaction.high`. Écrit comme méthode d'instance de `Downloader`,
-qui est `@MainActor`, le bloc héritait de cette isolation — et Swift 6 y insère alors un
-contrôle qui **piège** dès que Photos l'appelle : `dispatch_assert_queue_fail`, à chaque
-enregistrement.
+`PHPhotoLibrary.performChanges` runs its block on its own queue,
+`com.apple.PHPhotoLibrary.transaction.high`. Written as an instance method of `Downloader`,
+which is `@MainActor`, the block inherited that isolation, and Swift 6 then inserts a check
+that **traps** as soon as Photos calls it: `dispatch_assert_queue_fail`, on every save.
 
-Le symptôme trompait : le plantage arrivait juste après avoir accordé l'accès à la
-photothèque, donc il avait l'air lié à l'autorisation. Il ne l'était pas — avant de
-l'accorder, le code n'atteignait simplement jamais cette ligne.
+The symptom was misleading: the crash came right after granting access to the photo library,
+so it looked tied to the authorisation. It was not; before granting it, the code simply never
+reached that line.
 
-La fonction est `nonisolated` et `static`, et ne reçoit que des valeurs `Sendable` : il n'y a
-rien là-dedans que l'acteur ait à protéger. Trouvé en lisant le vrai rapport de plantage de
-l'appareil, pas en raisonnant :
+The function is `nonisolated` and `static`, and receives only `Sendable` values: there is
+nothing in there for the actor to protect. Found by reading the device's real crash report,
+not by reasoning:
 
 ```sh
 xcrun devicectl device info files --device <UDID> --domain-type systemCrashLogs | grep -i keo
@@ -1888,472 +1850,452 @@ xcrun devicectl device copy from --device <UDID> --domain-type systemCrashLogs \
   --source "Keo-….ips" --destination /tmp/
 ```
 
-## La barre d'actions du plein écran
+## The full-screen action bar
 
-Cinq cercles identiques, dans l'ordre où les fonctionnalités avaient été écrites. Le cœur —
-l'action la plus fréquente, la seule avec un retour haptique — se retrouvait à l'extrémité la
-plus difficile à atteindre pour un pouce, et le menu d'export portait une flèche *vers le bas*
-alors que la moitié de son contenu est « Partager ».
+Five identical circles, in the order the features had been written. The heart, the most
+frequent action, the only one with haptic feedback, ended up at the end hardest for a thumb to
+reach, and the export menu carried a *downward* arrow when half its contents is "Partager"
+(Share).
 
-**Le principe retenu : grouper par ce que l'action touche, puis ordonner par poids — la plus
-lourde là où l'œil commence, la plus légère là où le pouce se repose.**
+**The principle adopted: group by what the action touches, then order by weight, the heaviest
+where the eye starts, the lightest where the thumb rests.**
 
-| | Action | Pourquoi là |
+| | Action | Why there |
 |---|---|---|
-| 1 | Enregistrer / Partager | Déplace des octets hors du NAS : lent, délibéré, quitte l'app. Le plus loin du pouce au repos. |
-| 2 | Note | La plus rare des trois écritures d'index, donc le créneau intérieur le moins bon. |
-| 3 | Collection | Fréquence moyenne, position moyenne, collée au cœur parce que « mettre en favori / ranger » est un même geste mental. |
-| 4 | Favori | La plus fréquente, un tap, réversible : la meilleure position. |
-| — | Live | Détaché, dans sa propre bulle. Il ne modifie pas ce qui est enregistré mais ce qui est à l'écran — ce n'est pas la même famille. |
+| 1 | Save / Share | Moves bytes off the NAS: slow, deliberate, leaves the app. Furthest from the resting thumb. |
+| 2 | Note | The rarest of the three index writes, so the worst inner slot. |
+| 3 | Collection | Medium frequency, medium position, next to the heart because "favourite / file away" is a single mental gesture. |
+| 4 | Favourite | The most frequent, one tap, reversible: the best position. |
+| — | Live | Detached, in its own bubble. It does not change what is stored but what is on screen; not the same family. |
 
-Keo a ici un avantage qu'aucune galerie n'a : **ni Modifier ni Supprimer**, puisque le NAS est
-en lecture seule. Tout le problème du « destructif à l'extrémité » disparaît, et la barre peut
-s'organiser uniquement par poids et fréquence.
+Keo has an advantage here that no gallery has: **neither Edit nor Delete**, since the NAS is
+read-only. The whole "destructive at the end" problem disappears, and the bar can be organised
+by weight and frequency alone.
 
-### Ce qui change visuellement
+### What changes visually
 
-Une seule capsule pour les quatre, au lieu de cinq fonds séparés — c'est l'idiome des îlots de
-barre d'outils d'iOS 26, et c'est la vraie réponse à « pas très joli » : cinq objets flottants
-plus un trou fantôme se lisent comme du désordre, une capsule et une bulle se lisent comme deux
-objets. Verre liquide sur iOS 26, même géométrie en matériau en dessous.
+A single capsule for the four, instead of five separate backgrounds: that is the iOS 26 toolbar
+island idiom, and the real answer to "not very pretty": five floating objects plus a phantom
+hole read as clutter, one capsule and one bubble read as two objects. Liquid Glass on iOS 26,
+same geometry in material below.
 
-**La teinte ne sert qu'à l'état**, jamais à l'identité : le cœur plein, la note présente, le
-live en cours. Le glyphe de la note ne change plus (`text.quote` contre `text.quote.rtl` est
-indistinguable à cette taille), et celui du live non plus — `livephoto.slash` veut dire
-« effet Live désactivé » dans Photos, un autre verbe, et l'emprunter pour dire « arrêter »
-enseignerait la mauvaise chose.
+**Tint serves state only**, never identity: the filled heart, the note present, the Live in
+progress. The note glyph no longer changes (`text.quote` versus `text.quote.rtl` is
+indistinguishable at this size), and neither does the Live one: `livephoto.slash` means "Live
+effect off" in Photos, a different verb, and borrowing it to say "stop" would teach the wrong
+thing.
 
-### Le créneau conditionnel ne décale plus rien
+### The conditional slot no longer shifts anything
 
-La bulle Live est une **superposition**, pas un frère de la capsule : une superposition est
-positionnée, pas disposée contre ses voisins, donc son apparition ne peut pas déplacer la
-capsule. La garantie passe d'une discipline qu'il faut penser — le créneau fantôme en
-`Color.clear` qu'elle remplace — à une propriété de la géométrie.
+The Live bubble is an **overlay**, not a sibling of the capsule: an overlay is positioned, not
+laid out against its neighbours, so its appearance cannot move the capsule. The guarantee goes
+from a discipline one has to think about, the `Color.clear` phantom slot it replaces, to a
+property of the geometry.
 
-`maxWidth: 560` est toute la stratégie iPad : inerte sur iPhone, et sur une tablette la grappe
-reste un objet compact au centre plutôt que cinq glyphes éparpillés sur mille points.
+`maxWidth: 560` is the whole iPad strategy: inert on iPhone, and on a tablet the cluster stays
+a compact object in the centre rather than five glyphs scattered over a thousand points.
 
-### Deux bugs corrigés au passage
+### Two bugs fixed along the way
 
-- **La barre entière disparaissait pendant un téléchargement**, donc le cœur avec. Seul le
-  bouton d'export est désactivé maintenant : l'état se montre sur le contrôle qui l'a causé.
-- **La barre de progression ne s'effaçait pas** avec le glissement de fermeture, ce qui laissait
-  une bande opaque sous une photo déjà en train de rétrécir vers sa vignette.
+- **The whole bar disappeared during a download**, so the heart with it. Only the export button
+  is disabled now: the state shows on the control that caused it.
+- **The progress bar did not fade** with the dismiss swipe, which left an opaque band under a
+  photo already shrinking back towards its thumbnail.
 
-### Sur une vidéo, le bas appartient au lecteur
+### On a video, the bottom belongs to the player
 
-AVKit dessine son scrubber au bas de ses propres limites, exactement là où flotte la barre
-d'actions. Leur réserver à chacune une bande de l'écran fonctionnait en portrait et amputait
-la vidéo en paysage, où elle occupe tout l'écran : deux barres qui se disputent le même bord
-ne se règlent pas en les empilant.
+AVKit draws its scrubber at the bottom of its own bounds, exactly where the action bar floats.
+Reserving a band of the screen for each worked in portrait and cropped the video in landscape,
+where it fills the whole screen: two bars fighting over the same edge are not settled by
+stacking them.
 
-Sur une page vidéo, la barre d'actions disparaît donc et ses quatre entrées remontent dans un
-menu du bandeau supérieur. Rien n'est perdu, le lecteur garde ses commandes, et ça tient dans
-les deux orientations.
+On a video page, the action bar therefore disappears and its four entries move up into a menu
+in the top banner. Nothing is lost, the player keeps its controls, and it holds in both
+orientations.
 
-## Transition de zoom grille ↔ photo
+## Zoom transition between grid and photo
 
-La photo sort de sa vignette et y retourne, au lieu d'un fondu au noir : `matchedTransitionSource`
-sur chaque cellule, `navigationTransition(.zoom(sourceID:in:))` sur la visionneuse. API iOS 18,
-rien à conditionner puisque c'est la cible du projet.
+The photo comes out of its thumbnail and goes back into it, instead of a fade to black:
+`matchedTransitionSource` on each cell, `navigationTransition(.zoom(sourceID:in:))` on the
+viewer. iOS 18 API, nothing to gate since that is the project's target.
 
-Trois détails sans lesquels ça ne marche qu'à moitié :
+Three details without which it only half works:
 
-- **La cellule d'arrivée suit la pagination.** La visionneuse renvoie la photo courante, donc
-  fermer sur la vingtième photo revient sur *celle-là*, pas sur celle qu'on avait touchée.
-- **La grille s'y repositionne avant que la transition joue.** Un zoom vers une cellule sortie
-  de l'écran n'a nulle part où atterrir.
-- **La grille ne se re-trie pas sous la visionneuse.** Pendant l'indexation, les dates du
-  dossier peuvent arriver alors qu'une photo est en plein écran. Les appliquer re-triait une
-  grille que personne ne voyait, puis la fermeture recentrait sur la *nouvelle* position de la
-  photo — le lecteur refaisait surface au milieu d'autres dates, sans retrouver les siennes.
-  L'ancre `restore` du premier correctif ne couvrait pas ce chemin : elle jouait sous le
-  voile, et le recentrage de fermeture passait par-dessus. Les dates sont donc mises en
-  attente et appliquées à la fermeture, une fois la transition retombée, avec l'ancre
-  habituelle — un re-tri derrière une photo travaille pour un public de personne.
+- **The landing cell follows pagination.** The viewer returns the current photo, so closing on
+  the twentieth photo comes back to *that one*, not to the one that was tapped.
+- **The grid repositions there before the transition plays.** A zoom towards a cell that has
+  left the screen has nowhere to land.
+- **The grid does not re-sort under the viewer.** During indexing, the folder's dates can
+  arrive while a photo is in full screen. Applying them re-sorted a grid nobody was looking at,
+  then the dismissal recentred on the photo's *new* position: the reader resurfaced in the
+  middle of other dates, without finding their own. The `restore` anchor of the first fix did
+  not cover this path: it played under the veil, and the dismissal recentring went over it.
+  The dates are therefore held and applied on dismissal, once the transition has settled, with
+  the usual anchor; a re-sort behind a photo works for an audience of nobody.
 
-Le geste de fermeture maison et la transition système veulent piloter la même animation : la
-photo est rendue à son cadre naturel avant `dismiss()`, sinon le zoom démarre d'une image déjà
-réduite par le glissement.
+The home-made dismiss gesture and the system transition want to drive the same animation: the
+photo is returned to its natural frame before `dismiss()`, otherwise the zoom starts from an
+image already shrunk by the swipe.
 
-## Le bug de la grille au retour du plein écran
+## The grid bug on return from full screen
 
-Rapporté deux fois : ouvrir une photo, rester un moment, fermer — et la grille montre autre
-chose, « d'autres dates », impossible de retrouver ses photos ; sortir du dossier et revenir
-répare.
+Reported twice: open a photo, stay a while, close, and the grid shows something else, "other
+dates", impossible to find one's photos again; leaving the folder and coming back fixes it.
 
-**Première théorie, réfutée.** L'indexation publie ses dates par lots, la grille se retriait
-derrière la photo, et la fermeture scrollait vers la photo regardée — désormais ailleurs. Le
-correctif (ne pas retrier tant qu'une photo est ouverte) est en place et juste en soi, mais la
-trace du second signalement dit `pending=0` et l'indexation était terminée : **ce n'est pas
-le mécanisme**.
+**First theory, refuted.** Indexing publishes its dates in batches, the grid re-sorted behind
+the photo, and the dismissal scrolled to the photo being viewed, now elsewhere. The fix (no
+re-sorting while a photo is open) is in place and right in itself, but the trace of the second
+report says `pending=0` and indexing was finished: **that is not the mechanism**.
 
-Ce que la trace dit par ailleurs : `viewer dismissed anchor=…/IMG_0984.JPEG at=364`. L'ancre
-n'est donc pas perdue, et le scroll de retour vise délibérément l'index 364.
+What the trace says besides: `viewer dismissed anchor=…/IMG_0984.JPEG at=364`. So the anchor
+is not lost, and the return scroll deliberately targets index 364.
 
-**Deuxième théorie, celle qui tient.** Les traces horodatées donnent la réponse en cinq
-lignes : rien ne bouge pendant les trente secondes passées sur la photo, et le seul événement
-à la fermeture est le `scrollTo` de retour lui-même.
+**Second theory, the one that holds.** The timestamped traces give the answer in five lines:
+nothing moves during the thirty seconds spent on the photo, and the only event on dismissal is
+the return `scrollTo` itself.
 
-Une photo s'ouvre depuis une cellule **qui est à l'écran par définition** — le scroll n'avait
-donc rien à réparer. Mais `scrollTo` sur une liste paresseuse de huit mille cellules, en
-sections de tailles très inégales, doit *estimer* la position de rangées qu'il n'a jamais
-créées. Il atterrissait ailleurs. Sortir du dossier réparait parce qu'un chargement frais
-recommence proprement en haut.
+A photo opens from a cell **that is on screen by definition**, so the scroll had nothing to
+repair. But `scrollTo` on a lazy list of eight thousand cells, in sections of very unequal
+sizes, has to *estimate* the position of rows it has never created. It landed elsewhere.
+Leaving the folder fixed it because a fresh load starts cleanly at the top.
 
-Le scroll de retour ne se déclenche donc plus que si la pagination dans la visionneuse a
-quitté la cellule d'origine — le seul cas où il a quelque chose à rattraper.
+The return scroll therefore only fires if pagination in the viewer has left the original cell,
+the only case where it has something to catch up on.
 
-**Troisième théorie, et la vraie cause.** Le bug a survécu à ça aussi, et les traces ont enfin
-montré l'essentiel : `load folder=… loaded=false` **toutes les six secondes**. L'état de la
-vue repartait de zéro — elle était détruite et reconstruite, repeignant le cache de 14 593
-éléments puis le listing frais, emportant la position de lecture à chaque cycle.
+**Third theory, and the real cause.** The bug survived that too, and the traces finally showed
+the essential: `load folder=… loaded=false` **every six seconds**. The view's state was
+starting from scratch; it was being destroyed and rebuilt, repainting the cache of 14,593 items
+then the fresh listing, taking the reading position with it on every cycle.
 
-La cause est structurelle. `BrowserView` **se pousse elle-même**, et chaque instance
-redéclarait `navigationDestination` pour `BrowserSource` *et* pour `Item`. Trois niveaux de
-navigation, c'est trois déclarations concurrentes pour les mêmes types dans une même pile —
-cas où SwiftUI ne promet rien, et où ce qu'il fait est reconstruire la destination, donc
-détruire son état.
+The cause is structural. `BrowserView` **pushes itself**, and each instance redeclared
+`navigationDestination` for `BrowserSource` *and* for `Item`. Three levels of navigation is
+three competing declarations for the same types in a single stack, a case where SwiftUI
+promises nothing, and where what it does is rebuild the destination, thus destroy its state.
 
-Les destinations se déclarent maintenant **une seule fois, à la racine de chaque pile**, et
-les vues poussées en héritent. Les deux correctifs précédents restent : ils étaient justes
-chacun pour leur cas, ils ne traitaient simplement pas celui-là.
+Destinations are now declared **once, at the root of each stack**, and pushed views inherit
+them. The two previous fixes stay: each was right for its case, they simply did not handle this
+one.
 
-## Ce qui se réévalue pendant le scroll
+## What gets re-evaluated during scroll
 
-Trois choses se cumulaient sur la grille de 14 600 éléments, et toutes les trois pendant le
-scroll :
+Three things were piling up on the 14,600-item grid, and all three during scroll:
 
-- Chaque en-tête épinglé publiait sa position par `PreferenceKey` à chaque frame, et
-  `onPreferenceChange` écrivait un `@State` de `BrowserView` — donc réévaluait ses huit cents
-  lignes de corps, par frame. Renvoyer une préférence dans l'état du parent est la façon
-  canonique de défaire les conteneurs paresseux qui se trouvent en dessous.
-- Chacune de ces réévaluations reconstruisait `Array(items.enumerated())` pour chaque section
-  instanciée : un mois de 5 000 photos payait 5 000 allocations de tuples par frame, juste
-  pour alimenter `ForEach`.
-- Le geste de fermeture du plein écran cherchait la photo courante par balayage linéaire du
-  tableau, à chaque frame du glissement.
+- Each pinned header published its position via `PreferenceKey` on every frame, and
+  `onPreferenceChange` wrote a `@State` of `BrowserView`, so re-evaluated its eight hundred
+  lines of body, per frame. Feeding a preference back into the parent's state is the canonical
+  way to undo the lazy containers beneath it.
+- Each of those re-evaluations rebuilt `Array(items.enumerated())` for every instantiated
+  section: a month of 5,000 photos paid 5,000 tuple allocations per frame, just to feed
+  `ForEach`.
+- The full-screen dismiss gesture looked for the current photo by a linear sweep of the array,
+  on every frame of the swipe.
 
-La section active vit maintenant dans un `SectionCursor` observable que **seul le rail** lit :
-le corps de la grille ne s'y abonne plus, donc seul le rail s'invalide. Les positions sont
-pré-calculées une fois par chargement dans un dictionnaire, et la visionneuse en a un aussi.
+The active section now lives in an observable `SectionCursor` that **only the rail** reads: the
+grid body no longer subscribes to it, so only the rail invalidates. Positions are precomputed
+once per load into a dictionary, and the viewer has one too.
 
-## Le périmètre d'un sous-arbre était un balayage
+## A subtree's extent used to be a sweep
 
-`substr(path, 1, length(?1)) = ?1` enveloppe la colonne dans des appels de fonction, ce qui
-rend le prédicat inutilisable par l'index sur `path` : **chacun des sept appelants balayait la
-table entière**. Et `hasChildFolders` était appelé une fois par dossier du parcours — à
-4 799 dossiers, quelques millions de visites de lignes par passage, pour une question dont la
-réponse n'était lue que dans un cas sur deux.
+`substr(path, 1, length(?1)) = ?1` wraps the column in function calls, which makes the
+predicate unusable by the index on `path`: **every one of the seven callers swept the whole
+table**. And `hasChildFolders` was called once per folder of the walk; at 4,799 folders, a few
+million row visits per pass, for a question whose answer was only read in one case out of two.
 
-Deux corrections :
+Two fixes:
 
-- Le périmètre devient une **plage**, `path > ?1 AND path < ?2`, où `?2` est le préfixe dont
-  le dernier octet est incrémenté. `/Photos/` devient `/Photos0` ; à la racine `/` devient
-  `0`, ce qui tombe juste puisque `/` vaut 0x2F et `0` vaut 0x30. Les deux bornes cherchent
-  directement dans l'index.
-- `hasChildFolders` n'est plus interrogé que lorsque sa réponse peut changer quelque chose.
+- The extent becomes a **range**, `path > ?1 AND path < ?2`, where `?2` is the prefix with its
+  last byte incremented. `/Photos/` becomes `/Photos0`; at the root `/` becomes `0`, which
+  works out since `/` is 0x2F and `0` is 0x30. Both bounds seek directly into the index.
+- `hasChildFolders` is only queried when its answer can change something.
 
-Le piège des plages par préfixe — `/A` et `/AB` sont voisins dans l'ordre des chaînes — est
-épinglé dans `Tests/stats.swift`, à côté du cas de la racine.
+The trap of prefix ranges, `/A` and `/AB` being neighbours in string order, is pinned in
+`Tests/stats.swift`, next to the root case.
 
-## Tenue à l'échelle
+## Holding up at scale
 
-La galerie est supposée très grande. Ce qui a été fait pour ça :
+The gallery is assumed to be very large. What was done for that:
 
-| Point | Choix |
+| Point | Choice |
 |---|---|
-| Mémoire des vignettes | Budget en **octets** (80 Mo), pas en nombre d'images, et purge sur alerte mémoire |
-| Qualité des aperçus | Un aperçu embarqué est refusé s'il fait moins de 75 % de la taille demandée, ou si son ratio ne correspond pas à la photo |
-| Concurrence | Deux portes : 4 fetchs visibles, 2 préchargements — un prefetch ne bloque jamais une cellule à l'écran |
-| Doublons | Une tâche par clé, partagée par tous les appelants |
-| Préchargement | Fenêtre de 24 éléments en avance sur le défilement |
-| Cache disque | 512 Mo, éviction LRU au lancement — vraiment LRU, voir ci-dessous |
-| Grandes images | Téléchargées sur disque puis décodées depuis le fichier — jamais de `Data` plein format en mémoire |
-| Découpage du dossier | `FolderContents` calculé une fois au chargement, pas à chaque rendu |
-| Visionneuse | `ScrollView` paginé + `LazyHStack`, pas un `TabView` qui garde l'identité de tous les éléments |
+| Thumbnail memory | Budget in **bytes** (80 MB), not in number of images, and purge on memory warning |
+| Preview quality | An embedded preview is refused if it is under 75% of the requested size, or if its ratio does not match the photo |
+| Concurrency | Two gates: 4 visible fetches, 2 prefetches; a prefetch never blocks a cell on screen |
+| Duplicates | One task per key, shared by all callers |
+| Prefetching | Window of 24 items ahead of the scroll |
+| Disk cache | 512 MB, LRU eviction at launch; genuinely LRU, see below |
+| Large images | Downloaded to disk then decoded from the file; never a full-size `Data` in memory |
+| Folder split | `FolderContents` computed once at load, not on every render |
+| Viewer | Paginated `ScrollView` + `LazyHStack`, not a `TabView` that keeps every item's identity |
 
-Les idées viennent de [Nuke](https://github.com/kean/Nuke) ; le fetch est maison parce qu'une
-vignette Keo est une requête Range de 256 Ko plus un décodage d'aperçu embarqué, pas un
-téléchargement d'URL.
+The ideas come from [Nuke](https://github.com/kean/Nuke); the fetch is home-made because a Keo
+thumbnail is a 256 KB Range request plus an embedded-preview decode, not a URL download.
 
-### Le LRU du cache disque : un soupçon, et sa mesure
+### The disk cache's LRU: a suspicion, and its measurement
 
-`trim()` classe par `contentAccessDate ?? contentModificationDate`, mais `touch()` ne repose
-que la date de **modification**. Le soupçon était net : si l'atime ne bougeait pas tout seul,
-l'éviction suivrait l'ordre d'écriture et jetterait précisément ce qu'on est en train de
-regarder — un LRU dégénéré en FIFO, invisible à la lecture du code.
+`trim()` sorts by `contentAccessDate ?? contentModificationDate`, but `touch()` only resets the
+**modification** date. The suspicion was clear: if the atime did not move on its own, eviction
+would follow write order and throw out precisely what is being looked at; an LRU degenerated
+into a FIFO, invisible when reading the code.
 
-`stat(2)` dit le contraire : une lecture par `Data(contentsOf:, .mappedIfSafe)` **avance
-l'atime toute seule**, et `touch()` avance les deux. Rien à corriger.
+`stat(2)` says otherwise: a read via `Data(contentsOf:, .mappedIfSafe)` **advances the atime on
+its own**, and `touch()` advances both. Nothing to fix.
 
-Ce qui vaut la peine d'être retenu est le piège rencontré en chemin : une première mesure
-disait l'inverse, parce qu'elle relisait les dates **par la même `URL`** — or `URL` met ses
-`resourceValues` en cache, et rend donc éternellement la première réponse. Mesurer avec
-l'outil qui ment est pire que ne pas mesurer : on repart avec une certitude fausse. La mesure
-et son piège sont consignés dans le commentaire de `touch()`, pour qu'un prochain audit ne
-resoulève pas la question.
+What is worth remembering is the trap met along the way: a first measurement said the
+opposite, because it reread the dates **through the same `URL`**, and `URL` caches its
+`resourceValues`, so forever returns the first answer. Measuring with a tool that lies is worse
+than not measuring: you leave with a false certainty. The measurement and its trap are recorded
+in the comment on `touch()`, so that a future audit does not reopen the question.
 
-## Couverture des tuiles de dossier
+## Folder tile covers
 
-Une tuile de dossier montre une photo de l'intérieur plutôt qu'un rectangle teinté. Le choix
-se fait **dans l'index SQLite**, sans rien demander à la box : les fichiers du sous-arbre y
-sont déjà, avec leur genre et leur date de prise de vue.
+A folder tile shows a photo from inside rather than a tinted rectangle. The choice is made **in
+the SQLite index**, without asking the box anything: the subtree's files are already there,
+with their kind and their capture date.
 
-La règle est `ORDER BY kind, capture DESC, path, name LIMIT 1`, lue dans cet ordre :
+The rule is `ORDER BY kind, capture DESC, path, name LIMIT 1`, read in that order:
 
-- **Une image avant une vidéo**, même si la vidéo est plus récente. Une couverture vidéo coûte
-  une session AVFoundation ; une image coûte la sonde de 256 Ko que le pipeline fait de toute
-  façon.
-- **La capture la plus récente**, parce que la dernière chose qui s'est passée dans un dossier
-  dit mieux ce qu'il contient qu'une photo tirée au hasard. SQLite classe `NULL` en dernier en
-  `DESC` : une photo sans EXIF ne passe donc pas devant une photo datée.
-- **Le chemin puis le nom** terminent le classement. Sans eux, deux photos de même date
-  pourraient remonter dans un ordre différent d'une visite à l'autre et la tuile clignoterait.
+- **An image before a video**, even if the video is more recent. A video cover costs an
+  AVFoundation session; an image costs the 256 KB probe the pipeline does anyway.
+- **The most recent capture**, because the last thing that happened in a folder says more about
+  what it contains than a photo drawn at random. SQLite sorts `NULL` last in `DESC`: a photo
+  without EXIF therefore does not get ahead of a dated photo.
+- **Path then name** finish the ordering. Without them, two photos with the same date could
+  come up in a different order from one visit to the next and the tile would flicker.
 
-La portée est le sous-arbre, comme les totaux : un parent qui ne contient que des
-sous-dossiers emprunte la meilleure couverture du lot au lieu de rester vide.
+The scope is the subtree, like the totals: a parent that contains only subfolders borrows the
+best cover of the lot instead of staying empty.
 
-Le coût : une requête préparée, réutilisée pour tous les dossiers visibles, lancée après le
-premier rendu — jamais avant, la grille d'un dossier de 14 600 fichiers doit rester instantanée.
-La vignette est demandée à la **taille de grille habituelle**, pas à une taille réduite : elle
-partage alors son entrée de cache avec la cellule du dossier qu'on s'apprête à ouvrir, au lieu
-de télécharger deux fois la même photo. Un dossier sans média indexé garde son glyphe.
+The cost: one prepared statement, reused for all visible folders, run after the first render,
+never before; the grid of a 14,600-file folder must stay instantaneous. The thumbnail is
+requested at the **usual grid size**, not a reduced one: it then shares its cache entry with
+the cell of the folder about to be opened, instead of downloading the same photo twice. A
+folder with no indexed media keeps its glyph.
 
-## Qualité des vignettes
+## Thumbnail quality
 
-Trois défauts constatés sur de vrais fichiers, et ce qui les corrige :
+Three defects observed on real files, and what fixes them:
 
-- **Aperçu embarqué minuscule.** Un JPEG 6016×6016 peut n'embarquer qu'une vignette EXIF de
-  160×160 : étirée dans une cellule de 400 px, elle est floue. `PreviewPolicy` la refuse en
-  dessous de 75 % de la taille demandée et bascule sur le décodage du fichier complet, mis en
-  cache ensuite — le coût est payé une fois.
-- **Mauvais cadrage.** Certains aperçus ont un ratio différent de la photo (vignette 4:3 pour
-  une image 16:9), donc recadrent ou ajoutent des bandes. Au-delà de 2 % d'écart de ratio, on
-  refuse. L'orientation EXIF est prise en compte : les quarts de tour échangent largeur et hauteur.
-- **Vignettes blanches.** Le cache disque encodait en JPEG, qui n'a pas de canal alpha : un PNG
-  transparent en revenait en **blanc pur** (vérifié : `r=255 g=255 b=255`). Les images avec
-  transparence sont désormais stockées en PNG.
+- **Tiny embedded preview.** A 6016×6016 JPEG may embed only a 160×160 EXIF thumbnail:
+  stretched into a 400 px cell, it is blurry. `PreviewPolicy` refuses it below 75% of the
+  requested size and falls back to decoding the full file, cached afterwards; the cost is paid
+  once.
+- **Wrong framing.** Some previews have a different ratio from the photo (a 4:3 thumbnail for a
+  16:9 image), so they crop or add bands. Beyond a 2% ratio gap, it is refused. EXIF
+  orientation is taken into account: quarter turns swap width and height.
+- **White thumbnails.** The disk cache encoded as JPEG, which has no alpha channel: a
+  transparent PNG came back **pure white** (verified: `r=255 g=255 b=255`). Images with
+  transparency are now stored as PNG.
 
-Contrepartie assumée : un fichier dont l'aperçu est refusé coûte un téléchargement complet au
-premier affichage. Si la première descente dans un gros dossier devient trop lente, la suite
-est l'affichage progressif — petit aperçu tout de suite, remplacé par la bonne vignette.
+The accepted trade-off: a file whose preview is refused costs a full download on first display.
+If the first descent into a large folder becomes too slow, the next step is progressive
+display: small preview straight away, replaced by the proper thumbnail.
 
-## Statistiques
+## Statistics
 
-`StatsView`, ouvert depuis la carte Bibliothèque de l'accueil — poussé dans la pile — et par
-`keo://stats`, en feuille. Tout est lu dans l'index local, jamais sur la
-box : l'écran s'ouvre instantanément et fonctionne NAS éteint. Une seule requête d'actrice au
-`.task`, le résultat est gardé tant que la feuille est ouverte — douze balayages de la table
-`file` ne se refont pas à chaque rendu.
+`StatsView`, opened from the Library card on Home, pushed onto the stack, and via `keo://stats`,
+as a sheet. Everything is read from the local index, never from the box: the screen opens
+instantly and works with the NAS off. A single actor request in the `.task`, the result kept as
+long as the sheet is open; twelve sweeps of the `file` table are not redone on every render.
 
-### L'honnêteté, et comment elle est tenue
+### Honesty, and how it is kept
 
-Des statistiques sur un index à moitié construit mentent. Quatre mécanismes évitent ça, et
-aucun n'est décoratif :
+Statistics on a half-built index lie. Four mechanisms prevent that, and none is decorative:
 
-- **Le bandeau de couverture**, affiché dès que l'index est partiel : « Statistiques calculées
-  sur les 3 812 dossiers indexés (sur 4 799 connus) · 12 400 fichiers jamais lus », avec le
-  bouton qui mène à l'indexation. Il dit la population sur laquelle tout le reste est calculé.
-  Le dénominateur, ce sont les dossiers que l'index **connaît** : un dossier jamais listé
-  n'existe nulle part, et aucun chiffre ne peut prétendre le compter.
-- **« Sans date » et « pas encore lues » ne fusionnent jamais.** Le premier est une vérité sur
-  les fichiers — ils ne portent aucune date de prise de vue. Le second est une vérité sur
-  l'index — personne n'a encore ouvert ces fichiers, ils en ont peut-être une. La colonne
-  `file.read` existe exactement pour distinguer les deux ; les additionner fabriquerait un
-  nombre qui ne décrit ni les uns ni les autres. Les deux lignes mènent d'ailleurs à des
-  endroits différents : la liste des fichiers concernés pour la première, l'écran d'indexation
-  pour la seconde.
-- **Un sous-arbre incomplet annonce un plancher.** `folder.bytes` n'est écrit qu'à la fin d'un
-  dossier lu de bout en bout. Un sous-arbre qui en contient d'autres, jamais pesés, affiche
-  donc « ≥ 123 Go · 4 dossiers pas encore pesés » et pas un total ferme ; sa barre ne dessine
-  que ce qui est réellement mesuré, parce qu'une barre inventerait une mesure.
-- **Deux totaux qui ne se réconcilient pas, assumés.** La phrase sous « Poids » additionne
-  `file.size`, c'est-à-dire tout ce qu'un listing a montré, lu ou non. Les barres additionnent
-  `folder.bytes`, c'est-à-dire les seuls dossiers finis. Les deux sont vraies, elles ne tombent
-  pas sur le même octet, et l'écran le dit plutôt que de maquiller l'écart.
+- **The coverage banner**, shown as soon as the index is partial: "Statistiques calculées sur
+  les 3 812 dossiers indexés (sur 4 799 connus) · 12 400 fichiers jamais lus" (statistics
+  computed over the 3,812 indexed folders, out of 4,799 known; 12,400 files never read), with
+  the button that leads to indexing. It states the population everything else is computed on.
+  The denominator is the folders the index **knows**: a folder never listed exists nowhere, and
+  no figure can claim to count it.
+- **"Sans date" (undated) and "pas encore lues" (not yet read) never merge.** The first is a
+  truth about the files: they carry no capture date. The second is a truth about the index:
+  nobody has opened those files yet, they may have one. The `file.read` column exists exactly
+  to tell the two apart; adding them up would manufacture a number that describes neither. The
+  two rows also lead to different places: the list of files concerned for the first, the
+  indexing screen for the second.
+- **An incomplete subtree announces a floor.** `folder.bytes` is only written at the end of a
+  folder read from end to end. A subtree containing others never weighed therefore shows
+  "≥ 123 Go · 4 dossiers pas encore pesés" (at least 123 GB, 4 folders not yet weighed) and not
+  a firm total; its bar only draws what is actually measured, because a bar would invent a
+  measurement.
+- **Two totals that do not reconcile, accepted.** The sentence under "Poids" (Size) adds up
+  `file.size`, that is, everything a listing has shown, read or not. The bars add up
+  `folder.bytes`, that is, only finished folders. Both are true, they do not land on the same
+  byte, and the screen says so rather than disguising the gap.
 
-« Doublons probables » porte sa réserve dans son titre : **même nom et même taille**, ce n'est
-pas une empreinte. Deux photos différentes peuvent coïncider, et détecter autrement voudrait
-dire télécharger toute la bibliothèque. Le pied de section le répète avant de parler
-d'octets récupérables — et Keo, de toute façon, ne supprimera jamais rien sur la box.
+"Doublons probables" (probable duplicates) carries its caveat in its title: **same name and
+same size** is not a fingerprint. Two different photos can coincide, and detecting otherwise
+would mean downloading the whole library. The section footer repeats it before talking about
+recoverable bytes; and Keo, in any case, will never delete anything on the box.
 
-Enfin : **chaque ligne mène quelque part.** Une année ouvre la grille de l'année, un jour
-ouvre la journée, un sous-arbre ouvre le dossier, un groupe de doublons ouvre ses
-emplacements réels, un gros fichier ouvre le dossier qui le contient. Un chiffre qu'on ne peut
-pas aller vérifier est un chiffre qu'il ne faut pas croire.
+Finally: **every row leads somewhere.** A year opens the year's grid, a day opens the day, a
+subtree opens the folder, a duplicate group opens its real locations, a large file opens the
+folder that contains it. A figure you cannot go and check is a figure not to be believed.
 
-Cette règle est aussi ce qui a décidé le contenu du widget « Index Keo » : un widget ne se
-tape pas vers une grille, donc un seul chiffre de cet écran pouvait y monter. Voir
-« Widget », section « Index Keo ».
+This rule is also what decided the contents of the "Index Keo" widget: a widget cannot be
+tapped through to a grid, so only one figure from this screen could go up there. See "Widget",
+section "Index Keo".
 
-### Ce qui n'est délibérément pas calculé
+### What is deliberately not computed
 
-- **Le nombre total de fichiers en titre.** Il ne survit que comme dénominateur du bandeau :
-  seul, il flatte sans rien apprendre.
-- **La croissance du stockage dans le temps.** Elle reposerait sur `mtime`, qui sur un NAS est
-  la date de **copie**. Toute l'app existe parce que cette date ment.
-- **Appareil, objectif, ISO.** Le schéma n'a pas ces colonnes, et les ajouter voudrait dire
-  relire chaque photo sur le réseau.
-- **Carte des lieux, moyennes, séries, badges, camembert des types** — le camembert à trois
-  parts en dit moins que la phrase qui le remplace.
-- **Les plus vues** : rien ne compte les ouvertures, et l'ajouter serait un nouveau chemin
-  d'écriture que personne n'a demandé.
-- **Les doublons par empreinte** : il faudrait télécharger toute la bibliothèque.
+- **The total file count as a headline.** It survives only as the banner's denominator: alone,
+  it flatters without teaching anything.
+- **Storage growth over time.** It would rest on `mtime`, which on a NAS is the **copy** date.
+  The whole app exists because that date lies.
+- **Camera, lens, ISO.** The schema does not have those columns, and adding them would mean
+  rereading every photo over the network.
+- **Map of places, averages, streaks, badges, pie chart of types**: the three-slice pie says
+  less than the sentence that replaces it.
+- **Most viewed**: nothing counts openings, and adding it would be a new write path nobody
+  asked for.
+- **Duplicates by fingerprint**: it would mean downloading the whole library.
 
-### Zéro nouvel index
+### Zero new indexes
 
-`file` est `WITHOUT ROWID` avec `PRIMARY KEY (folder_id, name, size)` : tout index secondaire
-recopie la clé primaire entière, nom compris — soit à peu près une seconde copie de la table
-sur le disque. Les requêtes de cet écran sont donc des balayages complets, assumés tant que
-rien ne se mesure lent sur l'appareil. `file_by_identity(name, size)`, qui existait déjà, sert
-au regroupement des doublons.
+`file` is `WITHOUT ROWID` with `PRIMARY KEY (folder_id, name, size)`: any secondary index
+copies the entire primary key, name included, roughly a second copy of the table on disk. This
+screen's queries are therefore full sweeps, accepted as long as nothing measures slow on the
+device. `file_by_identity(name, size)`, which already existed, serves duplicate grouping.
 
-### Reste à vérifier à la main, sur l'appareil
+### Still to check by hand, on the device
 
-- Le graphe « Chronologie » : la **tape sur une barre** ouvre bien l'année correspondante (le
-  test ne couvre que la requête, pas le geste). Chaque année a de toute façon sa ligne
-  tapable juste en dessous, qui elle est couverte.
-- Le rendu du bandeau et des barres de poids sur un index réel, à moitié construit.
+- The "Chronologie" (Timeline) chart: **tapping a bar** does open the matching year (the test
+  covers only the query, not the gesture). Each year has its tappable row just below anyway,
+  and that one is covered.
+- The rendering of the banner and the size bars on a real, half-built index.
 
-## Lire les traces de l'appareil
+## Reading the device traces
 
-Le cycle de vie de l'indexation a coûté trois correctifs plausibles et faux. La quatrième
-tentative est partie de ce que l'appareil raconte, et a trouvé la cause en une fois.
+The indexing lifecycle cost three plausible, wrong fixes. The fourth attempt started from what
+the device says, and found the cause in one go.
 
-Les commandes sont dans `CLAUDE.md`, section « Appareil ».
+The commands are in `CLAUDE.md`, section "Appareil" (Device).
 
-`--console` relaie la sortie standard de l'app. `Indexer` trace, en build DEBUG uniquement,
-chaque point de bascule : réception de l'arrière-plan, `halt`, retour au premier plan, relance,
-et le verdict de fin de parcours avec tous ses compteurs.
+`--console` relays the app's standard output. `Indexer` traces, in DEBUG builds only, every
+tipping point: receiving the background, `halt`, return to the foreground, relaunch, and the
+end-of-walk verdict with all its counters.
 
-C'est ce qui a montré, noir sur blanc, qu'une reprise visitait deux dossiers et se déclarait
-terminée. **Ne pas modifier le cycle de vie de l'indexation sur la foi d'un raisonnement :
-brancher la console d'abord.**
+That is what showed, in black and white, that a resumption visited two folders and declared
+itself finished. **Do not change the indexing lifecycle on the strength of reasoning: hook up
+the console first.**
 
-## Toucher, haptique et VoiceOver
+## Touch, haptics and VoiceOver
 
-Les cibles tactiles tiennent les 44 pt sans grossir à l'écran : la barre de sélection, les
-pastilles d'indexation, le bouton « Retirer » du bandeau et les éléments du fil d'Ariane
-élargissent leur zone de contact, pas leur dessin. Le remède est le même partout —
-`frame(minHeight: 44)` + `contentShape(Rectangle())`, et un padding vertical négatif qui rend
-au layout la hauteur qu'on vient de prendre, pour que la barre reste à 34 pt.
+Touch targets hold 44 pt without growing on screen: the selection bar, the indexing badges, the
+"Retirer" (Remove) button of the banner and the breadcrumb items widen their contact area, not
+their drawing. The remedy is the same everywhere: `frame(minHeight: 44)` +
+`contentShape(Rectangle())`, and a negative vertical padding that gives back to the layout the
+height just taken, so that the bar stays at 34 pt.
 
-Les puces de recherche — Période, Favoris, Notes — annoncent leur état à VoiceOver
-(`.isSelected`). Elles ne le portaient qu'en couleur : à l'œil c'est évident, au clavier
-d'annonce c'était un bouton comme un autre, et un filtre actif qu'on ne peut pas entendre est
-un filtre qu'on ne peut pas désactiver.
+The search chips, Période, Favoris, Notes, announce their state to VoiceOver (`.isSelected`).
+They only carried it in colour: to the eye it is obvious, to the screen reader it was a button
+like any other, and an active filter you cannot hear is a filter you cannot turn off.
 
-Trois retours haptiques, et seulement trois — le système possède déjà ceux du défilement et du
-feuilletage, en ajouter par-dessus donnerait un appareil qui vibre en continu :
+Three haptic feedbacks, and only three; the system already owns those of scrolling and paging,
+adding more on top would give a device that vibrates continuously:
 
-| Geste | Retour |
+| Gesture | Feedback |
 |---|---|
-| Rail de timeline, à chaque période franchie | `.selection` |
-| Cœur en plein écran | `.impact(.soft)` |
-| Cellule ajoutée ou retirée de la sélection | `.selection` |
+| Timeline rail, at each period crossed | `.selection` |
+| Heart in full screen | `.impact(.soft)` |
+| Cell added to or removed from the selection | `.selection` |
 
-Le rail se déclenche sur la période active, pas sur la position du doigt : une glissade d'un
-bout à l'autre rend un cran par mois traversé, pas cent vingt par seconde. Le cœur compte les
-tapotements et non l'état du favori, sinon feuilleter d'une photo aimée vers une autre
-vibrerait tout seul.
+The rail fires on the active period, not on the finger's position: a slide from one end to the
+other yields one notch per month crossed, not a hundred and twenty per second. The heart counts
+taps and not the favourite state, otherwise paging from a loved photo to another would vibrate
+on its own.
 
-**À vérifier à la main** — rien de tout ça ne se simule, ni ne se teste depuis un Mac :
+**To check by hand**; none of this can be simulated, or tested from a Mac:
 
-- Dossier daté, grille en mois : taper une photo de la colonne de droite l'ouvre, à ras du
-  bord de l'écran. Puis glisser depuis ce même bord scrute toujours la timeline.
-- Glisser le rail sur plusieurs années : un cran par période, aucun crépitement continu.
-- Cœur en plein écran : une impulsion au tapotement, rien en feuilletant entre une photo
-  aimée et une autre.
-- Sélection : un cran par cellule, et « Tout » n'en produit qu'un seul.
-- VoiceOver activé : balayer la grille annonce le nom du fichier et « Sélectionné » le cas
-  échéant ; le rail est ignoré, les en-têtes de période servent de navigation ; en plein écran,
-  les quatre boutons s'annoncent « Fermer », « Favori », « Ajouter à une collection »,
-  « Enregistrer ou partager ».
-- **Dates pendant le plein écran** : sur un gros dossier jamais indexé, lancer l'indexation,
-  ouvrir une photo, attendre que le dossier finisse de passer (la pastille), puis fermer. La
-  grille doit montrer la période qu'on avait quittée, la photo d'origine visible, puis se
-  re-trier en restant sur cette période. Dans `trace.log` (build DEBUG), la séquence qui
-  confirme le mécanisme : `dates held …` pendant le plein écran, puis `viewer dismissed …
-  pending=N`, puis `dates applied … kept=true`. Ce qui le réfuterait : le bug reproduit **sans
-  aucune** ligne `dates held` — une ligne `load … covered=true` désignerait alors un
-  rechargement du listing derrière le voile, et `viewer dismissed … at=absent` une ancre
-  perdue plutôt qu'un re-tri.
+- Dated folder, grid by month: tapping a photo in the right-hand column opens it, flush with
+  the screen edge. Then swiping from that same edge still scrubs the timeline.
+- Dragging the rail across several years: one notch per period, no continuous crackle.
+- Heart in full screen: one pulse on tap, nothing when paging between a loved photo and
+  another.
+- Selection: one notch per cell, and "Tout" (All) produces only one.
+- VoiceOver on: swiping through the grid announces the file name and "Sélectionné" (Selected)
+  where applicable; the rail is ignored, the period headers serve as navigation; in full
+  screen, the four buttons announce themselves as "Fermer", "Favori", "Ajouter à une
+  collection", "Enregistrer ou partager" (Close, Favourite, Add to a collection, Save or share).
+- **Dates during full screen**: on a large never-indexed folder, start indexing, open a photo,
+  wait for the folder to finish passing (the badge), then close. The grid must show the period
+  that was left, the original photo visible, then re-sort while staying on that period. In
+  `trace.log` (DEBUG build), the sequence that confirms the mechanism: `dates held …` during
+  full screen, then `viewer dismissed … pending=N`, then `dates applied … kept=true`. What
+  would refute it: the bug reproduced **without any** `dates held` line; a `load …
+  covered=true` line would then point to a reload of the listing behind the veil, and `viewer
+  dismissed … at=absent` to a lost anchor rather than a re-sort.
 
-## Vérifier
+## Checking
 
-La commande est dans `CLAUDE.md`, section « Avant de dire que c'est fait ».
+The command is in `CLAUDE.md`, section "Avant de dire que c'est fait" (Before saying it's done).
 
-La géométrie du rail vit dans `RailLayout`, sans SwiftUI, précisément pour être vérifiable.
-`Tests/store.swift` exerce le **vrai SQLite** sur un répertoire temporaire : écriture, balayage
-des fichiers disparus, survie des sous-arbres ignorés, adoption après renommage, et migration
-depuis les anciens JSON. `Tests/covers.swift` y vérifie le classement des couvertures de
-dossier, qui ne se voit autrement qu'à l'œil sur l'appareil. `Tests/stats.swift` fait de même
-pour les statistiques : la portée à la racine, les sous-arbres pesés ou non, la séparation
-« sans date » / « jamais lue », et le regroupement des doublons — tous des `GROUP BY` dont une
-erreur ne se voit pas, puisqu'elle sort un chiffre plausible.
+The rail geometry lives in `RailLayout`, without SwiftUI, precisely so it can be checked.
+`Tests/store.swift` exercises the **real SQLite** on a temporary directory: writing, sweeping
+vanished files, survival of ignored subtrees, adoption after a rename, and migration from the
+old JSON. `Tests/covers.swift` checks folder cover ordering there, which is otherwise only
+visible by eye on the device. `Tests/stats.swift` does the same for statistics: scope at the
+root, subtrees weighed or not, the "undated" / "never read" separation, and duplicate
+grouping; all `GROUP BY`s whose errors go unseen, since they produce a plausible figure.
 
-Couvre la garantie de lecture seule, l'enveloppe `{success, result}`, l'encodage des chemins,
-la classification des médias, l'éviction LRU, l'arithmétique de progression, et toute la
-partie pure de la synchronisation iCloud (`Tests/sync.swift`) — le moteur CloudKit lui-même ne
-se teste qu'à la main, voir plus haut.
+Covers the read-only guarantee, the `{success, result}` envelope, path encoding, media
+classification, LRU eviction, progress arithmetic, and the whole pure part of iCloud sync
+(`Tests/sync.swift`); the CloudKit engine itself can only be tested by hand, see above.
 
-`Tests/exclusions.swift` épingle la règle d'exclusion dans les deux sens — ce qui doit sortir de
-l'index, ce qui ne doit surtout pas en sortir, la casse — puis rejoue le nettoyage contre le vrai
-SQLite et vérifie que favoris, notes, raccourcis et collections en sortent intacts.
+`Tests/exclusions.swift` pins the exclusion rule in both directions, what must leave the index,
+what must on no account leave it, case, then replays the clean-up against the real SQLite and
+checks that favourites, notes, shortcuts and collections come out of it intact.
 
-`Tests/videodatechecks.swift` couvre les deux scanneurs d'atomes QuickTime : la date, et
-l'identifiant de photo live que personne ne vérifiait. Clé `mdta` en deuxième position, absence
-sûre, `moov` en fin de fichier en tailles 32 et 64 bits, troncature, corruption, et le pilote
-en deux requêtes. `Tests/breadcrumb.swift` épingle l'arithmétique du fil d'Ariane et
-`Tests/videorange.swift` le parsing de `Content-Range` — la taille d'un fichier vient de
-l'en-tête, jamais de la fenêtre qu'on vient de recevoir.
+`Tests/videodatechecks.swift` covers the two QuickTime atom scanners: the date, and the Live
+Photo identifier nobody was checking. `mdta` key in second position, safe absence, `moov` at
+the end of the file in 32- and 64-bit sizes, truncation, corruption, and the two-request
+driver. `Tests/breadcrumb.swift` pins the breadcrumb arithmetic and `Tests/videorange.swift`
+the `Content-Range` parsing; a file's size comes from the header, never from the window just
+received.
 
-**Quatre fichiers existent en double** parce que les deux cibles ne partagent aucun fichier :
-`WidgetManifest`, `Theme` et `Plural` sont byte-identiques entre `Keo/` et `KeoWidget/`, et
-trois contrôles de `Tests/main.swift` échouent dès qu'une copie diverge. La quatrième n'était
-tenue par rien : `Photo.downsample` du widget recopie `ImageDecoding.downsample` sans pouvoir
-lui être identique — un `UIImage` d'un côté, un `CGImage` de l'autre. Elles **avaient déjà
-divergé**, chacune ayant un garde que l'autre n'avait pas. Le contrôle compare donc ce qui
-compte : les options passées à ImageIO, réduites à `clé=valeur` et comparées ensemble. Une
-duplication assumée sans contrôle n'est pas une duplication assumée, c'est une duplication.
+**Four files exist in duplicate** because the two targets share no file: `WidgetManifest`,
+`Theme` and `Plural` are byte-identical between `Keo/` and `KeoWidget/`, and three checks in
+`Tests/main.swift` fail as soon as a copy diverges. The fourth was held by nothing: the widget's
+`Photo.downsample` copies `ImageDecoding.downsample` without being able to be identical to it,
+a `UIImage` on one side, a `CGImage` on the other. They **had already diverged**, each having a
+guard the other lacked. The check therefore compares what matters: the options passed to
+ImageIO, reduced to `key=value` and compared together. An accepted duplication without a check
+is not an accepted duplication, it is a duplication.
 
-`Tests/widget.swift` couvre le manifeste du widget et, contre le vrai SQLite, la sélection des
-douze couvertures d'un dossier épinglé : tout le sous-arbre, les plus récentes d'abord, les
-vidéos après les photos, les voisins au nom proche exclus. Il tient aussi la couverture de
-l'index — la fraction qui suit la moitié la moins avancée, le pourcentage arrondi vers le bas,
-et l'ordre des branches de `Coverage.lines`, qui est la règle « sans date » / « pas encore
-lues » elle-même.
+`Tests/widget.swift` covers the widget manifest and, against the real SQLite, the selection of
+the twelve covers of a pinned folder: the whole subtree, most recent first, videos after photos,
+neighbours with a close name excluded. It also holds index coverage: the fraction that follows
+the less advanced half, the percentage rounded down, and the branch order of `Coverage.lines`,
+which is the "undated" / "not yet read" rule itself.
 
-## Pièges de l'API Freebox, vérifiés sur la box
+## Freebox API traps, verified on the box
 
-- `fs/ls` renvoie `result = {"entries": [...], "cursor": "..."}`, **pas** un tableau nu.
-- **`fs/ls` doit être paginé.** Mesuré sur un dossier de 14 600 fichiers : en un seul appel la
-  box répond `504 Gateway Time-out` au bout de 15 secondes, systématiquement. Avec
-  `?limit=2000` et le `cursor` renvoyé, le même dossier se liste en 2,9 s, et la première page
-  arrive en ~200 ms. Le curseur est du base64 : `eyJvZmZzZXQiOjQ4Mn0=` = `{"offset":482}`.
-- `filecount` n'est pas renvoyé par toutes les box — le compteur des tuiles de dossier s'efface
-  quand il manque.
-- Les chemins sont du base64 percent-encodé. `URL.appendingPathComponent` ré-encode le `%`
-  (`Lw%3D%3D` → `Lw%253D%253D`) et la box répond `invalid_request` : construire l'URL avec
+- `fs/ls` returns `result = {"entries": [...], "cursor": "..."}`, **not** a bare array.
+- **`fs/ls` must be paginated.** Measured on a folder of 14,600 files: in a single call the box
+  answers `504 Gateway Time-out` after 15 seconds, every time. With `?limit=2000` and the
+  returned `cursor`, the same folder lists in 2.9 s, and the first page arrives in ~200 ms. The
+  cursor is base64: `eyJvZmZzZXQiOjQ4Mn0=` = `{"offset":482}`.
+- `filecount` is not returned by every box; the folder tile counter hides when it is missing.
+- Paths are percent-encoded base64. `URL.appendingPathComponent` re-encodes the `%`
+  (`Lw%3D%3D` → `Lw%253D%253D`) and the box answers `invalid_request`: build the URL with
   `URL(string:relativeTo:)`.
-- `dl/` honore `Range` (206 Partial Content) : 256 Ko d'un JPEG de 2 Mo suffisent à extraire
-  un aperçu embarqué de 400 px.
-- `fs/thumbnail` **n'existe pas**, la box ne génère aucune vignette.
-- `AVURLAssetHTTPHeaderFieldsKey` n'est pas documenté et iOS l'ignore : AVFoundation doit
-  passer par un `AVAssetResourceLoaderDelegate` pour porter `X-Fbx-App-Auth`.
-- `mafreebox.freebox.fr` résout vers une IP publique : ATS a besoin d'une exception de
-  domaine, `NSAllowsLocalNetworking` ne suffit pas.
+- `dl/` honours `Range` (206 Partial Content): 256 KB of a 2 MB JPEG is enough to extract a
+  400 px embedded preview.
+- `fs/thumbnail` **does not exist**; the box generates no thumbnails.
+- `AVURLAssetHTTPHeaderFieldsKey` is undocumented and iOS ignores it: AVFoundation has to go
+  through an `AVAssetResourceLoaderDelegate` to carry `X-Fbx-App-Auth`.
+- `mafreebox.freebox.fr` resolves to a public IP: ATS needs a domain exception,
+  `NSAllowsLocalNetworking` is not enough.
 
-## Limites connues
+## Known limits
 
-- **LAN uniquement.** L'accès distant existe côté box mais son certificat vient de la CA
-  Freebox, absente du magasin iOS. Un VPN IKEv2 sur la Freebox est la meilleure réponse : le
-  téléphone se retrouve sur le réseau local et l'app n'a pas une ligne à changer.
-- **Une seule autorisation Freebox pour tous les appareils d'un même compte Apple**, puisque le
-  jeton passe par le trousseau iCloud. Pas de révocation par appareil : retirer l'accès les
-  retire tous.
-- **Pas de téléchargement de dossier entier** — la sélection porte sur des fichiers.
-- **Téléchargements en série** — une barre de progression lisible plutôt qu'un débit maximal.
-- **Pas de cible de tests Xcode.** La logique vérifiable est pure et le script ci-dessus suffit ;
-  à ajouter le jour où il faudra tester du code qui a besoin du simulateur.
+- **LAN only.** Remote access exists on the box side but its certificate comes from the Freebox
+  CA, absent from the iOS store. An IKEv2 VPN on the Freebox is the best answer: the phone ends
+  up on the local network and the app does not have a line to change.
+- **A single Freebox authorisation for all devices on the same Apple account**, since the token
+  goes through the iCloud Keychain. No per-device revocation: removing access removes it for
+  all.
+- **No whole-folder download**; selection applies to files.
+- **Downloads in series**; a readable progress bar rather than maximum throughput.
+- **No Xcode test target.** The checkable logic is pure and the script above is enough; to be
+  added the day code that needs the simulator has to be tested.
